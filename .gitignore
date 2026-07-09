@@ -1,3 +1,4 @@
 .env
 utils/playwright/.auth/*
 !utils/playwright/.auth/.gitkeep
+discord.log
