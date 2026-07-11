@@ -19,29 +19,29 @@ import aiohttp
 from dataclasses import dataclass, field
 
 #logs stuff
-os.makedirs('logs', exist_ok=True)
+os.makedirs("logs", exist_ok=True)
 
-formatter = logging.Formatter('%(asctime)s %(levelname)-8s %(name)s: %(message)s')
+formatter = logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
 
-bot_handler = logging.FileHandler(filename='logs/bot.log', encoding='utf-8', mode='a')
+bot_handler = logging.FileHandler(filename="logs/bot.log", encoding="utf-8", mode="a")
 bot_handler.setFormatter(formatter)
 
-discord_handler = logging.FileHandler(filename='logs/discord.log', encoding='utf-8', mode='a')
+discord_handler = logging.FileHandler(filename="logs/discord.log", encoding="utf-8", mode="a")
 discord_handler.setFormatter(formatter)
 
 logger = logging.getLogger("bot")  # your own namespace for calls like logger.info(...)
 logger.setLevel(logging.INFO)
 logger.addHandler(bot_handler)
 
-discord_logger = logging.getLogger("discord")  # library's namespace
+discord_logger = logging.getLogger("discord")  # library"s namespace
 discord_logger.setLevel(logging.ERROR)
 discord_logger.addHandler(discord_handler)
 
 #getting env variables(all besides bootstrap keys, they are inline with token objects)
 load_dotenv()
-SUPABASE_API_KEY = os.getenv('SUPABASE_API_KEY')
-SUPABASE_URL = os.getenv('SUPABASE_URL')
-DISCORD_BOT_TOKEN = os.getenv('DISCORD_TOKEN')
+SUPABASE_API_KEY = os.getenv("SUPABASE_API_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_TOKEN")
 
 class BattlevivieTokenManager:
     def __init__(self, JWT_token, refresh_token):
@@ -64,7 +64,7 @@ class BattlevivieTokenManager:
         return new_refresh_token,new_JWT  
 
 
-battlevive_tokens= BattlevivieTokenManager(JWT_token=os.getenv('BOOTSTRAP_JWT'),refresh_token=os.getenv('BOOTSTRAP_REFRESH_TOKEN'))
+battlevive_tokens= BattlevivieTokenManager(JWT_token=os.getenv("BOOTSTRAP_JWT"),refresh_token=os.getenv("BOOTSTRAP_REFRESH_TOKEN"))
 #website api is bloated so classes are bloated most of the fields are obsolite TO DO debloat classes leave only important stuff. 
 @dataclass
 class Lobby:
@@ -349,7 +349,7 @@ bot = commands.Bot(command_prefix="!bt", intents=intents, strip_after_prefix=Tru
 async def on_message(message):
     if message.author == bot.user:
         return
-    logger.info(f"Received message: '{message.content}' from {message.author}")
+    logger.info(f"Received message: '{message.content}'from {message.author}")
     await bot.process_commands(message)
 @bot.event
 async def setup_hook():
