@@ -65,7 +65,7 @@ def get_refresh_token():
                 token = auth_data["refresh_token"]
     return token
 def main():
-    login_discord();
+    login_discord()
     bootstrapJWT= get_JWT_token()
     bootstrap_refresh_token=get_refresh_token()
     env_file_path = Path("../.env")
