@@ -19,16 +19,23 @@ import aiohttp
 from dataclasses import dataclass, field
 
 #logs stuff
+os.makedirs('logs', exist_ok=True)
 
-handler = logging.FileHandler(filename='logs.log', encoding='utf-8', mode='a')  # 'a' = keep history across restarts
 formatter = logging.Formatter('%(asctime)s %(levelname)-8s %(name)s: %(message)s')
-handler.setFormatter(formatter)
 
-root_logger = logging.getLogger()  # attach to root so discord.*, bot, and everything else is captured
-root_logger.setLevel(logging.INFO)
-root_logger.addHandler(handler)
+bot_handler = logging.FileHandler(filename='logs/bot.log', encoding='utf-8', mode='a')
+bot_handler.setFormatter(formatter)
 
-logger = logging.getLogger("bot")  # keep your own namespace for calls like logger.info(...)
+discord_handler = logging.FileHandler(filename='logs/discord.log', encoding='utf-8', mode='a')
+discord_handler.setFormatter(formatter)
+
+logger = logging.getLogger("bot")  # your own namespace for calls like logger.info(...)
+logger.setLevel(logging.INFO)
+logger.addHandler(bot_handler)
+
+discord_logger = logging.getLogger("discord")  # library's namespace
+discord_logger.setLevel(logging.ERROR)
+discord_logger.addHandler(discord_handler)
 
 #getting env variables(all besides bootstrap keys, they are inline with token objects)
 load_dotenv()
@@ -312,7 +319,7 @@ async def query_users(JWT_token: str) -> List[User]:
 
 async def query_lobbies(JWT_token: str) -> List[Lobby]:
     async with aiohttp.ClientSession() as session:
-        return await _fetch_and_parse(session, JWT_token, "lobby", parse_lobbies)
+        return await _fetch_and_parse(session, JWT_token, "lobbies", parse_lobbies)
 
 async def refresh_all_data():
     results = await asyncio.gather(
@@ -336,9 +343,14 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!bt", intents=intents)
+bot = commands.Bot(command_prefix="!bt", intents=intents, strip_after_prefix=True)
 
-
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        return
+    logger.info(f"Received message: '{message.content}' from {message.author}")
+    await bot.process_commands(message)
 @bot.event
 async def setup_hook():
     revalidate_tokens.start()
@@ -358,4 +370,4 @@ async def ping_prefix(ctx):
     await ctx.send(f"Pong! {round(bot.latency * 1000)}ms")
 
 
-bot.run(DISCORD_BOT_TOKEN,log_level=logging.ERROR)  # must be last
+bot.run(DISCORD_BOT_TOKEN, log_handler=None)  # must be last
