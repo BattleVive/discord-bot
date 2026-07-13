@@ -2,5 +2,5 @@
 utils/playwright/.auth/*
 !utils/playwright/.auth/.gitkeep
 *.log
-data/*.jsonto
+data/*.json
 !data/.gitkeep
