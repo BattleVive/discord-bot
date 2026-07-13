@@ -2,6 +2,8 @@
 # pyrefly: ignore [missing-import]
 import discord
 # pyrefly: ignore [missing-import]
+from discord import app_commands
+# pyrefly: ignore [missing-import]
 from discord.ext import tasks,commands
 import logging
 import time
@@ -16,10 +18,13 @@ import json
 import asyncio
 # pyrefly: ignore [missing-import]
 import aiohttp
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field,asdict
 
-#logs stuff
+#creating dirs if  not present
 os.makedirs("logs", exist_ok=True)
+DATA_DIR = "data"
+os.makedirs(DATA_DIR, exist_ok=True)
+#logs stuff
 
 formatter = logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
 
@@ -218,7 +223,17 @@ class Lobby:
             map_pool=data.get("map_pool"),
             selected_map=data.get("selected_map"),
         )
+    def json(self) -> dict:
+        def convert(value):
+            if isinstance(value, datetime):
+                return value.isoformat()
+            if isinstance(value, list):
+                return [convert(v) for v in value]
+            if isinstance(value, dict):
+                return {k: convert(v) for k, v in value.items()}
+            return value
 
+        return convert(asdict(self))
 
 
 @dataclass
@@ -301,7 +316,17 @@ class User:
             if mmr >= threshold:
                 return name
         
+    def json(self) -> dict:
+        def convert(value):
+            if isinstance(value, datetime):
+                return value.isoformat()
+            if isinstance(value, list):
+                return [convert(v) for v in value]
+            if isinstance(value, dict):
+                return {k: convert(v) for k, v in value.items()}
+            return value
 
+        return convert(asdict(self))
 
  
 def parse_users(json_data) -> List[User]:
@@ -358,8 +383,8 @@ async def _fetch_and_parse(session: aiohttp.ClientSession, JWT_token: str, endpo
     return result
 
 
-battlevive_users:User = []
-lobbies:Lobby =[]
+battlevive_users: list[User] = []
+lobbies: list[Lobby] = []
 #saving this shit in json to do move to it db or figure out better way to do this 
 ROLES_FILE = "Roles.json"
 
@@ -488,6 +513,9 @@ async def refresh_all_data():
         query_lobbies(battlevive_tokens.JWT_token),
         return_exceptions=True,
     )
+    for result in results:
+        if isinstance(result, Exception):
+            raise result
     return results
 
 
@@ -507,9 +535,10 @@ async def revalidate_tokens():
 
 @tasks.loop(minutes=1)
 async def refresh_loop():
-    data = await refresh_all_data()
-    users = data[0]
-    lobbies = data[1]
+    global battlevive_users, lobbies
+
+    battlevive_users, lobbies = await refresh_all_data()
+
     await give_battlevive_role()
     await give_rank_roles()
 
@@ -554,5 +583,60 @@ async def ping_prefix(ctx):
 async def create_roles_slash(interaction: discord.Interaction):
     await create_roles(interaction.guild)
     await interaction.response.send_message("Created roles")  
+
+
+@bot.tree.command(
+    name="debug_get_battlevive_data",
+    description="Administrator-only, refresh and dump all data from battlevive unformatted",
+)
+@app_commands.checks.has_permissions(administrator=True)
+async def debug_get_battlevive_data(interaction: discord.Interaction):
+    global battlevive_users, lobbies
+
+    try:
+        logger.info("debug_get_battlevive_data called by %s", interaction.user)
+
+        await interaction.response.defer(ephemeral=True)
+
+        battlevive_users, lobbies = await refresh_all_data()
+
+        users_file = os.path.join(DATA_DIR, "users.json")
+        lobbies_file = os.path.join(DATA_DIR, "lobbies.json")
+
+        with open(users_file, "w", encoding="utf-8") as f:
+            json.dump([u.json() for u in battlevive_users], f, indent=2)
+
+        with open(lobbies_file, "w", encoding="utf-8") as f:
+            json.dump([l.json() for l in lobbies], f, indent=2)
+
+        await interaction.followup.send(
+            files=[
+                discord.File(users_file),
+                discord.File(lobbies_file),
+            ],
+            ephemeral=True,
+        ) 
+
+    except Exception:
+        logger.exception("debug_get_battlevive_data failed")
+
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                "Command failed. Check bot.log.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                "Command failed. Check bot.log.",
+                ephemeral=True,
+            )
+
+@debug_get_battlevive_data.error
+async def admin_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message(
+            "You must be an administrator to use this command.",
+            ephemeral=True
+        )
 
 bot.run(DISCORD_BOT_TOKEN, log_handler=None)  # must be last
