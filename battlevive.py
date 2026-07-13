@@ -46,7 +46,6 @@ class BattlevivieTokenManager:
         except requests.exceptions.RequestException as e:
             logger.error(f"Token refresh request failed: {e}")
             raise
-        
         logger.info("Revalidated tokens")
         data = response.json()
         return data["refresh_token"], data["access_token"]

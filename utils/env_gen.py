@@ -15,7 +15,8 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 SUPABASE_API_KEY = os.getenv("SUPABASE_API_KEY")
 BATTLEVIVE_URL =os.getenv("BATTLEVIVE_URL") 
-
+LOG_LEVEL = os.getenv("LOG_LEVEL")
+DISCORD_LOG_LEVEL =os.getenv("DISCORD_LOG_LEVEL")
 def login_discord():
     with sync_playwright() as p:
         #path=Path(AUTH_FILE) 
@@ -78,6 +79,8 @@ def main():
     set_key(dotenv_path=env_file_path, key_to_set="DISCORD_TOKEN", value_to_set=DISCORD_TOKEN)
     set_key(dotenv_path=env_file_path, key_to_set="SUPABASE_API_KEY", value_to_set=SUPABASE_API_KEY)
     set_key(dotenv_path=env_file_path, key_to_set="BOOTSTRAP_JWT", value_to_set=bootstrapJWT)
+    set_key(dotenv_path=env_file_path, key_to_set="LOG_LEVEL", value_to_set=LOG_LEVEL)
+    set_key(dotenv_path=env_file_path, key_to_set="DISCORD_LOG_LEVEL", value_to_set=DISCORD_LOG_LEVEL)
 
 if __name__ == "__main__":
     main()
