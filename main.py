@@ -56,15 +56,35 @@ class BattlevivieTokenManager:
         json = {
             "refresh_token": refresh_token 
         }
-        response = requests.post(f"{SUPABASE_URL}/auth/v1/token?grant_type=refresh_token", headers=headers, json=json)
-        data=response.json()
-        new_refresh_token =data["refresh_token"] 
-        new_JWT= data["access_token"] 
-
-        return new_refresh_token,new_JWT  
+        try:
+            response = requests.post(
+                f"{SUPABASE_URL}/auth/v1/token?grant_type=refresh_token",
+                headers=headers,
+                json=json,
+                timeout=10,
+            )
+            logger.debug(f"Revalidate response headers: {response.headers}\n{response.json()}")
+            response.raise_for_status()
+        except requests.exceptions.Timeout as e:
+            logger.error(f"Token refresh timed out: {e}")
+            raise
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Token refresh connection error: {e}")
+            raise
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"Token refresh failed with status {response.status_code}: {response.text}")
+            raise
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Token refresh request failed: {e}")
+            raise
+        
+        logger.info("Revalidated tokens")
+        data = response.json()
+        return data["refresh_token"], data["access_token"] 
 
 
 battlevive_tokens= BattlevivieTokenManager(JWT_token=os.getenv("BOOTSTRAP_JWT"),refresh_token=os.getenv("BOOTSTRAP_REFRESH_TOKEN"))
+
 #website api is bloated so classes are bloated most of the fields are obsolite TO DO debloat classes leave only important stuff. 
 @dataclass
 class Lobby:
@@ -133,6 +153,7 @@ class Lobby:
         if value is None:
             return None
         return datetime.fromisoformat(value)
+
 
     @classmethod
     def from_dict(cls, data: dict) -> "Lobby":
@@ -226,12 +247,25 @@ class User:
     replay_count: int
     username_changed_at: Optional[datetime]
  
+
+    #ranks list used by rank method
+    RANKS = [
+        (8000, "BATTLEVIVE"),
+        (5500, "Diamond"),
+        (3500, "Platinum"),
+        (2000, "Gold"),
+        (1000, "Silver"),
+        (0, "Bronze"),
+    ]
+
+
     @staticmethod
     def _parse_dt(value: Optional[str]) -> Optional[datetime]:
         if value is None:
             return None
         return datetime.fromisoformat(value)
- 
+
+
     @classmethod
     def from_dict(cls, data: dict) -> "User":
         return cls(
@@ -259,7 +293,16 @@ class User:
             replay_count=data["replay_count"],
             username_changed_at=cls._parse_dt(data.get("username_changed_at")),
         )
- 
+
+
+    def rank(self, peek=False):
+        mmr = self.peak_mmr if peek else self.current_mmr
+        for threshold, name in self.RANKS:
+            if mmr >= threshold:
+                return name
+        
+
+
  
 def parse_users(json_data) -> List[User]:
     """
@@ -273,6 +316,7 @@ def parse_users(json_data) -> List[User]:
  
     return [User.from_dict(item) for item in data]
 
+
 def parse_lobbies(json_data) -> List[Lobby]:
     """
     Accepts either a JSON string or an already-parsed list of dicts.
@@ -284,6 +328,7 @@ def parse_lobbies(json_data) -> List[Lobby]:
         data = json_data
 
     return [Lobby.from_dict(item) for item in data]
+
 
 async def _fetch_and_parse(session: aiohttp.ClientSession, JWT_token: str, endpoint: str, parser):
     headers = {
@@ -313,13 +358,129 @@ async def _fetch_and_parse(session: aiohttp.ClientSession, JWT_token: str, endpo
     return result
 
 
+battlevive_users:User = []
+lobbies:Lobby =[]
+#saving this shit in json to do move to it db or figure out better way to do this 
+ROLES_FILE = "Roles.json"
+
+
+def load_roles() -> dict:
+    if not os.path.exists(ROLES_FILE):
+        return {}
+    with open(ROLES_FILE, "r") as f:
+        return json.load(f)
+
+
+def save_roles(data: dict) -> None:
+    with open(ROLES_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+async def create_roles(guild: discord.Guild):
+    all_roles = load_roles()
+    guild_roles = all_roles.get(str(guild.id), {})
+
+    for rank in User.RANKS:
+        role = await guild.create_role(name=rank[1])
+        guild_roles[rank[1]] = role.id
+    battlevive_role = await guild.create_role(name="Battlevive")
+    guild_roles["Battlevive player"]= battlevive_role.id
+    all_roles[str(guild.id)] = guild_roles
+    save_roles(all_roles)
+
+async def give_role(member: discord.Member, rank_name: str):
+    all_roles = load_roles()
+    guild_roles = all_roles.get(str(member.guild.id), {})
+    role_id = guild_roles.get(rank_name)
+
+    if role_id is None:
+        raise ValueError(f"No stored role ID for rank '{rank_name}' in this guild")
+
+    role = member.guild.get_role(role_id)
+    if role is None:
+        raise ValueError(f"Role ID {role_id} no longer exists in this guild")
+
+    await member.add_roles(role)
+async def give_battlevive_role():
+    rank_name = "Battlevive player"
+    all_roles = load_roles()
+
+    for guild in bot.guilds:
+        guild_roles = all_roles.get(str(guild.id), {})
+        role_id = guild_roles.get(rank_name)
+
+        if role_id is None:
+            continue  # this guild has no stored role for this rank, skip
+
+        role = guild.get_role(role_id)
+        if role is None:
+            continue  # role was deleted manually, skip
+
+        for user in battlevive_users:
+            member = guild.get_member(user.discord_id)
+
+            if member is None:
+                try:
+                    member = await guild.fetch_member(user.discord_id)
+                except discord.NotFound:
+                    continue  # user not in this guild, skip
+                except discord.HTTPException:
+                    continue  # other API error, skip
+
+            await member.add_roles(role)
+
+
+
+async def give_rank_roles():
+    all_roles = load_roles()
+
+    for guild in bot.guilds:
+        guild_roles = all_roles.get(str(guild.id), {})
+        rank_role_ids = {guild_roles[rank[1]] for rank in User.RANKS if rank[1] in guild_roles}
+
+        for user in battlevive_users:
+            member = guild.get_member(user.discord_id)
+
+            if member is None:
+                try:
+                    member = await guild.fetch_member(user.discord_id)
+                except discord.NotFound:
+                    continue
+                except discord.HTTPException:
+                    continue
+
+            rank_name = user.rank()
+            role_id = guild_roles.get(rank_name)
+
+            if role_id is None:
+                continue
+
+            role = guild.get_role(role_id)
+            if role is None:
+                continue
+
+            old_rank_roles = [
+                r for r in member.roles
+                if r.id in rank_role_ids and r.id != role_id
+            ]
+
+            if old_rank_roles:
+                await member.remove_roles(*old_rank_roles)
+
+            if role not in member.roles:
+                await member.add_roles(role)
+
+
+
 async def query_users(JWT_token: str) -> List[User]:
     async with aiohttp.ClientSession() as session:
         return await _fetch_and_parse(session, JWT_token, "users", parse_users)
 
+
 async def query_lobbies(JWT_token: str) -> List[Lobby]:
     async with aiohttp.ClientSession() as session:
         return await _fetch_and_parse(session, JWT_token, "lobbies", parse_lobbies)
+
 
 async def refresh_all_data():
     results = await asyncio.gather(
@@ -329,15 +490,29 @@ async def refresh_all_data():
     )
     return results
 
+
 @tasks.loop(minutes=30)
 async def revalidate_tokens():
-    new_refresh_token, new_JWT = BattlevivieTokenManager.revalidate(refresh_token=battlevive_tokens.refresh_token)
-    battlevive_tokens.JWT_token= new_JWT
+    try:
+        new_refresh_token, new_JWT = BattlevivieTokenManager.revalidate(
+            refresh_token=battlevive_tokens.refresh_token
+        )
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to revalidate tokens: {e}")
+        raise
+
+    battlevive_tokens.JWT_token = new_JWT
     battlevive_tokens.refresh_token = new_refresh_token
+
 
 @tasks.loop(minutes=1)
 async def refresh_loop():
-    await refresh_all_data()
+    data = await refresh_all_data()
+    users = data[0]
+    lobbies = data[1]
+    await give_battlevive_role()
+    await give_rank_roles()
+
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -345,12 +520,15 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!bt", intents=intents, strip_after_prefix=True)
 
+
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
         return
     logger.info(f"Received message: '{message.content}'from {message.author}")
     await bot.process_commands(message)
+
+
 @bot.event
 async def setup_hook():
     revalidate_tokens.start()
@@ -369,5 +547,12 @@ async def ping_slash(interaction: discord.Interaction):
 async def ping_prefix(ctx):
     await ctx.send(f"Pong! {round(bot.latency * 1000)}ms")
 
+
+
+
+@bot.tree.command(name="create_roles", description="Create required roles")
+async def create_roles_slash(interaction: discord.Interaction):
+    await create_roles(interaction.guild)
+    await interaction.response.send_message("Created roles")  
 
 bot.run(DISCORD_BOT_TOKEN, log_handler=None)  # must be last
