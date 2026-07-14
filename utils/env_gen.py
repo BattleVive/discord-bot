@@ -81,6 +81,8 @@ def main():
     set_key(dotenv_path=env_file_path, key_to_set="BOOTSTRAP_JWT", value_to_set=bootstrapJWT)
     set_key(dotenv_path=env_file_path, key_to_set="LOG_LEVEL", value_to_set=LOG_LEVEL)
     set_key(dotenv_path=env_file_path, key_to_set="DISCORD_LOG_LEVEL", value_to_set=DISCORD_LOG_LEVEL)
-
+    if os.path.exists("../.env"):
+        with open("../.env", "rb") as src, open("../app/.env", "wb") as dst:
+            dst.write(src.read())
 if __name__ == "__main__":
     main()

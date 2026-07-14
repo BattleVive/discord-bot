@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-import os,logging
+import os
+import sys
+import logging
+
 # pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 
@@ -25,14 +28,31 @@ discord_handler = logging.FileHandler(
 )
 discord_handler.setFormatter(formatter)
 
+# Console handlers for Docker
+bot_console_handler = logging.StreamHandler(sys.stdout)
+bot_console_handler.setFormatter(formatter)
+
+discord_console_handler = logging.StreamHandler(sys.stdout)
+discord_console_handler.setFormatter(formatter)
+
 # Read levels from .env
-bot_log_level = getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
-discord_log_level = getattr(logging, os.getenv("DISCORD_LOG_LEVEL", "ERROR").upper(), logging.ERROR)
+bot_log_level = getattr(
+    logging,
+    os.getenv("LOG_LEVEL", "INFO").upper(),
+    logging.INFO,
+)
+discord_log_level = getattr(
+    logging,
+    os.getenv("DISCORD_LOG_LEVEL", "ERROR").upper(),
+    logging.ERROR,
+)
 
 logger = logging.getLogger("bot")
 logger.setLevel(bot_log_level)
 logger.addHandler(bot_handler)
+logger.addHandler(bot_console_handler)
 
 discord_logger = logging.getLogger("discord")
 discord_logger.setLevel(discord_log_level)
 discord_logger.addHandler(discord_handler)
+discord_logger.addHandler(discord_console_handler)

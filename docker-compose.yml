@@ -1,0 +1,13 @@
+name: battlevive
+services:
+  bot:
+    build:
+      context: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./app/data:/app/data:Z
+      - ./app/data:/app/logs:Z
+
+  

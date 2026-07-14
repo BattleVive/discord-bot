@@ -2,6 +2,6 @@
 utils/playwright/.auth/*
 !utils/playwright/.auth/.gitkeep
 *.log
-data/*.json
+app/data/*.json
 !data/.gitkeep
 __pycache__
