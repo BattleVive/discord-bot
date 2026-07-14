@@ -27,8 +27,6 @@ battlevive_tokens= BattlevivieTokenManager(JWT_token=os.getenv("BOOTSTRAP_JWT"),
 battlevive_users: list[User] = []
 lobbies: list[Lobby] = []
 
-#saving this shit in json to do move to it db or figure out better way to do this 
-ROLES_FILE = "Roles.json"
 async def refresh_all_data():
     results = await asyncio.gather(
         query_users(battlevive_tokens.JWT_token),
@@ -41,62 +39,91 @@ async def refresh_all_data():
     return results
 
 
-
-def load_roles() -> dict:
-    if not os.path.exists(ROLES_FILE):
-        return {}
-    with open(ROLES_FILE, "r") as f:
-        return json.load(f)
-
-
-def save_roles(data: dict) -> None:
-    with open(ROLES_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-
 async def create_roles(guild: discord.Guild):
-    all_roles = load_roles()
-    guild_roles = all_roles.get(str(guild.id), {})
+    logger.info("Creating Battlevive roles in guild '%s' (%s)", guild.name, guild.id)
 
-    for rank in User.RANKS:
-        role = await guild.create_role(name=rank[1])
-        guild_roles[rank[1]] = role.id
-    battlevive_role = await guild.create_role(name="Battlevive")
-    guild_roles["Battlevive player"]= battlevive_role.id
-    all_roles[str(guild.id)] = guild_roles
-    save_roles(all_roles)
+    for _, rank_name in User.RANKS:
+        existing_role = discord.utils.get(guild.roles, name=rank_name)
 
-async def give_role(member: discord.Member, rank_name: str):
-    all_roles = load_roles()
-    guild_roles = all_roles.get(str(member.guild.id), {})
-    role_id = guild_roles.get(rank_name)
+        if existing_role is not None:
+            logger.info(
+                "Role '%s' already exists in guild '%s' (%s), skipping.",
+                rank_name,
+                guild.name,
+                guild.id,
+            )
+            continue
 
-    if role_id is None:
-        raise ValueError(f"No stored role ID for rank '{rank_name}' in this guild")
+        try:
+            role = await guild.create_role(name=rank_name)
+            logger.info(
+                "Created role '%s' (%s) in guild '%s' (%s).",
+                role.name,
+                role.id,
+                guild.name,
+                guild.id,
+            )
+        except discord.Forbidden:
+            logger.exception(
+                "Missing permissions to create role '%s' in guild '%s' (%s).",
+                rank_name,
+                guild.name,
+                guild.id,
+            )
+        except discord.HTTPException:
+            logger.exception(
+                "Failed to create role '%s' in guild '%s' (%s).",
+                rank_name,
+                guild.name,
+                guild.id,
+            )
 
-    role = member.guild.get_role(role_id)
-    if role is None:
-        raise ValueError(f"Role ID {role_id} no longer exists in this guild")
+    role_name = "Battlevive Player"
+    existing_role = discord.utils.get(guild.roles, name=role_name)
 
-    await member.add_roles(role)
+    if existing_role is not None:
+        logger.info(
+            "Role '%s' already exists in guild '%s' (%s), skipping.",
+            role_name,
+            guild.name,
+            guild.id,
+        )
+        return
+
+    try:
+        role = await guild.create_role(name=role_name)
+        logger.info(
+            "Created role '%s' (%s) in guild '%s' (%s).",
+            role.name,
+            role.id,
+            guild.name,
+            guild.id,
+        )
+    except discord.Forbidden:
+        logger.exception(
+            "Missing permissions to create role '%s' in guild '%s' (%s).",
+            role_name,
+            guild.name,
+            guild.id,
+        )
+    except discord.HTTPException:
+        logger.exception(
+            "Failed to create role '%s' in guild '%s' (%s).",
+            role_name,
+            guild.name,
+            guild.id,
+        )   
+
 async def give_battlevive_role():
-    rank_name = "Battlevive player"
-    all_roles = load_roles()
-
+    rank_name = "Battlevive Player"
     for guild in bot.guilds:
-        guild_roles = all_roles.get(str(guild.id), {})
-        role_id = guild_roles.get(rank_name)
-
-        if role_id is None:
-            continue  # this guild has no stored role for this rank, skip
-
-        role = guild.get_role(role_id)
+        role = discord.utils.get(guild.roles, name=rank_name)
         if role is None:
-            continue  # role was deleted manually, skip
+            continue
 
         for user in battlevive_users:
             member = guild.get_member(user.discord_id)
-
+            
             if member is None:
                 try:
                     member = await guild.fetch_member(user.discord_id)
@@ -104,50 +131,44 @@ async def give_battlevive_role():
                     continue  # user not in this guild, skip
                 except discord.HTTPException:
                     continue  # other API error, skip
-
-            await member.add_roles(role)
+                except discord.Forbidden:
+                    continue
+            if role not in member.roles:
+                await member.add_roles(role)
 
 
 
 async def give_rank_roles():
-    all_roles = load_roles()
-
     for guild in bot.guilds:
-        guild_roles = all_roles.get(str(guild.id), {})
-        rank_role_ids = {guild_roles[rank[1]] for rank in User.RANKS if rank[1] in guild_roles}
-
         for user in battlevive_users:
             member = guild.get_member(user.discord_id)
 
             if member is None:
                 try:
                     member = await guild.fetch_member(user.discord_id)
-                except discord.NotFound:
-                    continue
-                except discord.HTTPException:
+                except (discord.NotFound, discord.HTTPException):
                     continue
 
             rank_name = user.rank()
-            role_id = guild_roles.get(rank_name)
+            role = discord.utils.get(guild.roles, name=rank_name)
 
-            if role_id is None:
-                continue
-
-            role = guild.get_role(role_id)
             if role is None:
                 continue
 
             old_rank_roles = [
                 r for r in member.roles
-                if r.id in rank_role_ids and r.id != role_id
+                if r.name in user.RANKS
             ]
 
-            if old_rank_roles:
-                await member.remove_roles(*old_rank_roles)
+            try:
+                if old_rank_roles:
+                    await member.remove_roles(*old_rank_roles)
 
-            if role not in member.roles:
-                await member.add_roles(role)
+                if role not in member.roles:
+                    await member.add_roles(role)
 
+            except (discord.Forbidden, discord.HTTPException):
+                continue
 
 
 
@@ -204,13 +225,6 @@ async def ping_slash(interaction: discord.Interaction):
     await interaction.response.send_message(f"Pong! {round(bot.latency * 1000)}ms")
 
 
-@bot.command(name="ping")  # <-- separate, needed for !bt ping
-async def ping_prefix(ctx):
-    await ctx.send(f"Pong! {round(bot.latency * 1000)}ms")
-
-
-
-
 @bot.tree.command(name="create_roles", description="Create required roles")
 async def create_roles_slash(interaction: discord.Interaction):
     await create_roles(interaction.guild)
@@ -219,18 +233,11 @@ async def create_roles_slash(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="debug_get_battlevive_data",
-    description="Administrator-only, refresh and dump all data from battlevive unformatted",
+    description="Dump all data from battlevive unformatted",
 )
-@app_commands.checks.has_permissions(administrator=True)
 async def debug_get_battlevive_data(interaction: discord.Interaction):
-    global battlevive_users, lobbies
-
     try:
         logger.info("debug_get_battlevive_data called by %s", interaction.user)
-
-        await interaction.response.defer(ephemeral=True)
-
-        battlevive_users, lobbies = await refresh_all_data()
 
         users_file = os.path.join(DATA_DIR, "users.json")
         lobbies_file = os.path.join(DATA_DIR, "lobbies.json")
@@ -241,34 +248,20 @@ async def debug_get_battlevive_data(interaction: discord.Interaction):
         with open(lobbies_file, "w", encoding="utf-8") as f:
             json.dump([l.json() for l in lobbies], f, indent=2)
 
-        await interaction.followup.send(
+        await interaction.response.send_message(
             files=[
                 discord.File(users_file),
                 discord.File(lobbies_file),
             ],
             ephemeral=True,
-        ) 
+        )
 
     except Exception:
         logger.exception("debug_get_battlevive_data failed")
 
-        if interaction.response.is_done():
-            await interaction.followup.send(
-                "Command failed. Check bot.log.",
-                ephemeral=True,
-            )
-        else:
+        if not interaction.response.is_done():
             await interaction.response.send_message(
                 "Command failed. Check bot.log.",
                 ephemeral=True,
             )
-
-@debug_get_battlevive_data.error
-async def admin_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    if isinstance(error, app_commands.MissingPermissions):
-        await interaction.response.send_message(
-            "You must be an administrator to use this command.",
-            ephemeral=True
-        )
-
 bot.run(DISCORD_BOT_TOKEN, log_handler=None)  # must be last
