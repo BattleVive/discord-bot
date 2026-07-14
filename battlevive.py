@@ -25,6 +25,7 @@ class BattlevivieTokenManager:
         json = {
             "refresh_token": refresh_token 
         }
+        logger.debug(f"Revalidate headers: {headers} body {json}")
         try:
             response = requests.post(
                 f"{SUPABASE_URL}/auth/v1/token?grant_type=refresh_token",
@@ -32,7 +33,7 @@ class BattlevivieTokenManager:
                 json=json,
                 timeout=10,
             )
-            logger.debug(f"Revalidate response headers: {response.headers}\n{response.json()}")
+            logger.debug(f"Revalidate response headers: {response.headers}\nbody: {response.text}")  # DEBUG: response may contain tokens, dev use only
             response.raise_for_status()
         except requests.exceptions.Timeout as e:
             logger.error(f"Token refresh timed out: {e}")
@@ -46,9 +47,22 @@ class BattlevivieTokenManager:
         except requests.exceptions.RequestException as e:
             logger.error(f"Token refresh request failed: {e}")
             raise
+
+        try:
+            data = response.json()
+        except ValueError as e:
+            logger.error(f"Token refresh response was not valid JSON: {e}")
+            raise
+
+        try:
+            new_refresh_token = data["refresh_token"]
+            new_access_token = data["access_token"]
+        except KeyError as e:
+            logger.error(f"Token refresh response missing expected field {e}")
+            raise
+
         logger.info("Revalidated tokens")
-        data = response.json()
-        return data["refresh_token"], data["access_token"]
+        return new_refresh_token, new_access_token
 
 
 #website api is bloated so classes are bloated most of the fields are obsolite TO DO debloat classes leave only important stuff. 
@@ -338,7 +352,12 @@ async def _fetch_and_parse(session: aiohttp.ClientSession, JWT_token: str, endpo
         logger.error(f"{endpoint} request error: {e}")
         raise
 
-    result = parser(raw)
+    try:
+        result = parser(raw)
+    except (KeyError, TypeError, ValueError) as e:
+        logger.error(f"Failed to parse {endpoint} response: {e}")
+        raise
+
     elapsed = time.perf_counter() - start
     logger.info(f"Fetched {len(result)} {endpoint} in {elapsed:.2f}s")
     return result

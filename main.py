@@ -46,7 +46,7 @@ async def create_roles(guild: discord.Guild):
         existing_role = discord.utils.get(guild.roles, name=rank_name)
 
         if existing_role is not None:
-            logger.info(
+            logger.debug(
                 "Role '%s' already exists in guild '%s' (%s), skipping.",
                 rank_name,
                 guild.name,
@@ -82,7 +82,7 @@ async def create_roles(guild: discord.Guild):
     existing_role = discord.utils.get(guild.roles, name=role_name)
 
     if existing_role is not None:
-        logger.info(
+        logger.debug(
             "Role '%s' already exists in guild '%s' (%s), skipping.",
             role_name,
             guild.name,
@@ -134,7 +134,17 @@ async def give_battlevive_role():
                 except discord.Forbidden:
                     continue
             if role not in member.roles:
-                await member.add_roles(role)
+                try:
+                    await member.add_roles(role)
+                    logger.debug(
+                        "Gave role '%s' to %s in guild '%s' (%s).",
+                        role.name, member, guild.name, guild.id,
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    logger.exception(
+                        "Failed to give role '%s' to %s in guild '%s' (%s).",
+                        role.name, member, guild.name, guild.id,
+                    )
 
 
 
@@ -147,12 +157,20 @@ async def give_rank_roles():
                 try:
                     member = await guild.fetch_member(user.discord_id)
                 except (discord.NotFound, discord.HTTPException):
+                    logger.debug(
+                        "Could not fetch member %s in guild '%s' (%s), skipping.",
+                        user.discord_id, guild.name, guild.id,
+                    )
                     continue
 
             rank_name = user.rank()
             role = discord.utils.get(guild.roles, name=rank_name)
 
             if role is None:
+                logger.debug(
+                    "Rank role '%s' not found in guild '%s' (%s), skipping user %s.",
+                    rank_name, guild.name, guild.id, member,
+                )
                 continue
 
             old_rank_roles = [
@@ -166,8 +184,16 @@ async def give_rank_roles():
 
                 if role not in member.roles:
                     await member.add_roles(role)
+                    logger.debug(
+                        "Updated rank role for %s to '%s' in guild '%s' (%s).",
+                        member, rank_name, guild.name, guild.id,
+                    )
 
             except (discord.Forbidden, discord.HTTPException):
+                logger.exception(
+                    "Failed to update rank role for %s in guild '%s' (%s).",
+                    member, guild.name, guild.id,
+                )
                 continue
 
 
@@ -184,16 +210,36 @@ async def revalidate_tokens():
 
     battlevive_tokens.JWT_token = new_JWT
     battlevive_tokens.refresh_token = new_refresh_token
+    logger.debug("Token revalidation cycle completed successfully.")
+
+
+@revalidate_tokens.error
+async def revalidate_tokens_error(error: Exception):
+    logger.error(f"revalidate_tokens loop stopped due to unhandled exception: {error}")
 
 
 @tasks.loop(minutes=1)
 async def refresh_loop():
     global battlevive_users, lobbies
 
-    battlevive_users, lobbies = await refresh_all_data()
+    try:
+        battlevive_users, lobbies = await refresh_all_data()
+    except Exception:
+        logger.exception("Failed to refresh Battlevive data, skipping this cycle.")
+        return
 
-    await give_battlevive_role()
-    await give_rank_roles()
+    logger.debug("Refreshed %d users and %d lobbies.", len(battlevive_users), len(lobbies))
+
+    try:
+        await give_battlevive_role()
+        await give_rank_roles()
+    except Exception:
+        logger.exception("Failed to sync roles this cycle.")
+
+
+@refresh_loop.error
+async def refresh_loop_error(error: Exception):
+    logger.error(f"refresh_loop stopped due to unhandled exception: {error}")
 
 
 intents = discord.Intents.default()
@@ -207,7 +253,7 @@ bot = commands.Bot(command_prefix="!bt", intents=intents, strip_after_prefix=Tru
 async def on_message(message):
     if message.author == bot.user:
         return
-    logger.info(f"Received message: '{message.content}'from {message.author}")
+    logger.debug(f"Received message: '{message.content}' from {message.author}")  # DEBUG: message content, dev use only
     await bot.process_commands(message)
 
 
@@ -222,13 +268,20 @@ async def setup_hook():
 
 @bot.tree.command(name="ping", description="Check bot latency")
 async def ping_slash(interaction: discord.Interaction):
+    logger.debug("ping called by %s", interaction.user)
     await interaction.response.send_message(f"Pong! {round(bot.latency * 1000)}ms")
 
 
 @bot.tree.command(name="create_roles", description="Create required roles")
 async def create_roles_slash(interaction: discord.Interaction):
-    await create_roles(interaction.guild)
-    await interaction.response.send_message("Created roles")  
+    logger.info("create_roles called by %s in guild '%s' (%s)", interaction.user, interaction.guild.name, interaction.guild.id)
+    try:
+        await create_roles(interaction.guild)
+        await interaction.response.send_message("Created roles")
+    except Exception:
+        logger.exception("create_roles command failed for guild '%s' (%s)", interaction.guild.name, interaction.guild.id)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("Command failed. Check bot.log.", ephemeral=True)
 
 
 @bot.tree.command(
@@ -238,6 +291,8 @@ async def create_roles_slash(interaction: discord.Interaction):
 async def debug_get_battlevive_data(interaction: discord.Interaction):
     try:
         logger.info("debug_get_battlevive_data called by %s", interaction.user)
+
+        logger.debug("Dumping %d users and %d lobbies.", len(battlevive_users), len(lobbies))
 
         users_file = os.path.join(DATA_DIR, "users.json")
         lobbies_file = os.path.join(DATA_DIR, "lobbies.json")
