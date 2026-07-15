@@ -120,19 +120,29 @@ async def give_battlevive_role():
         role = discord.utils.get(guild.roles, name=rank_name)
         if role is None:
             continue
-
         for user in battlevive_users:
-            member = guild.get_member(user.discord_id)
-            
+            member = None
+            if user.discord_id is not None:
+                member = guild.get_member(user.discord_id)
+                if member is None:
+                    try:
+                        member = await guild.fetch_member(user.discord_id)
+                    except discord.NotFound:
+                        continue  # user not in this guild, skip
+                    except discord.HTTPException:
+                        continue  # other API error, skip
+                    except discord.Forbidden:
+                        continue
+            else:
+                results = await guild.query_members(query=user.discord_username)
+                member = discord.utils.get(results, display_name=user.discord_username)
+
             if member is None:
-                try:
-                    member = await guild.fetch_member(user.discord_id)
-                except discord.NotFound:
-                    continue  # user not in this guild, skip
-                except discord.HTTPException:
-                    continue  # other API error, skip
-                except discord.Forbidden:
-                    continue
+                logger.debug("No member found for %s in guild '%s'", user.discord_username, guild.name)
+                continue
+
+            logger.debug(f"id: {member.id} username: {member.name}")
+
             if role not in member.roles:
                 try:
                     await member.add_roles(role)
@@ -147,55 +157,54 @@ async def give_battlevive_role():
                     )
 
 
-
 async def give_rank_roles():
     for guild in bot.guilds:
         for user in battlevive_users:
-            member = guild.get_member(user.discord_id)
+            member = None
+            if user.discord_id is not None:
+                member = guild.get_member(user.discord_id)
+                if member is None:
+                    try:
+                        member = await guild.fetch_member(user.discord_id)
+                    except (discord.NotFound, discord.HTTPException):
+                        continue
+            else:
+                results = await guild.query_members(query=user.discord_username)
+                member = discord.utils.get(results, display_name=user.discord_username)
 
             if member is None:
-                try:
-                    member = await guild.fetch_member(user.discord_id)
-                except (discord.NotFound, discord.HTTPException):
-                    logger.debug(
-                        "Could not fetch member %s in guild '%s' (%s), skipping.",
-                        user.discord_id, guild.name, guild.id,
-                    )
-                    continue
+                logger.debug("No member found for %s in guild '%s'", user.discord_username, guild.name)
+                continue
+
+            logger.debug(f"id: {member.id} username: {member.name}")
 
             rank_name = user.rank()
             role = discord.utils.get(guild.roles, name=rank_name)
-
             if role is None:
                 logger.debug(
                     "Rank role '%s' not found in guild '%s' (%s), skipping user %s.",
                     rank_name, guild.name, guild.id, member,
                 )
                 continue
-
             old_rank_roles = [
                 r for r in member.roles
                 if r.name in user.RANKS
             ]
-
             try:
                 if old_rank_roles:
                     await member.remove_roles(*old_rank_roles)
-
                 if role not in member.roles:
                     await member.add_roles(role)
                     logger.debug(
                         "Updated rank role for %s to '%s' in guild '%s' (%s).",
                         member, rank_name, guild.name, guild.id,
                     )
-
             except (discord.Forbidden, discord.HTTPException):
                 logger.exception(
                     "Failed to update rank role for %s in guild '%s' (%s).",
                     member, guild.name, guild.id,
                 )
                 continue
-
 
 
 @tasks.loop(minutes=30)
