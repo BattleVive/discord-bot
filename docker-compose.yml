@@ -8,6 +8,27 @@ services:
       - .env
     volumes:
       - ./app/data:/app/data:Z
-      - ./app/data:/app/logs:Z
-
-  
+      - ./app/logs:/app/logs:Z  
+  db:
+    image: postgres:18
+    container_name: battlevive-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-battlevive}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-battlevive}
+    volumes:
+      - ./app/init-db:/docker-entrypoint-initdb.d:ro,Z
+      - ./app/data/postgresql:/var/lib/postgresql:Z
+    ports:
+      - "127.0.0.1:5432:5432"  # host access for local psql/pgAdmin only; not needed for bot-to-db traffic
+    networks:
+      - battlevive-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-battlevive} -d ${POSTGRES_DB:-battlevive}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+networks:
+  battlevive-net:
+    driver: bridge

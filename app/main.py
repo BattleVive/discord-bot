@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # pyrefly: ignore [missing-import]
+from requests import api
+# pyrefly: ignore [missing-import]
 import discord
 # pyrefly: ignore [missing-import]
 from discord import app_commands
@@ -8,10 +10,9 @@ from discord.ext import tasks,commands
 # pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 import os,asyncio,requests
-from dataclasses import dataclass
 
 import json
-from battlevive import BattlevivieTokenManager,User,Lobby,query_lobbies,query_users
+from battlevive_api import BattlevivieTokenManager,User,Lobby,query_lobbies,query_users
 from logs import discord_logger,logger
 
 #creating dirs if  not present

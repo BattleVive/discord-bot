@@ -3,5 +3,5 @@ RUN mkdir -p /app
 COPY app /app
 
 RUN pip install -r app/requirements.txt
-
-CMD [ "python3","app/main.py" ]
+WORKDIR /app
+CMD [ "python3","main.py" ]
