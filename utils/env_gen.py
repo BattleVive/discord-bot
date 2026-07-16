@@ -84,14 +84,12 @@ def main():
 
     utils_env = Path(".env")
     root_env = Path("../.env")
-    app_env = Path("../app/.env")
 
     # Always recreate .env files from utils/.env
     copy2(utils_env, root_env)
-    copy2(utils_env, app_env)
 
     # Inject generated values
-    for env_file in (root_env, app_env):
+    for env_file in (root_env):
         set_key(env_file, "BOOTSTRAP_JWT", bootstrap_jwt)
         set_key(env_file, "BOOTSTRAP_REFRESH_TOKEN", bootstrap_refresh_token)
 
