@@ -22,7 +22,7 @@ or
 podman compose build
 podman compose up -d
 ```
-#DB Schema
+# Schema
 
 ```mermaid
 erDiagram
