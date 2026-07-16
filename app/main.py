@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 import os,asyncio,requests
 
 import json
-from battlevive_api import BattlevivieTokenManager,User,Lobby,query_lobbies,query_users
+from battlevive_api import BattlevivieTokenManager,User,Lobby,SeasonRating,query_lobbies,query_users,query_season_ratings
 from logs import discord_logger,logger
 
 #creating dirs if  not present
@@ -27,11 +27,13 @@ battlevive_tokens= BattlevivieTokenManager(JWT_token=os.getenv("BOOTSTRAP_JWT"),
 
 battlevive_users: list[User] = []
 lobbies: list[Lobby] = []
+season_ratings: list[SeasonRating]=[]
 
 async def refresh_all_data():
     results = await asyncio.gather(
         query_users(battlevive_tokens.JWT_token),
         query_lobbies(battlevive_tokens.JWT_token),
+        query_season_ratings(battlevive_tokens.JWT_token),
         return_exceptions=True,
     )
     for result in results:
@@ -43,7 +45,7 @@ async def refresh_all_data():
 async def create_roles(guild: discord.Guild):
     logger.info("Creating Battlevive roles in guild '%s' (%s)", guild.name, guild.id)
 
-    for _, rank_name in User.RANKS:
+    for _, rank_name in SeasonRating.RANKS:
         existing_role = discord.utils.get(guild.roles, name=rank_name)
 
         if existing_role is not None:
@@ -157,7 +159,7 @@ async def give_battlevive_role():
                         role.name, member, guild.name, guild.id,
                     )
 
-
+# dont use upstream changed broken !!!
 async def give_rank_roles():
     for guild in bot.guilds:
         for user in battlevive_users:
@@ -230,10 +232,10 @@ async def revalidate_tokens_error(error: Exception):
 
 @tasks.loop(minutes=1)
 async def refresh_loop():
-    global battlevive_users, lobbies
+    global battlevive_users, lobbies,season_ratings
 
     try:
-        battlevive_users, lobbies = await refresh_all_data()
+        battlevive_users, lobbies,season_ratings = await refresh_all_data()
     except Exception:
         logger.exception("Failed to refresh Battlevive data, skipping this cycle.")
         return
@@ -242,7 +244,7 @@ async def refresh_loop():
 
     try:
         await give_battlevive_role()
-        await give_rank_roles()
+        #await give_rank_roles()
     except Exception:
         logger.exception("Failed to sync roles this cycle.")
 
@@ -306,17 +308,19 @@ async def debug_get_battlevive_data(interaction: discord.Interaction):
 
         users_file = os.path.join(DATA_DIR, "users.json")
         lobbies_file = os.path.join(DATA_DIR, "lobbies.json")
-
+        ratings_file =os.path.join(DATA_DIR,"ratings.json") 
         with open(users_file, "w", encoding="utf-8") as f:
             json.dump([u.json() for u in battlevive_users], f, indent=2)
 
         with open(lobbies_file, "w", encoding="utf-8") as f:
             json.dump([l.json() for l in lobbies], f, indent=2)
-
+        with open(ratings_file, "w", encoding="utf-8") as f:
+            json.dump([r.json() for r in season_ratings], f, indent=2)
         await interaction.response.send_message(
             files=[
                 discord.File(users_file),
                 discord.File(lobbies_file),
+                discord.File(ratings_file),
             ],
             ephemeral=True,
         )

@@ -88,27 +88,11 @@ class User:
     discord_username: str
     discord_id: Optional[int]
     member_number: int
-    matches_played: int
-    wins: int
-    losses: int
-    tournaments_joined: int
-    trophies: int
     bio: Optional[str]
     favorite_champion: Optional[str]
     profile_title: Optional[str]
-    current_mmr: int
-    peak_mmr: int
-    total_mmr_delta: int
     username_changed_at: Optional[datetime]
-
-    RANKS = [
-        (8000, "BATTLEVIVE"),
-        (5500, "Diamond"),
-        (3500, "Platinum"),
-        (2000, "Gold"),
-        (1000, "Silver"),
-        (0, "Bronze"),
-    ]
+    tournaments_joined:Optional[int]
 
     @classmethod
     def from_dict(cls, data: dict) -> "User":
@@ -117,25 +101,12 @@ class User:
             discord_username=data["discord_username"],
             discord_id=int(data["discord_id"]) if data.get("discord_id") else None,
             member_number=data["member_number"],
-            matches_played=data["matches_played"],
-            wins=data["wins"],
-            losses=data["losses"],
             tournaments_joined=data["tournaments_joined"],
-            trophies=data["trophies"],
             bio=data.get("bio"),
             favorite_champion=data.get("favorite_champion"),
             profile_title=data.get("profile_title"),
-            current_mmr=data["current_mmr"],
-            peak_mmr=data["peak_mmr"],
-            total_mmr_delta=data["total_mmr_delta"],
             username_changed_at=_parse_dt(data.get("username_changed_at")),
         )
-
-    def rank(self, peak: bool = False) -> str:
-        mmr = self.peak_mmr if peak else self.current_mmr
-        for threshold, name in self.RANKS:
-            if mmr >= threshold:
-                return name
 
     def json(self) -> dict:
         return _to_json(asdict(self))
@@ -235,6 +206,64 @@ class Lobby:
         return _to_json(asdict(self))
 
 
+@dataclass
+class SeasonRating:
+    id: int
+    user_id: str
+    season_year: int
+    season_number: int
+    mmr: int
+    wins: int
+    losses: int
+    matches_played: int
+    updated_at: datetime
+
+    RANKS = [
+        (8000, "BATTLEVIVE"),
+        (5500, "Diamond"),
+        (3500, "Platinum"),
+        (2000, "Gold"),
+        (1000, "Silver"),
+        (0, "Bronze"),
+    ]
+
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SeasonRating":
+        return cls(
+            id=data["id"],
+            user_id=data["user_id"],
+            season_year=data["season_year"],
+            season_number=data["season_number"],
+            mmr=data["mmr"],
+            wins=data["wins"],
+            losses=data["losses"],
+            matches_played=data["matches_played"],
+            updated_at=_parse_dt(data["updated_at"]),
+        )
+
+
+    def rank(self) -> str:
+        for threshold, name in self.RANKS:
+            if self.mmr >= threshold:
+                return name
+
+    def json(self):
+        return _to_json(asdict(self))
+
+# Dont use wait for upstream schema
+@dataclass
+class UserTrophy:
+    data: dict
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "UserTrophy":
+        return cls(data=data)
+
+    def json(self):
+        return _to_json(self.data)
+
+
 def parse_users(json_data) -> List[User]:
     import json as _json
     data = _json.loads(json_data) if isinstance(json_data, str) else json_data
@@ -245,6 +274,20 @@ def parse_lobbies(json_data) -> List[Lobby]:
     import json as _json
     data = _json.loads(json_data) if isinstance(json_data, str) else json_data
     return [Lobby.from_dict(item) for item in data]
+
+
+def parse_season_ratings(json_data) -> List[SeasonRating]:
+    import json as _json
+
+    data = _json.loads(json_data) if isinstance(json_data, str) else json_data
+    return [SeasonRating.from_dict(item) for item in data]
+
+# Dont use wait for upstream schema
+def parse_user_trophies(json_data) -> List[UserTrophy]:
+    import json as _json
+
+    data = _json.loads(json_data) if isinstance(json_data, str) else json_data
+    return [UserTrophy.from_dict(item) for item in data]
 
 
 async def _fetch_and_parse(session: aiohttp.ClientSession, JWT_token: str, endpoint: str, parser):
@@ -289,3 +332,21 @@ async def query_lobbies(JWT_token: str) -> List[Lobby]:
         return await _fetch_and_parse(session, JWT_token, "lobbies", parse_lobbies)
 
 
+async def query_season_ratings(JWT_token: str) -> List[SeasonRating]:
+    async with aiohttp.ClientSession() as session:
+        return await _fetch_and_parse(
+            session,
+            JWT_token,
+            "season_ratings",
+            parse_season_ratings,
+        )
+
+# Dont use wait for upstream schema
+async def query_user_trophies(JWT_token: str) -> List[UserTrophy]:
+    async with aiohttp.ClientSession() as session:
+        return await _fetch_and_parse(
+            session,
+            JWT_token,
+            "user_trophies",
+            parse_user_trophies,
+        )

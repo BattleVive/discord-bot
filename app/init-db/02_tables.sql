@@ -3,28 +3,35 @@
 -- stable across refresh cycles. discord_id is bot-owned local state and
 -- must NOT be overwritten by the upstream refresh merge (see main.py).
 CREATE TABLE IF NOT EXISTS users (
-    id                   UUID PRIMARY KEY,
-    discord_username     TEXT NOT NULL,
-    discord_id           BIGINT,
-    member_number         INTEGER NOT NULL,
-    matches_played       INTEGER NOT NULL DEFAULT 0,
-    wins                 INTEGER NOT NULL DEFAULT 0,
-    losses               INTEGER NOT NULL DEFAULT 0,
-    tournaments_joined   INTEGER NOT NULL DEFAULT 0,
-    trophies             INTEGER NOT NULL DEFAULT 0,
-    bio                  TEXT,
-    favorite_champion    TEXT,
-    profile_title        TEXT,
-    current_mmr          INTEGER NOT NULL DEFAULT 1000,
-    peak_mmr             INTEGER NOT NULL DEFAULT 1000,
-    total_mmr_delta      INTEGER NOT NULL DEFAULT 0,
-    username_changed_at  TIMESTAMPTZ
+    id                  UUID PRIMARY KEY,
+    discord_username    TEXT NOT NULL,
+    discord_id          BIGINT,
+    member_number       INTEGER NOT NULL,
+    tournaments_joined  INTEGER NOT NULL DEFAULT 0,
+    bio                 TEXT,
+    favorite_champion   TEXT,
+    profile_title       TEXT,
+    username_changed_at TIMESTAMPTZ
 );
 
--- Only one Discord account can hold a given user row.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_discord_id
     ON users (discord_id)
     WHERE discord_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS season_ratings (
+    id               BIGINT PRIMARY KEY,
+    user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    season_year      INTEGER NOT NULL,
+    season_number    INTEGER NOT NULL,
+    mmr              INTEGER NOT NULL DEFAULT 1000,
+    wins             INTEGER NOT NULL DEFAULT 0,
+    losses           INTEGER NOT NULL DEFAULT 0,
+    matches_played   INTEGER NOT NULL DEFAULT 0,
+    updated_at       TIMESTAMPTZ NOT NULL,
+
+    CONSTRAINT uq_season_rating
+        UNIQUE (user_id, season_year, season_number)
+);
 
 -- Mirrors the debloated Lobby dataclass. id is the upstream integer id.
 CREATE TABLE IF NOT EXISTS lobbies (
