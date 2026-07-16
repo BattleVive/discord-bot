@@ -3,11 +3,12 @@
 from dotenv import load_dotenv
 # pyrefly: ignore [missing-import]
 import aiohttp
-import os,requests,json,time
+import os,requests,json,time,uuid
 from datetime import datetime
 from dataclasses import dataclass, field,asdict
 from typing import Optional, List
 from logs import logger
+from db import get_pool
 
 load_dotenv()
 SUPABASE_API_KEY = os.getenv("SUPABASE_API_KEY")
@@ -340,6 +341,206 @@ async def query_season_ratings(JWT_token: str) -> List[SeasonRating]:
             "season_ratings",
             parse_season_ratings,
         )
+
+
+async def sync_battlevive_data_to_db(
+    users: List[User],
+    lobbies: List[Lobby],
+    season_ratings: List[SeasonRating],
+) -> None:
+    """
+    Writes fetched data to Postgres in dependency order: users first, since
+    lobbies.creator_id / lobby_rosters.user_id / season_ratings.user_id all
+    foreign-key into users. Fetching can safely stay concurrent (network I/O,
+    order doesn't matter); this write order is what actually prevents the
+    ForeignKeyViolationError when a lobby references a brand-new user.
+    """
+    await _sync_users_to_db(users)
+    await _sync_lobbies_to_db(lobbies)
+    await _sync_season_ratings_to_db(season_ratings)
+
+
+async def _sync_users_to_db(users: List[User]) -> None:
+    if not users:
+        return
+
+    pool = get_pool()
+    await pool.executemany(
+        """
+        INSERT INTO users (
+            id, discord_username, member_number,
+            tournaments_joined, bio, favorite_champion,
+            profile_title, username_changed_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (id) DO UPDATE
+        SET discord_username    = EXCLUDED.discord_username,
+            member_number       = EXCLUDED.member_number,
+            tournaments_joined  = EXCLUDED.tournaments_joined,
+            bio                 = EXCLUDED.bio,
+            favorite_champion   = EXCLUDED.favorite_champion,
+            profile_title       = EXCLUDED.profile_title,
+            username_changed_at = EXCLUDED.username_changed_at
+        """,
+        [
+            (
+                uuid.UUID(u.id),
+                u.discord_username,
+                u.member_number,
+                u.tournaments_joined,
+                u.bio,
+                u.favorite_champion,
+                u.profile_title,
+                u.username_changed_at,
+            )
+            for u in users
+        ],
+    )
+
+
+async def _sync_lobbies_to_db(lobbies: List[Lobby]) -> None:
+    if not lobbies:
+        return
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.executemany(
+                """
+                INSERT INTO lobbies (
+                    id, lobby_number, title, lobby_type, region, match_size,
+                    team_one_name, team_two_name, creator_id, status,
+                    draft_step, draft_started_at, winner_slot,
+                    season_year, season_number, season_name,
+                    created_at, ended_at, match_started_at,
+                    dispute_reason, winner_confirmed_by_team_one, winner_confirmed_by_team_two,
+                    result_team_one_vote, result_team_two_vote,
+                    discord_match_ready_requested_at, discord_match_ready_sent_at,
+                    discord_match_ready_status, discord_match_ready_error,
+                    mmr_applied, ban_count, is_tournament, tournament_match_id, tournament_name,
+                    url_year, url_series, game_number, has_password, map_pool, selected_map
+                )
+                VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                    $11, $12, $13, $14, $15, $16, $17, $18, $19,
+                    $20, $21, $22, $23, $24, $25, $26, $27, $28,
+                    $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39
+                )
+                ON CONFLICT (id) DO UPDATE
+                SET lobby_number                      = EXCLUDED.lobby_number,
+                    title                              = EXCLUDED.title,
+                    lobby_type                         = EXCLUDED.lobby_type,
+                    region                             = EXCLUDED.region,
+                    match_size                         = EXCLUDED.match_size,
+                    team_one_name                      = EXCLUDED.team_one_name,
+                    team_two_name                      = EXCLUDED.team_two_name,
+                    creator_id                         = EXCLUDED.creator_id,
+                    status                              = EXCLUDED.status,
+                    draft_step                         = EXCLUDED.draft_step,
+                    draft_started_at                   = EXCLUDED.draft_started_at,
+                    winner_slot                        = EXCLUDED.winner_slot,
+                    season_year                        = EXCLUDED.season_year,
+                    season_number                      = EXCLUDED.season_number,
+                    season_name                        = EXCLUDED.season_name,
+                    ended_at                           = EXCLUDED.ended_at,
+                    match_started_at                   = EXCLUDED.match_started_at,
+                    dispute_reason                      = EXCLUDED.dispute_reason,
+                    winner_confirmed_by_team_one        = EXCLUDED.winner_confirmed_by_team_one,
+                    winner_confirmed_by_team_two        = EXCLUDED.winner_confirmed_by_team_two,
+                    result_team_one_vote                = EXCLUDED.result_team_one_vote,
+                    result_team_two_vote                = EXCLUDED.result_team_two_vote,
+                    discord_match_ready_requested_at    = EXCLUDED.discord_match_ready_requested_at,
+                    discord_match_ready_sent_at         = EXCLUDED.discord_match_ready_sent_at,
+                    discord_match_ready_status          = EXCLUDED.discord_match_ready_status,
+                    discord_match_ready_error           = EXCLUDED.discord_match_ready_error,
+                    mmr_applied                         = EXCLUDED.mmr_applied,
+                    ban_count                           = EXCLUDED.ban_count,
+                    is_tournament                       = EXCLUDED.is_tournament,
+                    tournament_match_id                 = EXCLUDED.tournament_match_id,
+                    tournament_name                     = EXCLUDED.tournament_name,
+                    url_year                            = EXCLUDED.url_year,
+                    url_series                          = EXCLUDED.url_series,
+                    game_number                         = EXCLUDED.game_number,
+                    has_password                        = EXCLUDED.has_password,
+                    map_pool                            = EXCLUDED.map_pool,
+                    selected_map                        = EXCLUDED.selected_map
+                """,
+                [
+                    (
+                        l.id, l.lobby_number, l.title, l.lobby_type, l.region, l.match_size,
+                        l.team_one_name, l.team_two_name,
+                        uuid.UUID(l.creator_id) if l.creator_id else None,
+                        l.status,
+                        l.draft_step, l.draft_started_at, l.winner_slot,
+                        l.season_year, l.season_number, l.season_name,
+                        l.created_at, l.ended_at, l.match_started_at,
+                        l.dispute_reason, l.winner_confirmed_by_team_one, l.winner_confirmed_by_team_two,
+                        l.result_team_one_vote, l.result_team_two_vote,
+                        l.discord_match_ready_requested_at, l.discord_match_ready_sent_at,
+                        l.discord_match_ready_status, l.discord_match_ready_error,
+                        l.mmr_applied, l.ban_count, l.is_tournament, l.tournament_match_id, l.tournament_name,
+                        l.url_year, l.url_series, l.game_number, l.has_password, l.map_pool, l.selected_map,
+                    )
+                    for l in lobbies
+                ],
+            )
+
+            lobby_ids = [l.id for l in lobbies]
+            await conn.execute(
+                "DELETE FROM lobby_rosters WHERE lobby_id = ANY($1::int[])",
+                lobby_ids,
+            )
+
+            roster_rows = [
+                (l.id, uuid.UUID(uid), "team_one")
+                for l in lobbies
+                for uid in l.team_one_roster
+            ] + [
+                (l.id, uuid.UUID(uid), "team_two")
+                for l in lobbies
+                for uid in l.team_two_roster
+            ]
+            if roster_rows:
+                await conn.executemany(
+                    "INSERT INTO lobby_rosters (lobby_id, user_id, team) VALUES ($1, $2, $3)",
+                    roster_rows,
+                )
+
+
+async def _sync_season_ratings_to_db(ratings: List[SeasonRating]) -> None:
+    if not ratings:
+        return
+
+    pool = get_pool()
+    await pool.executemany(
+        """
+        INSERT INTO season_ratings (
+            id, user_id, season_year, season_number,
+            mmr, wins, losses, matches_played, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (id) DO UPDATE
+        SET mmr             = EXCLUDED.mmr,
+            wins            = EXCLUDED.wins,
+            losses          = EXCLUDED.losses,
+            matches_played  = EXCLUDED.matches_played,
+            updated_at      = EXCLUDED.updated_at
+        """,
+        [
+            (
+                r.id,
+                uuid.UUID(r.user_id),
+                r.season_year,
+                r.season_number,
+                r.mmr,
+                r.wins,
+                r.losses,
+                r.matches_played,
+                r.updated_at,
+            )
+            for r in ratings
+        ],
+    )
 
 # Dont use wait for upstream schema
 async def query_user_trophies(JWT_token: str) -> List[UserTrophy]:

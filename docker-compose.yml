@@ -8,7 +8,12 @@ services:
       - .env
     volumes:
       - ./app/data:/app/data:Z
-      - ./app/logs:/app/logs:Z  
+      - ./app/logs:/app/logs:Z
+    networks:
+      - battlevive-net
+    depends_on:
+      db:
+        condition: service_healthy
   db:
     image: postgres:18
     container_name: battlevive-postgres

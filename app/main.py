@@ -12,8 +12,11 @@ from dotenv import load_dotenv
 import os,asyncio,requests
 
 import json
-from battlevive_api import BattlevivieTokenManager,User,Lobby,SeasonRating,query_lobbies,query_users,query_season_ratings
+from battlevive_api import BattlevivieTokenManager,User,Lobby,SeasonRating,query_lobbies,query_users,query_season_ratings,sync_battlevive_data_to_db
 from logs import discord_logger,logger
+from db import init_pool, close_pool, get_pool
+
+DATABASE_URL = os.getenv("DATABASE_URL")  # postgresql://user:pass@db:5432/battlevive
 
 #creating dirs if  not present
 DATA_DIR = "data"
@@ -29,7 +32,9 @@ battlevive_users: list[User] = []
 lobbies: list[Lobby] = []
 season_ratings: list[SeasonRating]=[]
 
+
 async def refresh_all_data():
+    # Fetches run concurrently - network I/O, order doesn't matter here.
     results = await asyncio.gather(
         query_users(battlevive_tokens.JWT_token),
         query_lobbies(battlevive_tokens.JWT_token),
@@ -39,7 +44,16 @@ async def refresh_all_data():
     for result in results:
         if isinstance(result, Exception):
             raise result
-    return results
+
+    users, lobbies, season_ratings = results
+
+    # Sync runs sequentially, users first - lobbies.creator_id and
+    # season_ratings.user_id both FK into users, so this order is what
+    # actually prevents the ForeignKeyViolationError, regardless of which
+    # fetch happened to finish first above.
+    await sync_battlevive_data_to_db(users, lobbies, season_ratings)
+
+    return users, lobbies, season_ratings
 
 
 async def create_roles(guild: discord.Guild):
@@ -271,6 +285,7 @@ async def on_message(message):
 
 @bot.event
 async def setup_hook():
+    await init_pool(DATABASE_URL) 
     revalidate_tokens.start()
     refresh_loop.start()
     #await bot.tree.sync()  # <-- registers slash commands with Discord
@@ -333,4 +348,8 @@ async def debug_get_battlevive_data(interaction: discord.Interaction):
                 "Command failed. Check bot.log.",
                 ephemeral=True,
             )
+@bot.event
+async def on_close():
+    await close_pool()
+
 bot.run(DISCORD_BOT_TOKEN, log_handler=None)  # must be last
