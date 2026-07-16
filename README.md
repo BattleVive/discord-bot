@@ -49,4 +49,5 @@ See [SCHEMA.md](./SCHEMA.md).
 
 ---
 
-This project is under active development – setup steps and structure may change.
+This project is under active development.
+
