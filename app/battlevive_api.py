@@ -8,7 +8,6 @@ from datetime import datetime
 from dataclasses import dataclass, field,asdict
 from typing import Optional, List
 from logs import logger
-from db import get_pool
 
 load_dotenv()
 SUPABASE_API_KEY = os.getenv("SUPABASE_API_KEY")
@@ -355,15 +354,17 @@ async def sync_battlevive_data_to_db(
     order doesn't matter); this write order is what actually prevents the
     ForeignKeyViolationError when a lobby references a brand-new user.
     """
-    await _sync_users_to_db(users)
+    logger.info("Syncing local db with upstream")
+    await sync_users_to_db(users)
     await _sync_lobbies_to_db(lobbies)
     await _sync_season_ratings_to_db(season_ratings)
 
 
-async def _sync_users_to_db(users: List[User]) -> None:
+async def sync_users_to_db(users: List[User]) -> None:
     if not users:
         return
 
+    from db import get_pool
     pool = get_pool()
     await pool.executemany(
         """
@@ -402,6 +403,7 @@ async def _sync_lobbies_to_db(lobbies: List[Lobby]) -> None:
     if not lobbies:
         return
 
+    from db import get_pool
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -511,6 +513,7 @@ async def _sync_season_ratings_to_db(ratings: List[SeasonRating]) -> None:
     if not ratings:
         return
 
+    from db import get_pool
     pool = get_pool()
     await pool.executemany(
         """

@@ -10,11 +10,12 @@ from discord.ext import tasks,commands
 # pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 import os,asyncio,requests
-
 import json
-from battlevive_api import BattlevivieTokenManager,User,Lobby,SeasonRating,query_lobbies,query_users,query_season_ratings,sync_battlevive_data_to_db
-from logs import discord_logger,logger
 from db import init_pool, close_pool, get_pool
+import db
+from battlevive_api import BattlevivieTokenManager,User,Lobby,SeasonRating,query_lobbies,query_users,query_season_ratings,sync_battlevive_data_to_db,sync_users_to_db
+from logs import discord_logger,logger
+
 
 DATABASE_URL = os.getenv("DATABASE_URL")  # postgresql://user:pass@db:5432/battlevive
 
@@ -132,12 +133,19 @@ async def create_roles(guild: discord.Guild):
         )   
 
 async def give_battlevive_role():
+    global battlevive_users 
+    #refresh data and save it into db
+    battlevive_users = await query_users(battlevive_tokens.JWT_token)
+    await sync_users_to_db(users= battlevive_users)
+
     rank_name = "Battlevive Player"
+    users  =  await db.get_users()
+
     for guild in bot.guilds:
         role = discord.utils.get(guild.roles, name=rank_name)
         if role is None:
             continue
-        for user in battlevive_users:
+        for user in users:
             member = None
             if user.discord_id is not None:
                 member = guild.get_member(user.discord_id)
@@ -153,12 +161,17 @@ async def give_battlevive_role():
             else:
                 results = await guild.query_members(query=user.discord_username)
                 member = discord.utils.get(results, display_name=user.discord_username)
+                if member is not None:
+                    pool = get_pool()
+                    status = await pool.execute("UPDATE users SET discord_id = $1 WHERE discord_username = $2", member.id, user.discord_username)
+                    logger.debug(f"Trying to set id ={member.id}  for user {user.discord_username}")
+                    logger.debug(f"Update status: {status}")
 
             if member is None:
                 logger.debug("No member found for %s in guild '%s'", user.discord_username, guild.name)
                 continue
 
-            logger.debug(f"id: {member.id} username: {member.name}")
+            #logger.debug(f"id: {member.id} username: {member.name}")
 
             if role not in member.roles:
                 try:
@@ -312,25 +325,32 @@ async def create_roles_slash(interaction: discord.Interaction):
 
 
 @bot.tree.command(
-    name="debug_get_battlevive_data",
-    description="Dump all data from battlevive unformatted",
+    name="debug_get_db_data",
+    description="Dump all data from db unformatted",
 )
-async def debug_get_battlevive_data(interaction: discord.Interaction):
+async def debug_get_db_data(interaction: discord.Interaction):
     try:
         logger.info("debug_get_battlevive_data called by %s", interaction.user)
 
-        logger.debug("Dumping %d users and %d lobbies.", len(battlevive_users), len(lobbies))
-
+        
         users_file = os.path.join(DATA_DIR, "users.json")
         lobbies_file = os.path.join(DATA_DIR, "lobbies.json")
-        ratings_file =os.path.join(DATA_DIR,"ratings.json") 
+        ratings_file =os.path.join(DATA_DIR,"ratings.json")
+
+        lobbies = await db.get_lobbies() 
+        users = await db.get_users()
+        ratings = await db.get_season_ratings()
+
+        logger.debug("Dumping %d users and %d lobbies and ratings %d.", len(battlevive_users), len(lobbies),len(season_ratings))
         with open(users_file, "w", encoding="utf-8") as f:
-            json.dump([u.json() for u in battlevive_users], f, indent=2)
+            json.dump([u.json() for u in users], f, indent=2)
 
         with open(lobbies_file, "w", encoding="utf-8") as f:
             json.dump([l.json() for l in lobbies], f, indent=2)
+
         with open(ratings_file, "w", encoding="utf-8") as f:
-            json.dump([r.json() for r in season_ratings], f, indent=2)
+            json.dump([r.json() for r in ratings], f, indent=2)
+
         await interaction.response.send_message(
             files=[
                 discord.File(users_file),
@@ -348,6 +368,48 @@ async def debug_get_battlevive_data(interaction: discord.Interaction):
                 "Command failed. Check bot.log.",
                 ephemeral=True,
             )
+
+
+@bot.tree.command(
+    name="debug_get_battlevive_data",
+    description="Dump all data from battlevive unformatted",
+)
+async def debug_get_battlevive_data(interaction: discord.Interaction):
+    try:
+        logger.info("debug_get_battlevive_data called by %s", interaction.user)
+
+        logger.debug("Dumping %d users and %d lobbies and ratings %d.", len(battlevive_users), len(lobbies),len(season_ratings))
+        users_file = os.path.join(DATA_DIR, "users.json")
+        lobbies_file = os.path.join(DATA_DIR, "lobbies.json")
+        ratings_file =os.path.join(DATA_DIR,"ratings.json")
+        with open(users_file, "w", encoding="utf-8") as f:
+            json.dump([u.json() for u in battlevive_users], f, indent=2)
+
+        with open(lobbies_file, "w", encoding="utf-8") as f:
+            json.dump([l.json() for l in lobbies], f, indent=2)
+
+        with open(ratings_file, "w", encoding="utf-8") as f:
+            json.dump([r.json() for r in season_ratings], f, indent=2)
+
+        await interaction.response.send_message(
+            files=[
+                discord.File(users_file),
+                discord.File(lobbies_file),
+                discord.File(ratings_file),
+            ],
+            ephemeral=True,
+        )
+
+    except Exception:
+        logger.exception("debug_get_battlevive_data failed")
+
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "Command failed. Check bot.log.",
+                ephemeral=True,
+            )
+
+
 @bot.event
 async def on_close():
     await close_pool()

@@ -89,9 +89,8 @@ def main():
     copy2(utils_env, root_env)
 
     # Inject generated values
-    for env_file in (root_env):
-        set_key(env_file, "BOOTSTRAP_JWT", bootstrap_jwt)
-        set_key(env_file, "BOOTSTRAP_REFRESH_TOKEN", bootstrap_refresh_token)
+    set_key(root_env, "BOOTSTRAP_JWT", bootstrap_jwt)
+    set_key(root_env, "BOOTSTRAP_REFRESH_TOKEN", bootstrap_refresh_token)
 
 
 if __name__ == "__main__":
