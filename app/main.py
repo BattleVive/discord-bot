@@ -13,8 +13,13 @@ import os,asyncio,requests
 import json
 from db import init_pool, close_pool, get_pool
 import db
-from battlevive_api import BattlevivieTokenManager,User,Lobby,SeasonRating,query_lobbies,query_users,query_season_ratings,sync_battlevive_data_to_db,sync_users_to_db
+from battlevive_api import BattlevivieTokenManager,User,Lobby,SeasonRating,query_lobbies,query_users,query_season_ratings,sync_battlevive_data_to_db,sync_users_to_db,sync_lobbies_to_db,sync_season_ratings_to_db
 from logs import discord_logger,logger
+from io import BytesIO
+# pyrefly: ignore [missing-import]
+from PIL import Image
+from images import build_card
+
 
 
 DATABASE_URL = os.getenv("DATABASE_URL")  # postgresql://user:pass@db:5432/battlevive
@@ -52,7 +57,7 @@ async def refresh_all_data():
     # season_ratings.user_id both FK into users, so this order is what
     # actually prevents the ForeignKeyViolationError, regardless of which
     # fetch happened to finish first above.
-    await sync_battlevive_data_to_db(users, lobbies, season_ratings)
+    await sync_battlevive_data_to_db(users, lobbies,season_ratings)
 
     return users, lobbies, season_ratings
 
@@ -132,6 +137,7 @@ async def create_roles(guild: discord.Guild):
             guild.id,
         )   
 
+
 async def give_battlevive_role():
     global battlevive_users 
     #refresh data and save it into db
@@ -163,7 +169,7 @@ async def give_battlevive_role():
                 member = discord.utils.get(results, display_name=user.discord_username)
                 if member is not None:
                     pool = get_pool()
-                    status = await pool.execute("UPDATE users SET discord_id = $1 WHERE discord_username = $2", member.id, user.discord_username)
+                    status = await pool.execute("UPDATE users SET discord_id = $1 WHERE LOWER(discord_username) = $2", member.id, user.discord_username.lower())
                     logger.debug(f"Trying to set id ={member.id}  for user {user.discord_username}")
                     logger.debug(f"Update status: {status}")
 
@@ -188,28 +194,40 @@ async def give_battlevive_role():
 
 # dont use upstream changed broken !!!
 async def give_rank_roles():
+
+    global battlevive_users, season_ratings
+    #refresh data and save it into db
+    battlevive_users = await query_users(battlevive_tokens.JWT_token)
+    season_ratings = await query_season_ratings(battlevive_tokens.JWT_token)
+    await sync_users_to_db(users=battlevive_users)
+    await sync_season_ratings_to_db(ratings=season_ratings)
+
+    pool = get_pool()
+    users = await pool.fetch("SELECT users.id, users.discord_id, users.discord_username, season_ratings.mmr FROM users INNER JOIN season_ratings ON season_ratings.user_id = users.id")
+
     for guild in bot.guilds:
-        for user in battlevive_users:
+        for user in users:
             member = None
-            if user.discord_id is not None:
-                member = guild.get_member(user.discord_id)
+            if user["discord_id"] is not None:
+                member = guild.get_member(user["discord_id"])
                 if member is None:
                     try:
-                        member = await guild.fetch_member(user.discord_id)
+                        member = await guild.fetch_member(user["discord_id"])
                     except (discord.NotFound, discord.HTTPException):
                         continue
             else:
-                results = await guild.query_members(query=user.discord_username)
-                member = discord.utils.get(results, display_name=user.discord_username)
+                results = await guild.query_members(query=user["discord_username"])
+                member = discord.utils.get(results, display_name=user["discord_username"])
 
             if member is None:
-                logger.debug("No member found for %s in guild '%s'", user.discord_username, guild.name)
+                logger.debug("No member found for %s in guild '%s'", user["discord_username"], guild.name)
                 continue
 
             logger.debug(f"id: {member.id} username: {member.name}")
 
-            rank_name = user.rank()
+            rank_name = SeasonRating.rank(user["mmr"])
             role = discord.utils.get(guild.roles, name=rank_name)
+
             if role is None:
                 logger.debug(
                     "Rank role '%s' not found in guild '%s' (%s), skipping user %s.",
@@ -218,7 +236,7 @@ async def give_rank_roles():
                 continue
             old_rank_roles = [
                 r for r in member.roles
-                if r.name in user.RANKS
+                if r.name in [rank for _, rank in SeasonRating.RANKS]
             ]
             try:
                 if old_rank_roles:
@@ -271,7 +289,7 @@ async def refresh_loop():
 
     try:
         await give_battlevive_role()
-        #await give_rank_roles()
+        await give_rank_roles()
     except Exception:
         logger.exception("Failed to sync roles this cycle.")
 
@@ -304,12 +322,6 @@ async def setup_hook():
     #await bot.tree.sync()  # <-- registers slash commands with Discord
     bot.tree.copy_global_to(guild=discord.Object(id=1524804820098224240))
     await bot.tree.sync(guild=discord.Object(id=1524804820098224240)) # for prod change to global sync 
-
-
-@bot.tree.command(name="ping", description="Check bot latency")
-async def ping_slash(interaction: discord.Interaction):
-    logger.debug("ping called by %s", interaction.user)
-    await interaction.response.send_message(f"Pong! {round(bot.latency * 1000)}ms")
 
 
 @bot.tree.command(name="create_roles", description="Create required roles")
@@ -407,6 +419,86 @@ async def debug_get_battlevive_data(interaction: discord.Interaction):
             await interaction.response.send_message(
                 "Command failed. Check bot.log.",
                 ephemeral=True,
+            )
+
+
+@bot.tree.command(
+    name        = "rank",
+    description = "Display your rank"
+)
+async def rank_command(interaction: discord.Interaction):
+    logger.info("rank called by %s (%s)", interaction.user, interaction.user.id)
+    try:
+        pool = get_pool()
+
+        user = await pool.fetchrow(
+            """
+            SELECT
+                users.discord_id,
+                users.discord_username,
+                users.member_number,
+                season_ratings.mmr,
+                season_ratings.wins,
+                season_ratings.losses
+            FROM users
+            INNER JOIN season_ratings ON users.id = season_ratings.user_id
+            WHERE users.discord_id = $1
+            """,
+            interaction.user.id,  # BIGINT in DB – no str() cast
+        )
+
+        if user is None:
+            logger.debug("rank: no DB record for discord_id=%s", interaction.user.id)
+            await interaction.response.send_message(
+                "You are not registered.", ephemeral=True
+            )
+            return
+
+        mmr          = user["mmr"]
+        rank_current = SeasonRating.rank(mmr)
+
+        rank_next    = rank_current
+        mmr_required = mmr
+        for i, (threshold, name) in enumerate(SeasonRating.RANKS):
+            if mmr >= threshold:
+                if i > 0:
+                    mmr_required, rank_next = SeasonRating.RANKS[i - 1]
+                break
+
+        logger.debug(
+            "rank: user=%s mmr=%d current=%s next=%s mmr_required=%d",
+            interaction.user.id, mmr, rank_current, rank_next, mmr_required,
+        )
+
+        avatar_bytes = await interaction.user.display_avatar.with_size(128).read()
+        avatar       = Image.open(BytesIO(avatar_bytes))
+
+        png = build_card(
+            avatar       = avatar,
+            display_name = interaction.user.display_name,
+            rank_current = rank_current,
+            rank_next    = rank_next,
+            mmr_current  = mmr,
+            mmr_required = mmr_required,
+            wins         = user["wins"],
+            losses       = user["losses"],
+        )
+
+        card_path = os.path.join(DATA_DIR, f"profile_{interaction.user.id}.png")
+        with open(card_path, "wb") as f:
+            f.write(png)
+
+        file  = discord.File(card_path, filename="profile.png")
+        embed = discord.Embed(title=interaction.user.display_name)
+        embed.set_image(url="attachment://profile.png")
+        await interaction.response.send_message(embed=embed, file=file)
+        logger.info("rank: sent profile card to %s (%s)", interaction.user, interaction.user.id)
+
+    except Exception:
+        logger.exception("rank command failed for %s (%s)", interaction.user, interaction.user.id)
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "Command failed. Check bot.log.", ephemeral=True
             )
 
 

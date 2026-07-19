@@ -1,7 +1,21 @@
-FROM python:3.14.6-alpine
-RUN mkdir -p /app
-COPY app /app
+FROM python:3.14.6-alpine AS builder
 
-RUN pip install -r app/requirements.txt
+COPY apk-build-deps.txt .
+RUN apk add --no-cache $(cat apk-build-deps.txt | tr '\n' ' ')
+
+RUN python -m venv /venv
+COPY app/requirements.txt .
+RUN /venv/bin/pip install --no-cache-dir -r requirements.txt
+
+
+FROM python:3.14.6-alpine
+
+COPY apk-runtime-deps.txt .
+RUN apk add --no-cache $(cat apk-runtime-deps.txt | tr '\n' ' ')
+
+COPY --from=builder /venv /venv
+ENV PATH="/venv/bin:$PATH"
+
+COPY app /app
 WORKDIR /app
-CMD [ "python3","main.py" ]
+CMD ["python3", "main.py"]

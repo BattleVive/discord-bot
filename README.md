@@ -50,6 +50,12 @@ Check logs with `docker compose logs -f` / `podman-compose logs -f`.
 See [SCHEMA.md](./SCHEMA.md).
 
 ---
+This project is licensed under the AGPL-3.0 (see LICENSE).
+
+Exceptions:
+- .app/assets/fonts/ – DejaVu fonts, licensed under the Bitstream Vera Fonts
+  license (see .app/assets/fonts/LICENSE). DejaVu modifications are public domain.
+
 
 This project is under active development.
 

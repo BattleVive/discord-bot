@@ -243,10 +243,14 @@ class SeasonRating:
         )
 
 
-    def rank(self) -> str:
-        for threshold, name in self.RANKS:
-            if self.mmr >= threshold:
+    
+    @classmethod
+    def rank(cls, mmr: int) -> str:
+        for threshold, name in cls.RANKS:
+            if mmr >= threshold:
                 return name
+        return "Bronze"
+
 
     def json(self):
         return _to_json(asdict(self))
@@ -356,8 +360,8 @@ async def sync_battlevive_data_to_db(
     """
     logger.info("Syncing local db with upstream")
     await sync_users_to_db(users)
-    await _sync_lobbies_to_db(lobbies)
-    await _sync_season_ratings_to_db(season_ratings)
+    await sync_lobbies_to_db(lobbies)
+    await sync_season_ratings_to_db(season_ratings)
 
 
 async def sync_users_to_db(users: List[User]) -> None:
@@ -399,7 +403,7 @@ async def sync_users_to_db(users: List[User]) -> None:
     )
 
 
-async def _sync_lobbies_to_db(lobbies: List[Lobby]) -> None:
+async def sync_lobbies_to_db(lobbies: List[Lobby]) -> None:
     if not lobbies:
         return
 
@@ -509,7 +513,7 @@ async def _sync_lobbies_to_db(lobbies: List[Lobby]) -> None:
                 )
 
 
-async def _sync_season_ratings_to_db(ratings: List[SeasonRating]) -> None:
+async def sync_season_ratings_to_db(ratings: List[SeasonRating]) -> None:
     if not ratings:
         return
 

@@ -5,3 +5,4 @@ utils/playwright/.auth/*
 app/data/*.json
 !data/.gitkeep
 __pycache__
+app/data/*.png
