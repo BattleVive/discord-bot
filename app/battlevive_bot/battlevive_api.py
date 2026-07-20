@@ -40,7 +40,11 @@ class BattleviveTokenManager:
         payload = {
             "refresh_token": refresh_token,
         }
-        logger.debug("Revalidate headers: %s body %s", headers, payload)
+        logger.debug(
+            "Revalidate request prepared (header keys: %s, payload keys: %s)",
+            list(headers.keys()),
+            list(payload.keys()),
+        )
 
         try:
             response = requests.post(
@@ -50,9 +54,9 @@ class BattleviveTokenManager:
                 timeout=10,
             )
             logger.debug(
-                "Revalidate response headers: %s\nbody: %s",
-                response.headers,
-                response.text,
+                "Revalidate response received (status: %s, header keys: %s)",
+                response.status_code,
+                list(response.headers.keys()),
             )
             response.raise_for_status()
         except requests.exceptions.Timeout as error:
@@ -63,9 +67,8 @@ class BattleviveTokenManager:
             raise
         except requests.exceptions.HTTPError:
             logger.error(
-                "Token refresh failed with status %s: %s",
+                "Token refresh failed with status %s",
                 response.status_code,
-                response.text,
             )
             raise
         except requests.exceptions.RequestException as error:
