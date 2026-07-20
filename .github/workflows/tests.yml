@@ -1,4 +1,4 @@
-name: Tests
+name: Test Suite
 
 on:
   push:
@@ -7,11 +7,18 @@ on:
     branches: ["main"]
 
 permissions:
+  checks: write
   contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
+    name: Python 3.14
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     services:
       postgres:
@@ -55,5 +62,14 @@ jobs:
       - name: Compile Python files
         run: python -m compileall app utils
 
-      - name: Run pytest
-        run: pytest
+      - name: Run test suite
+        run: pytest --junitxml=test-results/pytest.xml
+
+      - name: Publish test report
+        if: ${{ !cancelled() }}
+        uses: dorny/test-reporter@v2
+        with:
+          name: Pytest results
+          path: test-results/pytest.xml
+          reporter: java-junit
+          fail-on-error: "false"

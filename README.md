@@ -2,7 +2,7 @@
 
 Discord bot that syncs player/lobby data from the Battlevive platform (via Supabase) and manages roles, ranks, and match info in Discord.
 
-[![Docker Image CI](https://github.com/voxix-dev/battlevive-bot/actions/workflows/docker-image.yml/badge.svg)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/docker-image.yml) [![CodeQL Advanced](https://github.com/voxix-dev/battlevive-bot/actions/workflows/codeql.yml/badge.svg)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/codeql.yml)
+[![Test Suite](https://github.com/voxix-dev/battlevive-bot/actions/workflows/tests.yml/badge.svg)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/tests.yml) [![Docker Image CI](https://github.com/voxix-dev/battlevive-bot/actions/workflows/docker-image.yml/badge.svg)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/docker-image.yml) [![CodeQL Advanced](https://github.com/voxix-dev/battlevive-bot/actions/workflows/codeql.yml/badge.svg)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/codeql.yml)
 
 ## Requirements
 
@@ -58,4 +58,3 @@ Exceptions:
 
 
 This project is under active development.
-
