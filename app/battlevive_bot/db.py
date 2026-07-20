@@ -27,8 +27,10 @@ async def init_pool(dsn: str | None) -> asyncpg.Pool:
 
 
 async def close_pool() -> None:
+    global _pool
     if _pool is not None:
         await _pool.close()
+        _pool = None
         logger.info("PostgreSQL connection pool closed.")
 
 

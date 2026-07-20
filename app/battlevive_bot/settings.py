@@ -11,8 +11,8 @@ load_dotenv()
 # Paths
 APP_DIR = Path(__file__).resolve().parents[1]
 ASSETS_DIR = APP_DIR / "assets"
-DATA_DIR = Path("data")
-LOG_DIR = Path("logs")
+DATA_DIR = APP_DIR / "data"
+LOG_DIR = APP_DIR / "logs"
 
 
 # Environment

@@ -8,6 +8,7 @@ import json
 import discord
 # pyrefly: ignore [missing-import]
 from discord.ext import commands
+# pyrefly: ignore [missing-import]
 from discord.ext import tasks
 # pyrefly: ignore [missing-import]
 from PIL import Image
