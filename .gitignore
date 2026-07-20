@@ -1,8 +1,14 @@
+#secrets 
 .env
 utils/playwright/.auth/*
-!utils/playwright/.auth/.gitkeep
+#logs catche and runtime data
 *.log
 app/data/*.json
-!data/.gitkeep
 __pycache__
 app/data/*.png
+#clankers  
+AGENTS.md
+.claude
+#keep
+!utils/playwright/.auth/.gitkeep
+!data/.gitkeep

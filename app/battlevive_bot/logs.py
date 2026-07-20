@@ -1,41 +1,35 @@
 #!/usr/bin/env python3
+import logging
 import os
 import sys
-import logging
 
-# pyrefly: ignore [missing-import]
-from dotenv import load_dotenv
+from .settings import LOG_DIR
 
-load_dotenv()
 
-os.makedirs("logs", exist_ok=True)
+LOG_DIR.mkdir(exist_ok=True)
 
-formatter = logging.Formatter(
-    "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
-)
+formatter = logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
 
 bot_handler = logging.FileHandler(
-    filename="logs/bot.log",
+    filename=LOG_DIR / "bot.log",
     encoding="utf-8",
-    mode="a"
+    mode="a",
 )
 bot_handler.setFormatter(formatter)
 
 discord_handler = logging.FileHandler(
-    filename="logs/discord.log",
+    filename=LOG_DIR / "discord.log",
     encoding="utf-8",
-    mode="a"
+    mode="a",
 )
 discord_handler.setFormatter(formatter)
 
-# Console handlers for Docker
 bot_console_handler = logging.StreamHandler(sys.stdout)
 bot_console_handler.setFormatter(formatter)
 
 discord_console_handler = logging.StreamHandler(sys.stdout)
 discord_console_handler.setFormatter(formatter)
 
-# Read levels from .env
 bot_log_level = getattr(
     logging,
     os.getenv("LOG_LEVEL", "INFO").upper(),
