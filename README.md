@@ -38,12 +38,23 @@ docker compose up -d --build
 **Podman**
 
 ```
-podman-compose up -d --build
+podman compose up -d --build --no-deps bot
 ```
 
-(or `podman compose up -d --build` if your Podman version has the built-in compose provider)
+This builds and recreates only the bot service; it assumes the database service
+is already running. Runtime files under `app/data/` (including the PostgreSQL
+data directory) are excluded from the build context, and the database container
+and data are not recreated or removed. For a build without restarting the bot,
+use `podman compose build bot`. `podman compose` may print that it is using an
+external Compose provider; that is normal for Podman.
 
-Check logs with `docker compose logs -f` / `podman-compose logs -f`.
+If `podman-compose` is installed and preferred, the equivalent commands are
+`podman-compose build bot` and `podman-compose up -d --no-deps bot`.
+
+For a standalone build, use `podman build -t battlevive-bot:local .`. Compose
+uses the same image tag, so the next `podman compose up -d` will use that build.
+
+Check logs with `docker compose logs -f bot` / `podman compose logs -f bot`.
 
 ## Database schema
 
@@ -52,9 +63,14 @@ See [SCHEMA.md](./SCHEMA.md).
 ---
 This project is licensed under the AGPL-3.0 (see LICENSE).
 
-Exceptions:
-- .app/assets/fonts/ – DejaVu fonts, licensed under the Bitstream Vera Fonts
-  license (see .app/assets/fonts/LICENSE). DejaVu modifications are public domain.
+## Third-party assets
+
+- Liberation Mono 2.1.5 is bundled under the SIL Open Font License 1.1. The
+  original license and copyright notice are in
+  [`app/assets/fonts/LiberationMono-LICENSE.txt`](./app/assets/fonts/LiberationMono-LICENSE.txt).
+  Upstream project and official archive:
+  [liberationfonts/liberation-fonts](https://github.com/liberationfonts/liberation-fonts),
+  [Liberation Fonts 2.1.5 TTF download](https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz).
 
 
 This project is under active development.

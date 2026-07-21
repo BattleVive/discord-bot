@@ -1,0 +1,16 @@
+# Runtime state is mounted into containers and must never enter the build context.
+app/data/
+app/logs/
+
+# Local configuration and development files.
+.env
+.git/
+.github/
+.pytest_cache/
+.venv/
+.vscode/
+**/__pycache__/
+*.log
+AGENTS.md
+tests/
+utils/

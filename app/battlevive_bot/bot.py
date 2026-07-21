@@ -33,7 +33,6 @@ from .roles import give_battlevive_role
 from .roles import give_rank_roles
 from .settings import BATTLEVIVE_BOOTSTRAP_JWT
 from .settings import BATTLEVIVE_BOOTSTRAP_REFRESH_TOKEN
-from .settings import BATTLEVIVE_URL
 from .settings import COMMAND_SYNC_GUILD_ID
 from .settings import DATABASE_URL
 from .settings import DATA_DIR
@@ -320,32 +319,18 @@ async def rank_command(interaction: discord.Interaction) -> None:
         avatar_bytes = await interaction.user.display_avatar.with_size(128).read()
         avatar = Image.open(BytesIO(avatar_bytes))
 
-        card_path = DATA_DIR / f"profile_{interaction.user.id}.png"
-
-        if not card_path.exists():
-            png = build_card(
-                avatar=avatar,
-                display_name=interaction.user.display_name,
-                rank_current=rank_current,
-                rank_next=rank_next,
-                mmr_current=mmr,
-                mmr_required=mmr_required,
-                wins=user["wins"],
-                losses=user["losses"],
-            )
-            with card_path.open("wb") as file:
-                file.write(png)
-            logger.debug("rank: generated new profile card for %s", interaction.user.id)
-        else:
-            logger.debug("rank: using cached profile card for %s", interaction.user.id)
-
-        file = discord.File(str(card_path), filename="profile.png")
-        url = f"{BATTLEVIVE_URL}/profile/{user['member_number']}"
-
-        embed = discord.Embed()
-        embed.set_author(name=interaction.user.name, url=url)
-        embed.set_image(url="attachment://profile.png")
-        await interaction.response.send_message(embed=embed, file=file)
+        png = build_card(
+            avatar=avatar,
+            display_name=interaction.user.display_name,
+            rank_current=rank_current,
+            rank_next=rank_next,
+            mmr_current=mmr,
+            mmr_required=mmr_required,
+            wins=user["wins"],
+            losses=user["losses"],
+        )
+        file = discord.File(BytesIO(png), filename="profile.png")
+        await interaction.response.send_message(file=file)
         logger.info(
             "rank: sent profile card to %s (%s)",
             interaction.user,
@@ -366,9 +351,6 @@ async def rank_command(interaction: discord.Interaction) -> None:
 
 @tasks.loop(minutes=1)
 async def remove_old_images() -> None:
-    for file in DATA_DIR.glob("profile_*.png"):
-        file.unlink(missing_ok=True)
-
     for file in DATA_DIR.glob("*.json"):
         file.unlink(missing_ok=True)
 

@@ -1,6 +1,7 @@
 name: battlevive
 services:
   bot:
+    image: battlevive-bot:local
     build:
       context: .
     restart: unless-stopped

@@ -1,3 +1,6 @@
+#editors 
+.vscode
+.venv
 #secrets 
 .env
 utils/playwright/.auth/*
@@ -5,6 +8,7 @@ utils/playwright/.auth/*
 *.log
 app/data/*.json
 __pycache__
+.pytest_cache
 app/data/*.png
 #clankers  
 AGENTS.md

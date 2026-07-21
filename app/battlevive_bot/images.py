@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from pathlib import Path
 
 # pyrefly: ignore [missing-import]
 from PIL import Image
@@ -8,124 +9,152 @@ from PIL import Image
 from PIL import ImageDraw
 # pyrefly: ignore [missing-import]
 from PIL import ImageFont
+# pyrefly: ignore [missing-import]
+from PIL import ImageOps
 
 from .settings import ASSETS_DIR
 
 
 # Asset paths
-FONT_BOLD = str(ASSETS_DIR / "fonts" / "DejaVuSans-Bold.ttf")
-FONT_REGULAR = str(ASSETS_DIR / "fonts" / "DejaVuSans.ttf")
+FONT_BOLD = str(ASSETS_DIR / "fonts" / "LiberationMono-Bold.ttf")
+FONT_REGULAR = str(ASSETS_DIR / "fonts" / "LiberationMono-Regular.ttf")
+RANK_ICON_DIR = ASSETS_DIR / "images" / "Battlevive Rank Icons"
+
+RANK_STYLES: dict[str, tuple[str, str]] = {
+    "Bronze": ("Bronze.png", "#C87E45"),
+    "Silver": ("Silver.png", "#DCE3E8"),
+    "Gold": ("Gold.png", "#FFD22A"),
+    "Platinum": ("Platinum.png", "#A6E7EC"),
+    "Diamond": ("Diamond.png", "#31C9F0"),
+    "BATTLEVIVE": ("Grand Champion.png", "#FF4F8B"),
+}
 
 
 # Card dimensions
-CARD_W = 480
-CARD_H = 130
+CARD_W = 640
+CARD_H = 220
+CORNER_R = 12
 PAD = 16
-PFP_SIZE = 58
-PFP_BORDER = 2
-CONTENT_X = PAD + PFP_SIZE + 14
-BAR_H = 8
-CORNER_R = 8
+AVATAR_SIZE = 126
+CONTENT_X = 172
+CONTENT_RIGHT = CARD_W - PAD
+BAR_H = 10
 
 
-# Palette
-C_BG = (30, 33, 40)
-C_BORDER = (58, 61, 69)
-C_TEXT = (242, 243, 245)
-C_MUTED = (128, 132, 142)
-C_SECONDARY = (181, 186, 193)
-C_ACCENT = (64, 181, 184)
-C_ACCENT2 = (126, 182, 255)
-C_BAR_BG = (46, 51, 64)
-C_WIN = (87, 242, 135)
-C_GOLD = (255, 193, 7)
-C_GOLD_TEXT = (26, 26, 0)
-C_BADGE_NEXT = (37, 42, 58)
-C_NEXT_TEXT = (126, 182, 255)
-C_NEXT_BORDER = (58, 85, 128)
-C_ARROW = (92, 96, 112)
-
-STAR = "\u2605"
-ARROW_RIGHT = "\u2192"
-ARROW_UP = "\u2191"
-MIDDLE_DOT = "\u00b7"
+# Battlevive palette
+C_BG = "#04101c"
+C_PANEL = "#2b171d"
+C_PANEL_EDGE = "#602938"
+C_CRIMSON = "#dd2254"
+C_BLUE = "#237ee7"
+C_TEXT = "#f7e9ec"
+C_MUTED = "#e8b0bf"
+C_BAR_BG = "#172638"
+C_GREEN = "#3ce68b"
+C_RED = "#ff5470"
 
 
 def _load_fonts() -> dict[str, ImageFont.FreeTypeFont]:
+    """Load bundled fonts, raising immediately when an asset is unavailable."""
     return {
-        "username": ImageFont.truetype(FONT_BOLD, 15),
-        "badge": ImageFont.truetype(FONT_BOLD, 11),
-        "meta": ImageFont.truetype(FONT_REGULAR, 10),
-        "stats": ImageFont.truetype(FONT_REGULAR, 12),
-        "stats_b": ImageFont.truetype(FONT_BOLD, 12),
-        "arrow": ImageFont.truetype(FONT_REGULAR, 13),
+        "name": ImageFont.truetype(FONT_BOLD, 24),
+        "rank": ImageFont.truetype(FONT_BOLD, 14),
+        "label": ImageFont.truetype(FONT_REGULAR, 12),
+        "mmr": ImageFont.truetype(FONT_REGULAR, 13),
+        "stat": ImageFont.truetype(FONT_BOLD, 20),
     }
 
 
-def _circle_crop(
-    img: Image.Image,
-    size: int,
-    border_color: tuple[int, int, int],
-    border_w: int,
-) -> Image.Image:
-    total = size + border_w * 2
+def _text_width(font: ImageFont.FreeTypeFont, text: str) -> int:
+    bounds = font.getbbox(text)
+    return bounds[2] - bounds[0]
+
+
+def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
+    if _text_width(font, text) <= max_width:
+        return text
+
+    ellipsis = "..."
+    available = max_width - _text_width(font, ellipsis)
+    if available <= 0:
+        return ellipsis
+
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if _text_width(font, text[:middle]) <= available:
+            low = middle
+        else:
+            high = middle - 1
+    return text[:low] + ellipsis
+
+
+def _circle_crop(img: Image.Image) -> Image.Image:
+    total = AVATAR_SIZE + 10
     result = Image.new("RGBA", (total, total), (0, 0, 0, 0))
-    ImageDraw.Draw(result).ellipse([0, 0, total - 1, total - 1], fill=border_color)
+    fitted = ImageOps.fit(
+        img.convert("RGBA"),
+        (AVATAR_SIZE, AVATAR_SIZE),
+        method=Image.Resampling.LANCZOS,
+    )
+    mask = Image.new("L", (AVATAR_SIZE, AVATAR_SIZE), 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, AVATAR_SIZE - 1, AVATAR_SIZE - 1), fill=255)
+    fitted.putalpha(mask)
+    result.alpha_composite(fitted, (5, 5))
 
-    avatar = img.convert("RGBA").resize((size, size), Image.LANCZOS)
-    mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).ellipse([0, 0, size - 1, size - 1], fill=255)
-    avatar.putalpha(mask)
-
-    result.paste(avatar, (border_w, border_w), avatar)
+    # Draw the border last so the avatar cannot obscure it.
+    result_draw = ImageDraw.Draw(result)
+    result_draw.ellipse(
+        (0, 0, total - 1, total - 1),
+        outline=C_CRIMSON,
+        width=4,
+    )
     return result
 
 
-def _gradient_bar(
-    width: int,
-    height: int,
-    c1: tuple[int, int, int],
-    c2: tuple[int, int, int],
-) -> Image.Image:
-    row = Image.new("RGB", (width, 1))
-    px = row.load()
-    for x in range(width):
-        t = x / max(width - 1, 1)
-        px[x, 0] = tuple(int(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))
-    return row.resize((width, height), Image.NEAREST)
+def _rank_icon(rank: str, size: int) -> Image.Image | None:
+    style = RANK_STYLES.get(rank)
+    if style is None:
+        return None
+
+    with Image.open(Path(RANK_ICON_DIR) / style[0]) as source:
+        icon = source.convert("RGBA")
+        icon.thumbnail((size, size), Image.Resampling.LANCZOS)
+    return icon
 
 
-def _text_w(font: ImageFont.FreeTypeFont, text: str) -> int:
-    bb = font.getbbox(text)
-    return bb[2] - bb[0]
-
-
-def _draw_badge(
+def _draw_rank(
+    card: Image.Image,
     draw: ImageDraw.ImageDraw,
+    fonts: dict[str, ImageFont.FreeTypeFont],
     x: int,
     y: int,
-    text: str,
-    font: ImageFont.FreeTypeFont,
-    fill: tuple[int, int, int],
-    text_color: tuple[int, int, int],
-    outline: tuple[int, int, int] | None = None,
-    pad_x: int = 9,
-    pad_y: int = 3,
+    rank: str,
 ) -> int:
-    bb = font.getbbox(text)
-    tw = bb[2] - bb[0]
-    th = bb[3] - bb[1]
-    bw = tw + pad_x * 2
-    bh = th + pad_y * 2
-    draw.rounded_rectangle(
-        [x, y, x + bw, y + bh],
-        radius=bh // 2,
-        fill=fill,
-        outline=outline,
-        width=1 if outline else 0,
-    )
-    draw.text((x + pad_x - bb[0], y + pad_y - bb[1]), text, font=font, fill=text_color)
-    return bw
+    icon = _rank_icon(rank, 32)
+    if icon is not None:
+        card.alpha_composite(icon, (x, y + (32 - icon.height) // 2))
+        x += icon.width + 7
+
+    color = RANK_STYLES.get(rank, ("", C_TEXT))[1]
+    draw.text((x, y + 8), rank, font=fonts["rank"], fill=color)
+    return x + _text_width(fonts["rank"], rank)
+
+
+def _gradient_bar(width: int, height: int) -> Image.Image:
+    gradient = Image.new("RGB", (max(width, 1), height))
+    pixels = gradient.load()
+    start = (221, 34, 84)
+    end = (35, 126, 231)
+    for x in range(max(width, 1)):
+        amount = x / max(width - 1, 1)
+        color = tuple(
+            round(start[channel] + (end[channel] - start[channel]) * amount)
+            for channel in range(3)
+        )
+        for y in range(height):
+            pixels[x, y] = color
+    return gradient
 
 
 def build_card(
@@ -139,99 +168,120 @@ def build_card(
     losses: int,
 ) -> bytes:
     fonts = _load_fonts()
-    total = wins + losses
-    win_rate = round(wins / total * 100) if total > 0 else 0
-    mmr_pct = mmr_current / mmr_required
+    total_games = wins + losses
+    win_rate = round(wins / total_games * 100) if total_games > 0 else 0
+    raw_progress = mmr_current / mmr_required if mmr_required > 0 else 0.0
+    progress = min(1.0, max(0.0, raw_progress))
+    is_max_rank = rank_current == "BATTLEVIVE" and rank_next == rank_current
 
-    card = Image.new("RGBA", (CARD_W, CARD_H), (0, 0, 0, 0))
+    card = Image.new("RGBA", (CARD_W, CARD_H), C_BG)
     draw = ImageDraw.Draw(card)
     draw.rounded_rectangle(
-        [0, 0, CARD_W - 1, CARD_H - 1],
+        (0, 0, CARD_W - 1, CARD_H - 1),
         radius=CORNER_R,
         fill=C_BG,
-        outline=C_BORDER,
-        width=1,
+        outline=C_PANEL_EDGE,
+        width=2,
     )
+    avatar_image = _circle_crop(avatar)
+    card.alpha_composite(avatar_image, (22, 30))
 
-    pfp = _circle_crop(avatar, PFP_SIZE, C_ACCENT, PFP_BORDER)
-    pfp_y = (CARD_H - pfp.height) // 2
-    card.paste(pfp, (PAD, pfp_y), pfp)
-
-    cx = CONTENT_X
-    cy = PAD
-    bar_w = CARD_W - cx - PAD
-
-    draw.text((cx, cy), display_name, font=fonts["username"], fill=C_TEXT)
-    cy += fonts["username"].getbbox(display_name)[3] + 8
-
-    x_cur = cx
-    x_cur += _draw_badge(
-        draw,
-        x_cur,
-        cy,
-        f"{STAR} {rank_current}",
-        fonts["badge"],
-        fill=C_GOLD,
-        text_color=C_GOLD_TEXT,
-    ) + 6
-    draw.text((x_cur, cy + 3), ARROW_RIGHT, font=fonts["arrow"], fill=C_ARROW)
-    x_cur += _text_w(fonts["arrow"], ARROW_RIGHT) + 6
-    _draw_badge(
-        draw,
-        x_cur,
-        cy,
-        rank_next,
-        fonts["badge"],
-        fill=C_BADGE_NEXT,
-        text_color=C_NEXT_TEXT,
-        outline=C_NEXT_BORDER,
-    )
-    cy += fonts["badge"].getbbox("A")[3] + 6 + 9
-
-    mmr_left = f"{mmr_current:,} MMR"
-    mmr_mid = f"{round(mmr_pct * 100)}%"
-    mmr_right = f"{mmr_required:,} MMR"
-    draw.text((cx, cy), mmr_left, font=fonts["meta"], fill=C_MUTED)
+    name = _ellipsize(display_name, fonts["name"], 315)
+    draw.text((CONTENT_X, 15), name, font=fonts["name"], fill=C_TEXT)
+    current_width = _text_width(fonts["rank"], rank_current)
+    current_color = RANK_STYLES.get(rank_current, ("", C_TEXT))[1]
     draw.text(
-        (cx + bar_w // 2 - _text_w(fonts["meta"], mmr_mid) // 2, cy),
-        mmr_mid,
-        font=fonts["meta"],
-        fill=C_ACCENT,
+        (CONTENT_RIGHT - current_width, 22),
+        rank_current,
+        font=fonts["rank"],
+        fill=current_color,
     )
+
+    progression_y = 48
+    next_x = _draw_rank(card, draw, fonts, CONTENT_X, progression_y, rank_current)
+    if is_max_rank:
+        max_text = "MAX RANK"
+        draw.text(
+            (CONTENT_RIGHT - _text_width(fonts["rank"], max_text), progression_y + 8),
+            max_text,
+            font=fonts["rank"],
+            fill=C_CRIMSON,
+        )
+    else:
+        draw.text((next_x + 12, progression_y + 7), "→", font=fonts["rank"], fill=C_MUTED)
+        _draw_rank(card, draw, fonts, next_x + 40, progression_y, rank_next)
+
+    mmr_y = 91
+    draw.text((CONTENT_X, mmr_y), "CURRENT MMR", font=fonts["label"], fill=C_MUTED)
+    required_label = "MAXIMUM" if is_max_rank else "NEXT RANK"
     draw.text(
-        (cx + bar_w - _text_w(fonts["meta"], mmr_right), cy),
-        mmr_right,
-        font=fonts["meta"],
+        (CONTENT_RIGHT - _text_width(fonts["label"], required_label), mmr_y),
+        required_label,
+        font=fonts["label"],
         fill=C_MUTED,
     )
-    cy += 13
+    current_mmr = f"{mmr_current:,} MMR"
+    required_mmr = "MAX RANK" if is_max_rank else f"{mmr_required:,} MMR"
+    draw.text((CONTENT_X, 106), current_mmr, font=fonts["mmr"], fill=C_TEXT)
+    draw.text(
+        (CONTENT_RIGHT - _text_width(fonts["mmr"], required_mmr), 106),
+        required_mmr,
+        font=fonts["mmr"],
+        fill=C_TEXT,
+    )
 
+    bar_y = 128
+    bar_width = CONTENT_RIGHT - CONTENT_X
     draw.rounded_rectangle(
-        [cx, cy, cx + bar_w, cy + BAR_H],
+        (CONTENT_X, bar_y, CONTENT_RIGHT, bar_y + BAR_H),
         radius=BAR_H // 2,
         fill=C_BAR_BG,
+        outline=C_PANEL_EDGE,
     )
-    fill_w = max(1, int(bar_w * mmr_pct))
-    grad = _gradient_bar(fill_w, BAR_H, C_ACCENT, C_ACCENT2)
-    fill_mask = Image.new("L", (fill_w, BAR_H), 0)
-    ImageDraw.Draw(fill_mask).rounded_rectangle(
-        [0, 0, fill_w + BAR_H, BAR_H - 1],
-        radius=BAR_H // 2,
-        fill=255,
-    )
-    card.paste(grad, (cx, cy), fill_mask)
-    cy += BAR_H + 9
+    fill_width = round(bar_width * progress)
+    if fill_width > 0:
+        gradient = _gradient_bar(fill_width, BAR_H)
+        mask = Image.new("L", (fill_width, BAR_H), 0)
+        ImageDraw.Draw(mask).rounded_rectangle(
+            (0, 0, fill_width - 1, BAR_H - 1),
+            radius=BAR_H // 2,
+            fill=255,
+        )
+        card.paste(gradient, (CONTENT_X, bar_y), mask)
 
-    win_rate_text = f"{ARROW_UP} {win_rate}% WR"
-    win_loss_text = f"W {wins} {MIDDLE_DOT} L {losses}"
-    draw.text((cx, cy), win_rate_text, font=fonts["stats_b"], fill=C_WIN)
-    draw.text(
-        (cx + _text_w(fonts["stats_b"], win_rate_text) + 14, cy),
-        win_loss_text,
-        font=fonts["stats"],
-        fill=C_SECONDARY,
+    stats_top = 151
+    stats_bottom = 204
+    section_width = (CONTENT_RIGHT - CONTENT_X) // 3
+    draw.rounded_rectangle(
+        (CONTENT_X, stats_top, CONTENT_RIGHT, stats_bottom),
+        radius=7,
+        fill=C_PANEL,
+        outline=C_PANEL_EDGE,
     )
+    for index in (1, 2):
+        x = CONTENT_X + section_width * index
+        draw.line((x, stats_top + 8, x, stats_bottom - 8), fill=C_PANEL_EDGE, width=1)
 
-    out = BytesIO()
-    card.convert("RGB").save(out, format="PNG")
-    return out.getvalue()
+    stats = (
+        ("WINS", f"{wins:,}", C_GREEN),
+        ("LOSSES", f"{losses:,}", C_RED),
+        ("WIN RATE", f"{win_rate}%", C_TEXT),
+    )
+    for index, (label, value, color) in enumerate(stats):
+        center = CONTENT_X + section_width * index + section_width // 2
+        draw.text(
+            (center - _text_width(fonts["label"], label) // 2, stats_top + 6),
+            label,
+            font=fonts["label"],
+            fill=C_MUTED,
+        )
+        draw.text(
+            (center - _text_width(fonts["stat"], value) // 2, stats_top + 23),
+            value,
+            font=fonts["stat"],
+            fill=color,
+        )
+
+    output = BytesIO()
+    card.convert("RGB").save(output, format="PNG")
+    return output.getvalue()
