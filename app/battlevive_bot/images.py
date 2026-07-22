@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
+from typing import Sequence
 
 from PIL import Image
 from PIL import ImageDraw
@@ -15,6 +18,7 @@ from .settings import ASSETS_DIR
 FONT_BOLD = str(ASSETS_DIR / "fonts" / "LiberationMono-Bold.ttf")
 FONT_REGULAR = str(ASSETS_DIR / "fonts" / "LiberationMono-Regular.ttf")
 RANK_ICON_DIR = ASSETS_DIR / "images" / "Battlevive Rank Icons"
+LEADERBOARD_LOGO = ASSETS_DIR / "images" / "Battlerite_Bot_Logo.png"
 
 RANK_STYLES: dict[str, tuple[str, str]] = {
     "Bronze": ("Bronze.png", "#C87E45"),
@@ -29,6 +33,8 @@ RANK_STYLES: dict[str, tuple[str, str]] = {
 # Card dimensions
 CARD_W = 640
 CARD_H = 220
+LEADERBOARD_ENTRY_H = 124
+LEADERBOARD_HEADER_H = 184
 CORNER_R = 12
 PAD = 16
 AVATAR_SIZE = 126
@@ -48,6 +54,7 @@ C_MUTED = "#e8b0bf"
 C_BAR_BG = "#172638"
 C_GREEN = "#3ce68b"
 C_RED = "#ff5470"
+C_SEASON = "#55d9ff"
 
 
 def _load_fonts() -> dict[str, ImageFont.FreeTypeFont]:
@@ -58,12 +65,41 @@ def _load_fonts() -> dict[str, ImageFont.FreeTypeFont]:
         "label": ImageFont.truetype(FONT_REGULAR, 12),
         "mmr": ImageFont.truetype(FONT_REGULAR, 13),
         "stat": ImageFont.truetype(FONT_BOLD, 20),
+        "leaderboard_title": ImageFont.truetype(FONT_BOLD, 38),
+        "leaderboard_season_label": ImageFont.truetype(FONT_BOLD, 11),
+        "leaderboard_season": ImageFont.truetype(FONT_BOLD, 21),
+        "leaderboard_place": ImageFont.truetype(FONT_BOLD, 28),
+        "leaderboard_username": ImageFont.truetype(FONT_BOLD, 22),
+        "leaderboard_label": ImageFont.truetype(FONT_REGULAR, 10),
+        "leaderboard_value": ImageFont.truetype(FONT_BOLD, 17),
     }
+
+
+@dataclass(frozen=True, slots=True)
+class LeaderboardEntry:
+    """The display-only values needed to render one leaderboard entry."""
+
+    place: int
+    username: str
+    rank: str
+    mmr: int
+    wins: int
+    losses: int
+    win_rate: float
 
 
 def _text_width(font: ImageFont.FreeTypeFont, text: str) -> int:
     bounds = font.getbbox(text)
     return bounds[2] - bounds[0]
+
+
+def _fit_font(text: str, max_width: int, size: int) -> ImageFont.FreeTypeFont:
+    """Choose the largest bundled bold font size that fits a narrow stat cell."""
+    for candidate_size in range(size, 9, -1):
+        font = ImageFont.truetype(FONT_BOLD, candidate_size)
+        if _text_width(font, text) <= max_width:
+            return font
+    return ImageFont.truetype(FONT_BOLD, 9)
 
 
 def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
@@ -151,6 +187,143 @@ def _gradient_bar(width: int, height: int) -> Image.Image:
         for y in range(height):
             pixels[x, y] = color
     return gradient
+
+
+def _logo_thumbnail(max_size: tuple[int, int]) -> Image.Image:
+    """Load the bundled logo and resize it without flattening transparency."""
+    with Image.open(LEADERBOARD_LOGO) as source:
+        logo = source.convert("RGBA")
+    logo.thumbnail(max_size, Image.Resampling.LANCZOS)
+    return logo
+
+
+def _png_bytes(image: Image.Image) -> bytes:
+    output = BytesIO()
+    image.convert("RGB").save(output, format="PNG")
+    return output.getvalue()
+
+
+def build_leaderboard_header(current_season: str) -> bytes:
+    """Render the reusable leaderboard header for the supplied season label."""
+    fonts = _load_fonts()
+    header = Image.new("RGBA", (CARD_W, LEADERBOARD_HEADER_H), C_BG)
+    draw = ImageDraw.Draw(header)
+    draw.rounded_rectangle(
+        (0, 0, CARD_W - 1, LEADERBOARD_HEADER_H - 1),
+        radius=CORNER_R,
+        fill=C_BG,
+        outline=C_PANEL_EDGE,
+        width=2,
+    )
+
+    logo = _logo_thumbnail((92, 132))
+    header.alpha_composite(
+        logo,
+        (28, (LEADERBOARD_HEADER_H - logo.height) // 2),
+    )
+
+    title_x = 145
+    draw.text(
+        (title_x, 45),
+        "LEADERBOARD",
+        font=fonts["leaderboard_title"],
+        fill=C_TEXT,
+    )
+    draw.line((title_x, 94, 398, 94), fill=C_CRIMSON, width=3)
+
+    season_x = 430
+    draw.rounded_rectangle(
+        (season_x, 38, CARD_W - 24, 139),
+        radius=8,
+        fill=C_PANEL,
+        outline=C_PANEL_EDGE,
+        width=1,
+    )
+    draw.text(
+        (season_x + 14, 51),
+        "CURRENT SEASON",
+        font=fonts["leaderboard_season_label"],
+        fill=C_MUTED,
+    )
+    season = _ellipsize(str(current_season), fonts["leaderboard_season"], 164)
+    draw.text(
+        (season_x + 14, 76),
+        season,
+        font=fonts["leaderboard_season"],
+        fill=C_SEASON,
+    )
+    return _png_bytes(header)
+
+
+def build_leaderboard_entry(entry: LeaderboardEntry) -> bytes:
+    """Render one independent, Discord-ready leaderboard entry image."""
+    fonts = _load_fonts()
+    card = Image.new("RGBA", (CARD_W, LEADERBOARD_ENTRY_H), C_BG)
+    draw = ImageDraw.Draw(card)
+    draw.rounded_rectangle(
+        (0, 0, CARD_W - 1, LEADERBOARD_ENTRY_H - 1),
+        radius=CORNER_R,
+        fill=C_BG,
+        outline=C_PANEL_EDGE,
+        width=2,
+    )
+
+    place = f"{entry.place}."
+    draw.text((20, 43), place, font=fonts["leaderboard_place"], fill=C_MUTED)
+    draw.line((72, 20, 72, LEADERBOARD_ENTRY_H - 20), fill=C_PANEL_EDGE, width=1)
+
+    icon = _rank_icon(entry.rank, 42)
+    rank_x = 88
+    if icon is not None:
+        card.alpha_composite(icon, (rank_x, 17 + (42 - icon.height) // 2))
+        rank_x += icon.width + 8
+    rank_color = RANK_STYLES.get(entry.rank, ("", C_TEXT))[1]
+    draw.text((rank_x, 22), entry.rank, font=fonts["rank"], fill=rank_color)
+
+    username = _ellipsize(entry.username, fonts["leaderboard_username"], 255)
+    draw.text((88, 55), username, font=fonts["leaderboard_username"], fill=C_TEXT)
+
+    stats_left = 360
+    stats = (
+        ("MMR", f"{entry.mmr:,}", C_TEXT),
+        ("WINS", f"{entry.wins:,}", C_GREEN),
+        ("LOSSES", f"{entry.losses:,}", C_RED),
+        ("WIN RATE", f"{entry.win_rate:g}%", C_TEXT),
+    )
+    stat_width = (CARD_W - stats_left - PAD) // len(stats)
+    for index, (label, value, color) in enumerate(stats):
+        center = stats_left + stat_width * index + stat_width // 2
+        label_font = fonts["leaderboard_label"]
+        value_font = _fit_font(value, stat_width - 4, 17)
+        draw.text(
+            (center - _text_width(label_font, label) // 2, 34),
+            label,
+            font=label_font,
+            fill=C_MUTED,
+        )
+        draw.text(
+            (center - _text_width(value_font, value) // 2, 57),
+            value,
+            font=value_font,
+            fill=color,
+        )
+    return _png_bytes(card)
+
+
+async def build_leaderboard_images(
+    entries: Sequence[LeaderboardEntry], current_season: str
+) -> list[bytes]:
+    """Render entries concurrently while preserving their input order.
+
+    The season is accepted here for the eventual integration layer; each returned
+    item is intentionally an entry image, while the header is rendered separately.
+    """
+    del current_season
+    return list(
+        await asyncio.gather(
+            *(asyncio.to_thread(build_leaderboard_entry, entry) for entry in entries)
+        )
+    )
 
 
 def build_card(

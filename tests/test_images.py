@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from io import BytesIO
 from pathlib import Path
 
@@ -13,6 +14,8 @@ from battlevive_bot.images import _rank_icon
 from battlevive_bot.images import _text_width
 from battlevive_bot.images import CARD_H
 from battlevive_bot.images import CARD_W
+from battlevive_bot.images import LEADERBOARD_ENTRY_H
+from battlevive_bot.images import LEADERBOARD_HEADER_H
 from battlevive_bot.images import C_CRIMSON
 from battlevive_bot.images import C_PANEL_EDGE
 from battlevive_bot.images import FONT_BOLD
@@ -20,6 +23,10 @@ from battlevive_bot.images import FONT_REGULAR
 from battlevive_bot.images import RANK_ICON_DIR
 from battlevive_bot.images import RANK_STYLES
 from battlevive_bot.images import build_card
+from battlevive_bot.images import build_leaderboard_entry
+from battlevive_bot.images import build_leaderboard_header
+from battlevive_bot.images import build_leaderboard_images
+from battlevive_bot.images import LeaderboardEntry
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -175,3 +182,80 @@ def test_no_legacy_font_assets_or_references_remain() -> None:
 
     assert not list((ROOT_DIR / "app/assets/fonts").glob("*Deja" + "Vu*"))
     assert references == []
+
+
+def make_leaderboard_entry(**overrides: object) -> LeaderboardEntry:
+    values: dict[str, object] = {
+        "place": 1,
+        "username": "PlayerOne",
+        "rank": "Silver",
+        "mmr": 1500,
+        "wins": 12,
+        "losses": 8,
+        "win_rate": 60.0,
+    }
+    values.update(overrides)
+    return LeaderboardEntry(**values)  # type: ignore[arg-type]
+
+
+def assert_valid_leaderboard_png(png: bytes, size: tuple[int, int]) -> None:
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+    with Image.open(BytesIO(png)) as image:
+        assert image.format == "PNG"
+        assert image.size == size
+        assert image.mode == "RGB"
+
+
+def test_leaderboard_header_is_separate_and_uses_supplied_season() -> None:
+    header = build_leaderboard_header("Spring 2026")
+    assert_valid_leaderboard_png(header, (CARD_W, LEADERBOARD_HEADER_H))
+    assert LEADERBOARD_HEADER_H > LEADERBOARD_ENTRY_H
+
+    with Image.open(BytesIO(header)) as image:
+        # The title and season block occupy separate, independently colored areas.
+        season_color = ImageColor.getrgb("#55d9ff")
+        assert any(
+            color == season_color
+            for _, color in image.crop((444, 70, 616, 115)).getcolors(100_000)
+        )
+        assert image.getpixel((200, 94)) == ImageColor.getrgb(C_CRIMSON)
+
+
+def test_leaderboard_entry_handles_long_values_and_zero_matches() -> None:
+    png = build_leaderboard_entry(
+        make_leaderboard_entry(
+            username="A very long username that must be clipped to fit the card",
+            rank="BATTLEVIVE",
+            mmr=12_345_678,
+            wins=0,
+            losses=0,
+            win_rate=0,
+        )
+    )
+    assert_valid_leaderboard_png(png, (CARD_W, LEADERBOARD_ENTRY_H))
+
+
+@pytest.mark.parametrize("rank", EXPECTED_RANK_STYLES)
+def test_leaderboard_entry_supports_every_rank(rank: str) -> None:
+    assert_valid_leaderboard_png(
+        build_leaderboard_entry(make_leaderboard_entry(rank=rank)),
+        (CARD_W, LEADERBOARD_ENTRY_H),
+    )
+
+
+def test_leaderboard_batch_is_concurrent_and_preserves_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    entries = [
+        make_leaderboard_entry(place=index, username=f"user-{index}")
+        for index in range(4)
+    ]
+    started: list[str] = []
+
+    def fake_renderer(entry: LeaderboardEntry) -> bytes:
+        started.append(entry.username)
+        return entry.username.encode()
+
+    monkeypatch.setattr("battlevive_bot.images.build_leaderboard_entry", fake_renderer)
+    result = asyncio.run(build_leaderboard_images(entries, "Season 1"))
+
+    assert result == [b"user-0", b"user-1", b"user-2", b"user-3"]
+    assert sorted(started) == ["user-0", "user-1", "user-2", "user-3"]
