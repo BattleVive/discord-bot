@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 # pyrefly: ignore [missing-import]
 import asyncpg
@@ -44,7 +45,7 @@ async def get_guild_config(guild_id: int) -> dict[str, int | None] | None:
     pool = get_pool()
     row = await pool.fetchrow(
         """
-        SELECT guild_id, leaderboard_channel_id, updated_by
+        SELECT guild_id, leaderboard_channel_id, leaderboard_limit, updated_by
         FROM guild_config
         WHERE guild_id = $1
         """,
@@ -74,8 +75,172 @@ async def upsert_guild_config(
     )
 
 
+async def set_leaderboard_limit(
+    guild_id: int,
+    leaderboard_limit: int | None,
+    updated_by: int,
+) -> None:
+    if leaderboard_limit is not None and leaderboard_limit <= 0:
+        raise ValueError("leaderboard_limit must be positive or None")
+
+    pool = get_pool()
+    await pool.execute(
+        """
+        INSERT INTO guild_config (guild_id, leaderboard_limit, updated_by)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET leaderboard_limit = EXCLUDED.leaderboard_limit,
+            updated_at = now(),
+            updated_by = EXCLUDED.updated_by
+        """,
+        guild_id,
+        leaderboard_limit,
+        updated_by,
+    )
+
+
 async def reset_guild_config(guild_id: int, updated_by: int) -> None:
-    await upsert_guild_config(guild_id, None, updated_by)
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """
+                INSERT INTO guild_config (
+                    guild_id, leaderboard_channel_id, leaderboard_limit, updated_by
+                )
+                VALUES ($1, NULL, NULL, $2)
+                ON CONFLICT (guild_id) DO UPDATE
+                SET leaderboard_channel_id = NULL,
+                    leaderboard_limit = NULL,
+                    updated_at = now(),
+                    updated_by = EXCLUDED.updated_by
+                """,
+                guild_id,
+                updated_by,
+            )
+            await conn.execute(
+                """
+                UPDATE leaderboard_slots
+                SET channel_id = NULL, message_id = NULL, updated_at = now()
+                WHERE guild_id = $1
+                """,
+                guild_id,
+            )
+
+
+async def get_configured_leaderboards() -> list[dict[str, int | None]]:
+    rows = await get_pool().fetch(
+        """
+        SELECT guild_id, leaderboard_channel_id, leaderboard_limit, updated_by
+        FROM guild_config
+        WHERE leaderboard_channel_id IS NOT NULL
+        ORDER BY guild_id
+        """
+    )
+    return [dict(row) for row in rows]
+
+
+async def get_current_leaderboard_ratings() -> tuple[tuple[int, int] | None, list[dict[str, Any]]]:
+    """Return the most recently updated season, ordered only by descending MMR."""
+    pool = get_pool()
+    season = await pool.fetchrow(
+        """
+        SELECT season_year, season_number
+        FROM season_ratings
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """
+    )
+    if season is None:
+        return None, []
+
+    rows = await pool.fetch(
+        """
+        SELECT
+            ratings.user_id,
+            ratings.season_year,
+            ratings.season_number,
+            ratings.mmr,
+            ratings.wins,
+            ratings.losses,
+            ratings.matches_played,
+            users.discord_username,
+            users.discord_id
+        FROM season_ratings AS ratings
+        INNER JOIN users ON users.id = ratings.user_id
+        WHERE ratings.season_year = $1 AND ratings.season_number = $2
+        ORDER BY ratings.mmr DESC
+        """,
+        season["season_year"],
+        season["season_number"],
+    )
+    season_key = (season["season_year"], season["season_number"])
+    return season_key, [dict(row) for row in rows]
+
+
+async def get_leaderboard_slots(guild_id: int) -> list[dict[str, Any]]:
+    rows = await get_pool().fetch(
+        """
+        SELECT guild_id, slot, channel_id, message_id, season_year,
+               season_number, user_id, fingerprint, png
+        FROM leaderboard_slots
+        WHERE guild_id = $1
+        ORDER BY slot
+        """,
+        guild_id,
+    )
+    return [dict(row) for row in rows]
+
+
+async def upsert_leaderboard_slot(
+    guild_id: int,
+    slot: int,
+    channel_id: int | None,
+    message_id: int | None,
+    season_year: int | None,
+    season_number: int | None,
+    user_id: uuid.UUID | str | None,
+    fingerprint: str,
+    png: bytes,
+) -> None:
+    if (channel_id is None) != (message_id is None):
+        raise ValueError("channel_id and message_id must both be set or both be None")
+
+    await get_pool().execute(
+        """
+        INSERT INTO leaderboard_slots (
+            guild_id, slot, channel_id, message_id, season_year,
+            season_number, user_id, fingerprint, png
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (guild_id, slot) DO UPDATE
+        SET channel_id = EXCLUDED.channel_id,
+            message_id = EXCLUDED.message_id,
+            season_year = EXCLUDED.season_year,
+            season_number = EXCLUDED.season_number,
+            user_id = EXCLUDED.user_id,
+            fingerprint = EXCLUDED.fingerprint,
+            png = EXCLUDED.png,
+            updated_at = now()
+        """,
+        guild_id,
+        slot,
+        channel_id,
+        message_id,
+        season_year,
+        season_number,
+        uuid.UUID(str(user_id)) if user_id is not None else None,
+        fingerprint,
+        png,
+    )
+
+
+async def delete_leaderboard_slots_from(guild_id: int, first_slot: int) -> None:
+    await get_pool().execute(
+        "DELETE FROM leaderboard_slots WHERE guild_id = $1 AND slot >= $2",
+        guild_id,
+        first_slot,
+    )
 
 
 async def get_users() -> list[User]:
@@ -95,6 +260,28 @@ async def get_users() -> list[User]:
         )
         for row in rows
     ]
+
+
+async def set_user_discord_id(user_id: str | uuid.UUID, discord_id: int) -> bool:
+    """Persist a Discord link unless that account belongs to another user."""
+    linked = await get_pool().fetchval(
+        """
+        UPDATE users
+        SET discord_id = $2
+        WHERE id = $1
+          AND (discord_id IS NULL OR discord_id = $2)
+          AND NOT EXISTS (
+              SELECT 1
+              FROM users AS linked_user
+              WHERE linked_user.discord_id = $2
+                AND linked_user.id <> $1
+          )
+        RETURNING TRUE
+        """,
+        uuid.UUID(str(user_id)),
+        discord_id,
+    )
+    return bool(linked)
 
 
 async def get_lobbies() -> list[Lobby]:

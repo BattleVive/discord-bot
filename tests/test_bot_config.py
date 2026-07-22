@@ -37,7 +37,8 @@ class FakeChannel:
         *,
         view: bool = True,
         send: bool = True,
-        embed: bool = True,
+        attach: bool = True,
+        history: bool = True,
         channel_type: discord.ChannelType = discord.ChannelType.text,
     ) -> None:
         self.id = 456
@@ -46,7 +47,8 @@ class FakeChannel:
         self._permissions = SimpleNamespace(
             view_channel=view,
             send_messages=send,
-            embed_links=embed,
+            attach_files=attach,
+            read_message_history=history,
         )
 
     def permissions_for(self, member: object) -> SimpleNamespace:
@@ -132,7 +134,7 @@ async def test_config_channel_rejects_missing_bot_permissions(
     assert not upsert
     assert interaction.response.messages == [
         {
-            "content": "I need View Channel, Send Messages, and Embed Links "
+            "content": "I need View Channel, Send Messages, Attach Files, and Read Message History "
             "permissions in that channel.",
             "ephemeral": True,
         }
@@ -165,6 +167,7 @@ async def test_config_reset_and_show_are_ephemeral(monkeypatch: pytest.MonkeyPat
         return {
             "guild_id": guild_id,
             "leaderboard_channel_id": 456,
+            "leaderboard_limit": None,
             "updated_by": 123,
         }
 
@@ -181,7 +184,54 @@ async def test_config_reset_and_show_are_ephemeral(monkeypatch: pytest.MonkeyPat
         {"content": "Leaderboard configuration reset.", "ephemeral": True}
     ]
     assert show_interaction.response.messages == [
-        {"content": "Leaderboard channel: <#456>.", "ephemeral": True}
+        {
+            "content": "Leaderboard channel: <#456>.\nLeaderboard limit: all.",
+            "ephemeral": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_config_limit_sets_positive_amount_and_omission_restores_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, int | None, int]] = []
+
+    async def fake_set(guild_id: int, amount: int | None, updated_by: int) -> None:
+        calls.append((guild_id, amount, updated_by))
+
+    async def fake_get(guild_id: int) -> dict[str, int | None]:
+        return {
+            "guild_id": guild_id,
+            "leaderboard_channel_id": None,
+            "leaderboard_limit": None,
+            "updated_by": 123,
+        }
+
+    monkeypatch.setattr(bot_module.db, "set_leaderboard_limit", fake_set)
+    monkeypatch.setattr(bot_module.db, "get_guild_config", fake_get)
+
+    limited = make_interaction()
+    unlimited = make_interaction()
+    await bot_module.config_leaderboard_limit.callback(limited, 25)
+    await bot_module.config_leaderboard_limit.callback(unlimited, None)
+
+    assert calls == [(789, 25, 123), (789, None, 123)]
+    assert limited.response.messages[0]["content"] == "Leaderboard limit set to 25."
+    assert unlimited.response.messages[0]["content"] == "Leaderboard limit set to all."
+
+
+@pytest.mark.asyncio
+async def test_config_limit_rejects_non_positive_amount() -> None:
+    interaction = make_interaction()
+
+    await bot_module.config_leaderboard_limit.callback(interaction, 0)
+
+    assert interaction.response.messages == [
+        {
+            "content": "Leaderboard limit must be a positive number.",
+            "ephemeral": True,
+        }
     ]
 
 

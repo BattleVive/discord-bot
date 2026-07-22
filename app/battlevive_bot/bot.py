@@ -27,6 +27,7 @@ from .db import get_pool
 from .db import init_pool
 from .db import sync_battlevive_data_to_db
 from .images import build_card
+from .leaderboards import LeaderboardService
 from .logs import logger
 from .models import Lobby
 from .models import SeasonRating
@@ -127,7 +128,22 @@ intents.message_content = True
 intents.members = True
 
 # Bot setup
-bot = commands.Bot(command_prefix="!bt", intents=intents, strip_after_prefix=True)
+class BattleviveBot(commands.Bot):
+    leaderboard_service: LeaderboardService | None = None
+
+    async def close(self) -> None:
+        if revalidate_tokens.is_running():
+            revalidate_tokens.cancel()
+        if refresh_loop.is_running():
+            refresh_loop.cancel()
+        if self.leaderboard_service is not None:
+            await self.leaderboard_service.stop()
+            self.leaderboard_service = None
+        await close_pool()
+        await super().close()
+
+
+bot = BattleviveBot(command_prefix="!bt", intents=intents, strip_after_prefix=True)
 
 
 # Events
@@ -143,6 +159,8 @@ async def on_message(message: discord.Message) -> None:
 @bot.event
 async def setup_hook() -> None:
     await init_pool(DATABASE_URL)
+    bot.leaderboard_service = LeaderboardService(bot, DATABASE_URL)
+    bot.leaderboard_service.start()
     revalidate_tokens.start()
     refresh_loop.start()
 
@@ -152,8 +170,24 @@ async def setup_hook() -> None:
 
 
 @bot.event
-async def on_close() -> None:
-    await close_pool()
+async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent) -> None:
+    service = bot.leaderboard_service
+    if service is not None:
+        service.request_reconciliation()
+
+
+@bot.event
+async def on_member_join(member: discord.Member) -> None:
+    service = bot.leaderboard_service
+    if service is not None:
+        service.request_reconciliation()
+
+
+@bot.event
+async def on_member_remove(member: discord.Member) -> None:
+    service = bot.leaderboard_service
+    if service is not None:
+        service.request_reconciliation()
 
 
 # Commands
@@ -205,7 +239,8 @@ def _config_channel_permissions(
     return (
         permissions.view_channel
         and permissions.send_messages
-        and permissions.embed_links
+        and permissions.attach_files
+        and permissions.read_message_history
     )
 
 
@@ -244,7 +279,7 @@ async def config_leaderboard_channel(
 
     if not _config_channel_permissions(channel, interaction.guild):
         await interaction.response.send_message(
-            "I need View Channel, Send Messages, and Embed Links "
+            "I need View Channel, Send Messages, Attach Files, and Read Message History "
             "permissions in that channel.",
             ephemeral=True,
         )
@@ -256,12 +291,56 @@ async def config_leaderboard_channel(
             channel.id,
             interaction.user.id,
         )
+        if bot.leaderboard_service is not None:
+            bot.leaderboard_service.request_reconciliation()
         await interaction.response.send_message(
             f"Leaderboard channel set to {channel}.",
             ephemeral=True,
         )
     except Exception:
         await _send_config_failure(interaction, "config leaderboard channel failed")
+
+
+@config_leaderboard_group.command(
+    name="limit",
+    description="Set the number of leaderboard places, or omit it to show all",
+)
+@app_commands.describe(amount="Positive number of places; omit to show all")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def config_leaderboard_limit(
+    interaction: discord.Interaction,
+    amount: int | None = None,
+) -> None:
+    if not await _check_config_access(interaction):
+        return
+    if amount is not None and amount <= 0:
+        await interaction.response.send_message(
+            "Leaderboard limit must be a positive number.",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        await db.set_leaderboard_limit(
+            interaction.guild.id,
+            amount,
+            interaction.user.id,
+        )
+        config = await db.get_guild_config(interaction.guild.id)
+        if (
+            config is not None
+            and config["leaderboard_channel_id"] is not None
+            and bot.leaderboard_service is not None
+        ):
+            bot.leaderboard_service.request_reconciliation()
+        display = str(amount) if amount is not None else "all"
+        await interaction.response.send_message(
+            f"Leaderboard limit set to {display}.",
+            ephemeral=True,
+        )
+    except Exception:
+        await _send_config_failure(interaction, "config leaderboard limit failed")
 
 
 @config_reset_group.command(
@@ -276,6 +355,8 @@ async def config_reset_leaderboard(interaction: discord.Interaction) -> None:
 
     try:
         await db.reset_guild_config(interaction.guild.id, interaction.user.id)
+        if bot.leaderboard_service is not None:
+            bot.leaderboard_service.request_reconciliation()
         await interaction.response.send_message(
             "Leaderboard configuration reset.",
             ephemeral=True,
@@ -294,11 +375,14 @@ async def config_show(interaction: discord.Interaction) -> None:
     try:
         config = await db.get_guild_config(interaction.guild.id)
         channel_id = config["leaderboard_channel_id"] if config else None
-        message = (
+        channel_message = (
             f"Leaderboard channel: <#{channel_id}>."
             if channel_id is not None
             else "Leaderboard channel: not configured."
         )
+        limit = config["leaderboard_limit"] if config else None
+        limit_message = f"Leaderboard limit: {limit if limit is not None else 'all'}."
+        message = f"{channel_message}\n{limit_message}"
         await interaction.response.send_message(message, ephemeral=True)
     except Exception:
         await _send_config_failure(interaction, "config show failed")
