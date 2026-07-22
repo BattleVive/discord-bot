@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-# pyrefly: ignore [missing-import]
 import discord
 
 from . import db

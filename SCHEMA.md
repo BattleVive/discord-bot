@@ -4,6 +4,12 @@ erDiagram
     users ||--o{ lobbies : creates
     users ||--o{ lobby_rosters : plays_in
     lobbies ||--o{ lobby_rosters : has_roster
+    guild_config {
+        BIGINT guild_id PK
+        BIGINT leaderboard_channel_id "nullable"
+        TIMESTAMPTZ updated_at
+        BIGINT updated_by "nullable Discord user ID"
+    }
 
     users {
         UUID id PK
@@ -85,4 +91,6 @@ erDiagram
 - `season_ratings` is a separate upstream endpoint (`/season_ratings`), one row per user per season – `UNIQUE (user_id, season_year, season_number)`.
 - `team_one_roster` / `team_two_roster` from the upstream `Lobby` payload are normalized into `lobby_rosters` rather than kept as array columns.
 - Write order matters: `users` must be synced before `lobbies` and `season_ratings`, since both foreign-key into it.
-- Not yet implemented: guild config table, leaderboard/active-lobbies message-tracking tables. Add when those features are built.
+- `guild_config` stores one row per Discord server. A nullable `leaderboard_channel_id` means the leaderboard destination is unset; the table does not yet track published messages.
+- `updated_by` stores the Discord user ID that last changed the configuration and may be null for older/manual rows.
+- Leaderboard publishing and active-lobbies message-tracking tables are not implemented yet.

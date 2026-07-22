@@ -149,7 +149,7 @@ def test_long_names_are_ellipsized_to_the_available_width() -> None:
 
 
 def test_font_license_and_readme_attribution() -> None:
-    license_path = ROOT_DIR / "app/assets/fonts/LiberationMono-LICENSE.txt"
+    license_path = ROOT_DIR / "app/assets/fonts/LICENSE"
     readme = (ROOT_DIR / "README.md").read_text(encoding="utf-8")
 
     assert license_path.is_file()

@@ -60,6 +60,16 @@ Check logs with `docker compose logs -f bot` / `podman compose logs -f bot`.
 
 See [SCHEMA.md](./SCHEMA.md).
 
+When upgrading an existing PostgreSQL volume, the container's initialization
+scripts are not rerun automatically. Apply the new guild configuration schema
+once as a database administrator:
+
+```
+psql "$DATABASE_URL" -f app/init-db/04_guild_config.sql
+```
+
+Fresh databases receive this table automatically during initialization.
+
 ---
 This project is licensed under the AGPL-3.0 (see LICENSE).
 
@@ -67,7 +77,7 @@ This project is licensed under the AGPL-3.0 (see LICENSE).
 
 - Liberation Mono 2.1.5 is bundled under the SIL Open Font License 1.1. The
   original license and copyright notice are in
-  [`app/assets/fonts/LiberationMono-LICENSE.txt`](./app/assets/fonts/LiberationMono-LICENSE.txt).
+  [`app/assets/fonts/LiberationMono-LICENSE.txt`](./app/assets/fonts/LICENSE).
   Upstream project and official archive:
   [liberationfonts/liberation-fonts](https://github.com/liberationfonts/liberation-fonts),
   [Liberation Fonts 2.1.5 TTF download](https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz).

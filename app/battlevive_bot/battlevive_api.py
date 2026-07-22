@@ -5,7 +5,6 @@ import time
 from typing import Callable
 from typing import TypeVar
 
-# pyrefly: ignore [missing-import]
 import aiohttp
 import requests
 

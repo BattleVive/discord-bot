@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 from io import BytesIO
 import json
+import os
 
 # pyrefly: ignore [missing-import]
 import discord
+# pyrefly: ignore [missing-import]
+from discord import app_commands
 # pyrefly: ignore [missing-import]
 from discord.ext import commands
 # pyrefly: ignore [missing-import]
@@ -51,6 +54,7 @@ lobbies: list[Lobby] = []
 season_ratings: list[SeasonRating] = []
 
 
+# Data refresh and background loops
 async def refresh_all_data() -> tuple[list[User], list[Lobby], list[SeasonRating]]:
     results = await asyncio.gather(
         query_users(battlevive_tokens.JWT_token),
@@ -122,9 +126,11 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
+# Bot setup
 bot = commands.Bot(command_prefix="!bt", intents=intents, strip_after_prefix=True)
 
 
+# Events
 @bot.event
 async def on_message(message: discord.Message) -> None:
     if message.author == bot.user:
@@ -143,6 +149,162 @@ async def setup_hook() -> None:
     guild = discord.Object(id=COMMAND_SYNC_GUILD_ID)
     bot.tree.copy_global_to(guild=guild)
     await bot.tree.sync(guild=guild)
+
+
+@bot.event
+async def on_close() -> None:
+    await close_pool()
+
+
+# Commands
+
+# Discord configuration commands
+config_group = app_commands.Group(
+    name="config",
+    description="Configure Battlevive bot settings for this server",
+)
+config_leaderboard_group = app_commands.Group(
+    name="leaderboard",
+    description="Configure leaderboard settings",
+    parent=config_group,
+)
+config_reset_group = app_commands.Group(
+    name="reset",
+    description="Reset Battlevive bot settings",
+    parent=config_group,
+)
+
+
+async def _check_config_access(interaction: discord.Interaction) -> bool:
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "This command can only be used in a server.",
+            ephemeral=True,
+        )
+        return False
+
+    if not interaction.user.guild_permissions.manage_guild:
+        await interaction.response.send_message(
+            "You need the Manage Server permission to change bot configuration.",
+            ephemeral=True,
+        )
+        return False
+
+    return True
+
+
+def _config_channel_permissions(
+    channel: discord.abc.GuildChannel,
+    guild: discord.Guild,
+) -> bool:
+    bot_member = guild.me
+    if bot_member is None:
+        return False
+
+    permissions = channel.permissions_for(bot_member)
+    return (
+        permissions.view_channel
+        and permissions.send_messages
+        and permissions.embed_links
+    )
+
+
+async def _send_config_failure(
+    interaction: discord.Interaction,
+    message: str,
+) -> None:
+    logger.exception(message)
+    if not interaction.response.is_done():
+        await interaction.response.send_message(
+            "Command failed. Check bot.log.",
+            ephemeral=True,
+        )
+
+
+@config_leaderboard_group.command(
+    name="channel",
+    description="Set the channel for future leaderboard posts",
+)
+@app_commands.describe(channel="Text or news channel for leaderboard posts")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def config_leaderboard_channel(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+) -> None:
+    if not await _check_config_access(interaction):
+        return
+
+    if channel.type not in (discord.ChannelType.text, discord.ChannelType.news):
+        await interaction.response.send_message(
+            "Please choose a text or news channel.",
+            ephemeral=True,
+        )
+        return
+
+    if not _config_channel_permissions(channel, interaction.guild):
+        await interaction.response.send_message(
+            "I need View Channel, Send Messages, and Embed Links "
+            "permissions in that channel.",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        await db.upsert_guild_config(
+            interaction.guild.id,
+            channel.id,
+            interaction.user.id,
+        )
+        await interaction.response.send_message(
+            f"Leaderboard channel set to {channel}.",
+            ephemeral=True,
+        )
+    except Exception:
+        await _send_config_failure(interaction, "config leaderboard channel failed")
+
+
+@config_reset_group.command(
+    name="leaderboard",
+    description="Reset the leaderboard configuration",
+)
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def config_reset_leaderboard(interaction: discord.Interaction) -> None:
+    if not await _check_config_access(interaction):
+        return
+
+    try:
+        await db.reset_guild_config(interaction.guild.id, interaction.user.id)
+        await interaction.response.send_message(
+            "Leaderboard configuration reset.",
+            ephemeral=True,
+        )
+    except Exception:
+        await _send_config_failure(interaction, "config reset leaderboard failed")
+
+
+@config_group.command(name="show", description="Show this server's bot configuration")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def config_show(interaction: discord.Interaction) -> None:
+    if not await _check_config_access(interaction):
+        return
+
+    try:
+        config = await db.get_guild_config(interaction.guild.id)
+        channel_id = config["leaderboard_channel_id"] if config else None
+        message = (
+            f"Leaderboard channel: <#{channel_id}>."
+            if channel_id is not None
+            else "Leaderboard channel: not configured."
+        )
+        await interaction.response.send_message(message, ephemeral=True)
+    except Exception:
+        await _send_config_failure(interaction, "config show failed")
+
+
+bot.tree.add_command(config_group)
 
 
 @bot.tree.command(name="create_roles", description="Create required roles")
@@ -208,6 +370,10 @@ async def debug_get_db_data(interaction: discord.Interaction) -> None:
             ],
             ephemeral=True,
         )
+        os.remove(users_file)
+        os.remove(lobbies_file)
+        os.remove(ratings_file)
+
     except Exception:
         logger.exception("debug_get_battlevive_data failed")
 
@@ -349,16 +515,6 @@ async def rank_command(interaction: discord.Interaction) -> None:
             )
 
 
-@tasks.loop(minutes=1)
-async def remove_old_images() -> None:
-    for file in DATA_DIR.glob("*.json"):
-        file.unlink(missing_ok=True)
-
-
-@bot.event
-async def on_close() -> None:
-    await close_pool()
-
-
+# Runtime
 def run() -> None:
     bot.run(DISCORD_BOT_TOKEN, log_handler=None)

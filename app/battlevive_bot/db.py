@@ -40,6 +40,44 @@ def get_pool() -> asyncpg.Pool:
     return _pool
 
 
+async def get_guild_config(guild_id: int) -> dict[str, int | None] | None:
+    pool = get_pool()
+    row = await pool.fetchrow(
+        """
+        SELECT guild_id, leaderboard_channel_id, updated_by
+        FROM guild_config
+        WHERE guild_id = $1
+        """,
+        guild_id,
+    )
+    return dict(row) if row is not None else None
+
+
+async def upsert_guild_config(
+    guild_id: int,
+    leaderboard_channel_id: int | None,
+    updated_by: int,
+) -> None:
+    pool = get_pool()
+    await pool.execute(
+        """
+        INSERT INTO guild_config (guild_id, leaderboard_channel_id, updated_by)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET leaderboard_channel_id = EXCLUDED.leaderboard_channel_id,
+            updated_at = now(),
+            updated_by = EXCLUDED.updated_by
+        """,
+        guild_id,
+        leaderboard_channel_id,
+        updated_by,
+    )
+
+
+async def reset_guild_config(guild_id: int, updated_by: int) -> None:
+    await upsert_guild_config(guild_id, None, updated_by)
+
+
 async def get_users() -> list[User]:
     pool = get_pool()
     rows = await pool.fetch("SELECT * FROM users")

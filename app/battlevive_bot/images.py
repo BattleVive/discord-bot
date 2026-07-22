@@ -3,13 +3,9 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 
-# pyrefly: ignore [missing-import]
 from PIL import Image
-# pyrefly: ignore [missing-import]
 from PIL import ImageDraw
-# pyrefly: ignore [missing-import]
 from PIL import ImageFont
-# pyrefly: ignore [missing-import]
 from PIL import ImageOps
 
 from .settings import ASSETS_DIR

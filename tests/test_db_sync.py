@@ -23,7 +23,7 @@ from tests.factories import user_payload
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SQL_DIR = ROOT_DIR / "app" / "init-db"
-TABLES = {"users", "season_ratings", "lobbies", "lobby_rosters"}
+TABLES = {"users", "season_ratings", "lobbies", "lobby_rosters", "guild_config"}
 
 
 def get_test_database_url() -> str:
@@ -42,13 +42,17 @@ def get_test_database_url() -> str:
 
 
 async def reset_database(conn: asyncpg.Connection) -> None:
-    await conn.execute("DROP TABLE IF EXISTS lobby_rosters, season_ratings, lobbies, users CASCADE")
+    await conn.execute(
+        "DROP TABLE IF EXISTS guild_config, lobby_rosters, season_ratings, lobbies, users CASCADE"
+    )
     for sql_file in sorted(SQL_DIR.glob("*.sql")):
         await conn.execute(sql_file.read_text(encoding="utf-8"))
 
 
 async def drop_database_tables(conn: asyncpg.Connection) -> None:
-    await conn.execute("DROP TABLE IF EXISTS lobby_rosters, season_ratings, lobbies, users CASCADE")
+    await conn.execute(
+        "DROP TABLE IF EXISTS guild_config, lobby_rosters, season_ratings, lobbies, users CASCADE"
+    )
 
 
 @pytest_asyncio.fixture
@@ -212,3 +216,32 @@ async def test_sync_upserts_in_dependency_order_and_preserves_bot_owned_discord_
     assert await pool.fetchval("SELECT COUNT(*) FROM users") == 2
     assert await pool.fetchval("SELECT COUNT(*) FROM lobbies") == 1
     assert await pool.fetchval("SELECT COUNT(*) FROM season_ratings") == 1
+
+
+@pytest.mark.asyncio
+async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
+    postgres_db: None,
+) -> None:
+    await db.upsert_guild_config(1001, 2001, 3001)
+    await db.upsert_guild_config(1002, 2002, 3002)
+
+    await db.upsert_guild_config(1001, 2011, 3011)
+
+    assert await db.get_guild_config(1001) == {
+        "guild_id": 1001,
+        "leaderboard_channel_id": 2011,
+        "updated_by": 3011,
+    }
+    assert await db.get_guild_config(1002) == {
+        "guild_id": 1002,
+        "leaderboard_channel_id": 2002,
+        "updated_by": 3002,
+    }
+
+    await db.reset_guild_config(1001, 3021)
+
+    assert await db.get_guild_config(1001) == {
+        "guild_id": 1001,
+        "leaderboard_channel_id": None,
+        "updated_by": 3021,
+    }

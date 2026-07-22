@@ -6,7 +6,7 @@ import sys
 from .settings import LOG_DIR
 
 
-LOG_DIR.mkdir(exist_ok=True) 
+LOG_DIR.mkdir(exist_ok=True)
 
 formatter = logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
 
