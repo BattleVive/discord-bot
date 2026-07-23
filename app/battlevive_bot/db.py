@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
-# pyrefly: ignore [missing-import]
 import asyncpg
 
 from .logs import logger
@@ -13,6 +13,10 @@ from .models import User
 
 
 _pool: asyncpg.Pool | None = None
+
+
+class MissingUsersError(RuntimeError):
+    """Raised when refreshed data references users not yet synced locally."""
 
 
 async def init_pool(dsn: str | None) -> asyncpg.Pool:
@@ -357,19 +361,42 @@ async def get_season_ratings() -> list[SeasonRating]:
 
 
 async def sync_battlevive_data_to_db(
-    users: list[User],
-    lobbies: list[Lobby],
-    season_ratings: list[SeasonRating],
+    users: list[User] | None = None,
+    lobbies: list[Lobby] | None = None,
+    season_ratings: list[SeasonRating] | None = None,
 ) -> None:
     """
-    Writes fetched data to Postgres in dependency order: users first, since
-    lobbies.creator_id, lobby_rosters.user_id, and season_ratings.user_id all
-    foreign-key into users.
+    Writes fetched data to Postgres. All arguments are optional; only
+    datasets that are provided get synced.
+
+    users is awaited first, since lobbies.creator_id, lobby_rosters.user_id,
+    and season_ratings.user_id all foreign-key into users. lobbies and
+    season_ratings don't depend on each other, so once users is done they
+    run concurrently.
     """
     logger.info("Syncing local db with upstream")
-    await sync_users_to_db(users)
-    await sync_lobbies_to_db(lobbies)
-    await sync_season_ratings_to_db(season_ratings)
+
+    if users is not None:
+        await sync_users_to_db(users)
+
+    tasks = []
+    if lobbies is not None:
+        tasks.append(sync_lobbies_to_db(lobbies))
+    if season_ratings is not None:
+        tasks.append(sync_season_ratings_to_db(season_ratings))
+
+    if not tasks:
+        return
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for result in results:
+        if isinstance(result, asyncpg.ForeignKeyViolationError):
+            raise MissingUsersError(
+                "Fetched data references users that are missing locally"
+            ) from result
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
 
 
 async def sync_users_to_db(users: list[User]) -> None:

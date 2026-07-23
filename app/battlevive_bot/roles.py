@@ -3,15 +3,9 @@ from __future__ import annotations
 import discord
 
 from . import db
-from .battlevive_api import BattleviveTokenManager
-from .battlevive_api import query_season_ratings
-from .battlevive_api import query_users
 from .db import get_pool
-from .db import sync_season_ratings_to_db
-from .db import sync_users_to_db
 from .logs import logger
 from .models import SeasonRating
-from .models import User
 
 
 def _normalized_username(value: str | None) -> str:
@@ -195,11 +189,7 @@ async def create_roles(guild: discord.Guild) -> None:
 
 async def give_battlevive_role(
     bot: discord.Client,
-    token_manager: BattleviveTokenManager,
-) -> list[User]:
-    battlevive_users = await query_users(token_manager.JWT_token)
-    await sync_users_to_db(users=battlevive_users)
-
+) -> None:
     role_name = "Battlevive Player"
     users = await db.get_users()
 
@@ -243,18 +233,11 @@ async def give_battlevive_role(
                         guild.id,
                     )
 
-    return battlevive_users
 
 
 async def give_rank_roles(
     bot: discord.Client,
-    token_manager: BattleviveTokenManager,
-) -> tuple[list[User], list[SeasonRating]]:
-    battlevive_users = await query_users(token_manager.JWT_token)
-    season_ratings = await query_season_ratings(token_manager.JWT_token)
-    await sync_users_to_db(users=battlevive_users)
-    await sync_season_ratings_to_db(ratings=season_ratings)
-
+) -> None:
     pool = get_pool()
     users = await pool.fetch(
         """
@@ -335,5 +318,3 @@ async def give_rank_roles(
                     guild.id,
                 )
                 continue
-
-    return battlevive_users, season_ratings

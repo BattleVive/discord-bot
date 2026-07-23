@@ -4,7 +4,7 @@
 #secrets 
 .env
 utils/playwright/.auth/*
-#logs catche and runtime data
+#logs cache and runtime data
 *.log
 app/data/*.json
 __pycache__
@@ -13,6 +13,8 @@ app/data/*.png
 #clankers  
 AGENTS.md
 .claude
+.agents
+.codex
 #keep
 !utils/playwright/.auth/.gitkeep
 !data/.gitkeep

@@ -70,12 +70,6 @@ async def test_rank_sync_links_case_insensitive_member_and_assigns_rank(
     guild = FakeGuild(member, [silver])
     links: list[tuple[str, int]] = []
 
-    async def empty_query(token: str) -> list[object]:
-        return []
-
-    async def no_sync(*args: object, **kwargs: object) -> None:
-        return None
-
     async def link(user_id: str, discord_id: int) -> bool:
         links.append((str(user_id), discord_id))
         return True
@@ -92,16 +86,11 @@ async def test_rank_sync_links_case_insensitive_member_and_assigns_rank(
                 }
             ]
 
-    monkeypatch.setattr(roles, "query_users", empty_query)
-    monkeypatch.setattr(roles, "query_season_ratings", empty_query)
-    monkeypatch.setattr(roles, "sync_users_to_db", no_sync)
-    monkeypatch.setattr(roles, "sync_season_ratings_to_db", no_sync)
     monkeypatch.setattr(roles.db, "set_user_discord_id", link)
     monkeypatch.setattr(roles, "get_pool", lambda: FakePool())
 
     bot = SimpleNamespace(guilds=[guild])
-    token_manager = SimpleNamespace(JWT_token="token")
-    await roles.give_rank_roles(bot, token_manager)
+    await roles.give_rank_roles(bot)
 
     assert links == [("aa339e7a-19d0-4ce5-be96-ab852ad4b6be", 1234)]
     assert member.added == [silver]

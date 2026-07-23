@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -319,11 +320,22 @@ async def build_leaderboard_images(
     item is intentionally an entry image, while the header is rendered separately.
     """
     del current_season
-    return list(
-        await asyncio.gather(
-            *(asyncio.to_thread(build_leaderboard_entry, entry) for entry in entries)
-        )
+    if not entries:
+        return []
+
+    executor = ThreadPoolExecutor(
+        max_workers=min(4, len(entries)),
+        thread_name_prefix="leaderboard-render",
     )
+    futures = [executor.submit(build_leaderboard_entry, entry) for entry in entries]
+    try:
+        # Polling avoids a Python 3.14 event-loop shutdown hang seen when several
+        # asyncio.to_thread calls complete at nearly the same time.
+        while not all(future.done() for future in futures):
+            await asyncio.sleep(0.001)
+        return [future.result() for future in futures]
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def build_card(

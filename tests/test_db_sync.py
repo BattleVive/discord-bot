@@ -259,6 +259,26 @@ async def test_sync_upserts_in_dependency_order_and_preserves_bot_owned_discord_
 
 
 @pytest.mark.asyncio
+async def test_partial_sync_reports_missing_users(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_with_foreign_key(items: list[object]) -> None:
+        raise asyncpg.ForeignKeyViolationError
+
+    async def successful_sync(items: list[object]) -> None:
+        return None
+
+    monkeypatch.setattr(db, "sync_lobbies_to_db", fail_with_foreign_key)
+    monkeypatch.setattr(db, "sync_season_ratings_to_db", successful_sync)
+
+    with pytest.raises(db.MissingUsersError):
+        await db.sync_battlevive_data_to_db(
+            lobbies=[object()],
+            season_ratings=[object()],
+        )
+
+
+@pytest.mark.asyncio
 async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
     postgres_db: None,
 ) -> None:

@@ -25,6 +25,7 @@ from .battlevive_api import query_users
 from .db import close_pool
 from .db import get_pool
 from .db import init_pool
+from .db import MissingUsersError
 from .db import sync_battlevive_data_to_db
 from .images import build_card
 from .leaderboards import LeaderboardService
@@ -56,23 +57,6 @@ season_ratings: list[SeasonRating] = []
 
 
 # Data refresh and background loops
-async def refresh_all_data() -> tuple[list[User], list[Lobby], list[SeasonRating]]:
-    results = await asyncio.gather(
-        query_users(battlevive_tokens.JWT_token),
-        query_lobbies(battlevive_tokens.JWT_token),
-        query_season_ratings(battlevive_tokens.JWT_token),
-        return_exceptions=True,
-    )
-    for result in results:
-        if isinstance(result, Exception):
-            raise result
-
-    users, fetched_lobbies, fetched_season_ratings = results
-
-    await sync_battlevive_data_to_db(users, fetched_lobbies, fetched_season_ratings)
-    return users, fetched_lobbies, fetched_season_ratings
-
-
 @tasks.loop(minutes=30)
 async def revalidate_tokens() -> None:
     try:
@@ -93,49 +77,115 @@ async def revalidate_tokens_error(error: Exception) -> None:
     logger.error("revalidate_tokens loop stopped due to unhandled exception: %s", error)
 
 
-@tasks.loop(minutes=1)
-async def refresh_loop() -> None:
+@tasks.loop(hours=1)
+async def refresh_infrequently_changing_data() -> None:
+    global battlevive_users
+
+    try:
+        fetched_users = await query_users(battlevive_tokens.JWT_token)
+    except Exception:
+        logger.exception("Failed to refresh Battlevive users, skipping this cycle.")
+        return
+
+    try:
+        await sync_battlevive_data_to_db(users=fetched_users)
+    except Exception:
+        logger.exception("Failed to sync Battlevive users, skipping role sync.")
+        return
+
+    battlevive_users = fetched_users
+    logger.debug("Refreshed %d users.", len(battlevive_users))
+
+    try:
+        await give_battlevive_role(bot)
+    except Exception:
+        logger.exception("Failed to sync Battlevive player roles this cycle.")
+
+
+@refresh_infrequently_changing_data.error
+async def refresh_infrequently_changing_data_error(error: Exception) -> None:
+    logger.error(
+        "refresh_infrequently_changing_data stopped due to unhandled exception: %s",
+        error,
+    )
+
+
+@tasks.loop(seconds=30)
+async def refresh_frequently_changing_data() -> None:
     global battlevive_users
     global lobbies
     global season_ratings
 
     try:
-        battlevive_users, lobbies, season_ratings = await refresh_all_data()
+        fetched_lobbies, fetched_season_ratings = await asyncio.gather(
+            query_lobbies(battlevive_tokens.JWT_token),
+            query_season_ratings(battlevive_tokens.JWT_token),
+        )
     except Exception:
-        logger.exception("Failed to refresh Battlevive data, skipping this cycle.")
+        logger.exception(
+            "Failed to refresh Battlevive lobbies and ratings, skipping this cycle."
+        )
         return
 
-    logger.debug(
-        "Refreshed %d users and %d lobbies.",
-        len(battlevive_users),
-        len(lobbies),
-    )
+    try:
+        await sync_battlevive_data_to_db(
+            lobbies=fetched_lobbies,
+            season_ratings=fetched_season_ratings,
+        )
+    except MissingUsersError:
+        logger.warning("Fetched data contains new users; refreshing users and retrying.")
+        try:
+            fetched_users = await query_users(battlevive_tokens.JWT_token)
+            await sync_battlevive_data_to_db(
+                users=fetched_users,
+                lobbies=fetched_lobbies,
+                season_ratings=fetched_season_ratings,
+            )
+        except Exception:
+            logger.exception("Failed to refresh missing users, skipping this cycle.")
+            return
+
+        battlevive_users = fetched_users
+        try:
+            await give_battlevive_role(bot)
+        except Exception:
+            logger.exception("Failed to sync Battlevive player roles.")
+    except Exception:
+        logger.exception("Failed to sync Battlevive lobbies and ratings.")
+        return
+
+    lobbies = fetched_lobbies
+    season_ratings = fetched_season_ratings
 
     try:
-        battlevive_users = await give_battlevive_role(bot, battlevive_tokens)
-        battlevive_users, season_ratings = await give_rank_roles(bot, battlevive_tokens)
+        await give_rank_roles(bot)
     except Exception:
-        logger.exception("Failed to sync roles this cycle.")
+        logger.exception("Failed to sync rank roles.")
 
 
-@refresh_loop.error
-async def refresh_loop_error(error: Exception) -> None:
-    logger.error("refresh_loop stopped due to unhandled exception: %s", error)
+@refresh_frequently_changing_data.error
+async def refresh_frequently_changing_data_error(error: Exception) -> None:
+    logger.error(
+        "refresh_frequently_changing_data stopped due to unhandled exception: %s",
+        error,
+    )
 
-
+# Bot setup
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-# Bot setup
+
 class BattleviveBot(commands.Bot):
     leaderboard_service: LeaderboardService | None = None
 
     async def close(self) -> None:
         if revalidate_tokens.is_running():
             revalidate_tokens.cancel()
-        if refresh_loop.is_running():
-            refresh_loop.cancel()
+        if refresh_infrequently_changing_data.is_running():
+            refresh_infrequently_changing_data.cancel()
+        if refresh_frequently_changing_data.is_running():
+            refresh_frequently_changing_data.cancel()
         if self.leaderboard_service is not None:
             await self.leaderboard_service.stop()
             self.leaderboard_service = None
@@ -162,7 +212,8 @@ async def setup_hook() -> None:
     bot.leaderboard_service = LeaderboardService(bot, DATABASE_URL)
     bot.leaderboard_service.start()
     revalidate_tokens.start()
-    refresh_loop.start()
+    refresh_infrequently_changing_data.start()
+    refresh_frequently_changing_data.start()
 
     guild = discord.Object(id=COMMAND_SYNC_GUILD_ID)
     bot.tree.copy_global_to(guild=guild)
@@ -178,6 +229,7 @@ async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent) -> None:
 
 @bot.event
 async def on_member_join(member: discord.Member) -> None:
+    await refresh_infrequently_changing_data()
     service = bot.leaderboard_service
     if service is not None:
         service.request_reconciliation()
@@ -598,6 +650,47 @@ async def rank_command(interaction: discord.Interaction) -> None:
                 ephemeral=True,
             )
 
+
+@bot.tree.command(
+    name="refresh",
+    description="Refresh data, roles, and the leaderboard",
+)
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def refresh(interaction: discord.Interaction) -> None:
+    global battlevive_users
+    global season_ratings
+    global lobbies
+    try:
+        await interaction.response.defer(ephemeral=True)
+        fetched_users, fetched_lobbies, fetched_season_ratings = await asyncio.gather(
+            query_users(battlevive_tokens.JWT_token),
+            query_lobbies(battlevive_tokens.JWT_token),
+            query_season_ratings(battlevive_tokens.JWT_token),
+        )
+        await sync_battlevive_data_to_db(
+            fetched_users,
+            fetched_lobbies,
+            fetched_season_ratings,
+        )
+        await give_battlevive_role(bot)
+        await give_rank_roles(bot)
+    except Exception:
+        logger.exception("Manual refresh failed.")
+        await interaction.followup.send(
+            "Command failed. Check bot.log.",
+            ephemeral=True,
+        )
+        return
+
+    battlevive_users = fetched_users
+    lobbies = fetched_lobbies
+    season_ratings = fetched_season_ratings
+
+    service = bot.leaderboard_service
+    if service is not None:
+        service.request_reconciliation()
+    await interaction.followup.send("Battlevive data refreshed.", ephemeral=True)
 
 # Runtime
 def run() -> None:
