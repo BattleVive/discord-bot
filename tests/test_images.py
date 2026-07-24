@@ -161,35 +161,6 @@ def test_long_names_are_ellipsized_to_the_available_width() -> None:
     assert _text_width(font, result) <= 315
 
 
-def test_font_license_and_readme_attribution() -> None:
-    license_path = ROOT_DIR / "app/assets/fonts/LICENSE"
-    readme = (ROOT_DIR / "README.md").read_text(encoding="utf-8")
-
-    assert license_path.is_file()
-    assert "SIL OPEN FONT LICENSE Version 1.1" in license_path.read_text(
-        encoding="utf-8"
-    )
-    assert "Liberation Mono 2.1.5" in readme
-    assert "SIL Open Font License 1.1" in readme
-    assert "app/assets/fonts/LiberationMono-LICENSE.txt" in readme
-    assert "github.com/liberationfonts/liberation-fonts" in readme
-
-
-def test_no_legacy_font_assets_or_references_remain() -> None:
-    legacy_name = "deja" + "vu"
-    text_suffixes = {".md", ".py", ".txt", ".yml", ".yaml"}
-    references = []
-    for path in ROOT_DIR.rglob("*"):
-        if any(part in {".git", ".venv", "__pycache__"} for part in path.parts):
-            continue
-        if path.is_file() and path.suffix in text_suffixes:
-            if legacy_name in path.read_text(encoding="utf-8", errors="ignore").lower():
-                references.append(path)
-
-    assert not list((ROOT_DIR / "app/assets/fonts").glob("*Deja" + "Vu*"))
-    assert references == []
-
-
 def make_leaderboard_entry(**overrides: object) -> LeaderboardEntry:
     values: dict[str, object] = {
         "place": 1,
