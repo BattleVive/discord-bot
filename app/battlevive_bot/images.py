@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Collection
+from collections.abc import Sequence
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Sequence
 
 from PIL import Image
 from PIL import ImageDraw
@@ -34,8 +33,22 @@ RANK_STYLES: dict[str, tuple[str, str]] = {
 # Card dimensions
 CARD_W = 640
 CARD_H = 220
+LEADERBOARD_W = 1280
 LEADERBOARD_ENTRY_H = 124
 LEADERBOARD_HEADER_H = 184
+LEADERBOARD_NAME_LEFT = 112
+LEADERBOARD_NAME_RIGHT = 520
+LEADERBOARD_RANK_LEFT = 544
+LEADERBOARD_RANK_RIGHT = 784
+LEADERBOARD_STATS_LEFT = 816
+LEADERBOARD_STATS_RIGHT = 1256
+LEADERBOARD_RANK_ICON_SIZE = 42
+LEADERBOARD_RANK_ICON_GAP = 12
+# Compact aliases used by layout-focused callers and tests.
+LEADERBOARD_NAME_X = LEADERBOARD_NAME_LEFT
+LEADERBOARD_NAME_WIDTH = LEADERBOARD_NAME_RIGHT - LEADERBOARD_NAME_LEFT
+LEADERBOARD_RANK_X = LEADERBOARD_RANK_LEFT
+LEADERBOARD_STATS_X = LEADERBOARD_STATS_LEFT
 CORNER_R = 12
 PAD = 16
 AVATAR_SIZE = 126
@@ -96,11 +109,11 @@ def _text_width(font: ImageFont.FreeTypeFont, text: str) -> int:
 
 def _fit_font(text: str, max_width: int, size: int) -> ImageFont.FreeTypeFont:
     """Choose the largest bundled bold font size that fits a narrow stat cell."""
-    for candidate_size in range(size, 9, -1):
+    for candidate_size in range(size, 5, -1):
         font = ImageFont.truetype(FONT_BOLD, candidate_size)
         if _text_width(font, text) <= max_width:
             return font
-    return ImageFont.truetype(FONT_BOLD, 9)
+    return ImageFont.truetype(FONT_BOLD, 6)
 
 
 def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
@@ -204,21 +217,20 @@ def _png_bytes(image: Image.Image) -> bytes:
     return output.getvalue()
 
 
-def build_leaderboard_header(current_season: str) -> bytes:
-    """Render the reusable leaderboard header for the supplied season label."""
-    fonts = _load_fonts()
-    header = Image.new("RGBA", (CARD_W, LEADERBOARD_HEADER_H), C_BG)
-    draw = ImageDraw.Draw(header)
-    draw.rounded_rectangle(
-        (0, 0, CARD_W - 1, LEADERBOARD_HEADER_H - 1),
-        radius=CORNER_R,
+def _draw_leaderboard_header(
+    image: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    fonts: dict[str, ImageFont.FreeTypeFont],
+    current_season: str,
+) -> None:
+    """Draw the header directly into the complete leaderboard canvas."""
+    draw.rectangle(
+        (0, 0, LEADERBOARD_W - 1, LEADERBOARD_HEADER_H - 1),
         fill=C_BG,
-        outline=C_PANEL_EDGE,
-        width=2,
     )
 
     logo = _logo_thumbnail((92, 132))
-    header.alpha_composite(
+    image.alpha_composite(
         logo,
         (28, (LEADERBOARD_HEADER_H - logo.height) // 2),
     )
@@ -232,9 +244,9 @@ def build_leaderboard_header(current_season: str) -> bytes:
     )
     draw.line((title_x, 94, 398, 94), fill=C_CRIMSON, width=3)
 
-    season_x = 430
+    season_x = 994
     draw.rounded_rectangle(
-        (season_x, 38, CARD_W - 24, 139),
+        (season_x, 38, LEADERBOARD_STATS_RIGHT, 139),
         radius=8,
         fill=C_PANEL,
         outline=C_PANEL_EDGE,
@@ -246,96 +258,180 @@ def build_leaderboard_header(current_season: str) -> bytes:
         font=fonts["leaderboard_season_label"],
         fill=C_MUTED,
     )
-    season = _ellipsize(str(current_season), fonts["leaderboard_season"], 164)
+    season = _ellipsize(str(current_season), fonts["leaderboard_season"], 226)
     draw.text(
         (season_x + 14, 76),
         season,
         font=fonts["leaderboard_season"],
         fill=C_SEASON,
     )
-    return _png_bytes(header)
 
 
-def build_leaderboard_entry(entry: LeaderboardEntry) -> bytes:
-    """Render one independent, Discord-ready leaderboard entry image."""
-    fonts = _load_fonts()
-    card = Image.new("RGBA", (CARD_W, LEADERBOARD_ENTRY_H), C_BG)
-    draw = ImageDraw.Draw(card)
-    draw.rounded_rectangle(
-        (0, 0, CARD_W - 1, LEADERBOARD_ENTRY_H - 1),
-        radius=CORNER_R,
+def _draw_leaderboard_entry(
+    image: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    fonts: dict[str, ImageFont.FreeTypeFont],
+    entry: LeaderboardEntry,
+) -> None:
+    """Draw one row directly into its fixed rectangle on the full canvas."""
+    top = LEADERBOARD_HEADER_H + (entry.place - 1) * LEADERBOARD_ENTRY_H
+    bottom = top + LEADERBOARD_ENTRY_H - 1
+    draw.rectangle(
+        (0, top, LEADERBOARD_W - 1, bottom),
         fill=C_BG,
-        outline=C_PANEL_EDGE,
-        width=2,
     )
+    center_y = top + LEADERBOARD_ENTRY_H // 2
 
     place = f"{entry.place}."
-    draw.text((20, 43), place, font=fonts["leaderboard_place"], fill=C_MUTED)
-    draw.line((72, 20, 72, LEADERBOARD_ENTRY_H - 20), fill=C_PANEL_EDGE, width=1)
+    place_font = _fit_font(place, 64, 28)
+    draw.text(
+        (88, center_y),
+        place,
+        font=place_font,
+        fill=C_MUTED,
+        anchor="rm",
+    )
+    draw.line((96, top + 20, 96, bottom - 20), fill=C_PANEL_EDGE, width=1)
 
-    icon = _rank_icon(entry.rank, 42)
-    rank_x = 88
+    username = _ellipsize(
+        entry.username,
+        fonts["leaderboard_username"],
+        LEADERBOARD_NAME_RIGHT - LEADERBOARD_NAME_LEFT,
+    )
+    draw.text(
+        (LEADERBOARD_NAME_LEFT, center_y),
+        username,
+        font=fonts["leaderboard_username"],
+        fill=C_TEXT,
+        anchor="lm",
+    )
+
+    icon = _rank_icon(entry.rank, LEADERBOARD_RANK_ICON_SIZE)
     if icon is not None:
-        card.alpha_composite(icon, (rank_x, 17 + (42 - icon.height) // 2))
-        rank_x += icon.width + 8
+        icon_x = (
+            LEADERBOARD_RANK_LEFT
+            + (LEADERBOARD_RANK_ICON_SIZE - icon.width) // 2
+        )
+        icon_y = center_y - icon.height // 2
+        image.alpha_composite(icon, (icon_x, icon_y))
+    rank_x = (
+        LEADERBOARD_RANK_LEFT
+        + LEADERBOARD_RANK_ICON_SIZE
+        + LEADERBOARD_RANK_ICON_GAP
+    )
     rank_color = RANK_STYLES.get(entry.rank, ("", C_TEXT))[1]
-    draw.text((rank_x, 22), entry.rank, font=fonts["rank"], fill=rank_color)
+    rank = _ellipsize(
+        entry.rank,
+        fonts["rank"],
+        LEADERBOARD_RANK_RIGHT - rank_x,
+    )
+    draw.text(
+        (rank_x, center_y),
+        rank,
+        font=fonts["rank"],
+        fill=rank_color,
+        anchor="lm",
+    )
 
-    username = _ellipsize(entry.username, fonts["leaderboard_username"], 255)
-    draw.text((88, 55), username, font=fonts["leaderboard_username"], fill=C_TEXT)
-
-    stats_left = 360
     stats = (
         ("MMR", f"{entry.mmr:,}", C_TEXT),
         ("WINS", f"{entry.wins:,}", C_GREEN),
         ("LOSSES", f"{entry.losses:,}", C_RED),
         ("WIN RATE", f"{entry.win_rate:g}%", C_TEXT),
     )
-    stat_width = (CARD_W - stats_left - PAD) // len(stats)
+    stat_width = (LEADERBOARD_STATS_RIGHT - LEADERBOARD_STATS_LEFT) // len(stats)
     for index, (label, value, color) in enumerate(stats):
-        center = stats_left + stat_width * index + stat_width // 2
+        center = LEADERBOARD_STATS_LEFT + stat_width * index + stat_width // 2
         label_font = fonts["leaderboard_label"]
-        value_font = _fit_font(value, stat_width - 4, 17)
+        value_font = _fit_font(value, stat_width - 8, 17)
+        value = _ellipsize(value, value_font, stat_width - 8)
         draw.text(
-            (center - _text_width(label_font, label) // 2, 34),
+            (center, center_y - 14),
             label,
             font=label_font,
             fill=C_MUTED,
+            anchor="mm",
         )
         draw.text(
-            (center - _text_width(value_font, value) // 2, 57),
+            (center, center_y + 11),
             value,
             font=value_font,
             fill=color,
+            anchor="mm",
         )
-    return _png_bytes(card)
 
 
-async def build_leaderboard_images(
-    entries: Sequence[LeaderboardEntry], current_season: str
-) -> list[bytes]:
-    """Render entries concurrently while preserving their input order.
-
-    The season is accepted here for the eventual integration layer; each returned
-    item is intentionally an entry image, while the header is rendered separately.
-    """
-    del current_season
-    if not entries:
-        return []
-
-    executor = ThreadPoolExecutor(
-        max_workers=min(4, len(entries)),
-        thread_name_prefix="leaderboard-render",
+def _draw_leaderboard_frame(
+    draw: ImageDraw.ImageDraw,
+    entry_count: int,
+) -> None:
+    """Draw one rounded outer border with square internal row separators."""
+    height = LEADERBOARD_HEADER_H + entry_count * LEADERBOARD_ENTRY_H
+    for separator in range(entry_count):
+        y = LEADERBOARD_HEADER_H + separator * LEADERBOARD_ENTRY_H
+        draw.line(
+            (1, y, LEADERBOARD_W - 2, y),
+            fill=C_PANEL_EDGE,
+            width=2,
+        )
+    draw.rounded_rectangle(
+        (0, 0, LEADERBOARD_W - 1, height - 1),
+        radius=CORNER_R,
+        outline=C_PANEL_EDGE,
+        width=2,
     )
-    futures = [executor.submit(build_leaderboard_entry, entry) for entry in entries]
-    try:
-        # Polling avoids a Python 3.14 event-loop shutdown hang seen when several
-        # asyncio.to_thread calls complete at nearly the same time.
-        while not all(future.done() for future in futures):
-            await asyncio.sleep(0.001)
-        return [future.result() for future in futures]
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def build_leaderboard_png(
+    entries: Sequence[LeaderboardEntry],
+    current_season: str,
+    *,
+    base_image: Image.Image | bytes | None = None,
+    redraw_slots: Collection[int] | None = None,
+) -> bytes:
+    """Render one complete leaderboard, optionally redrawing selected regions.
+
+    Slot ``0`` is the header and slots ``1..n`` are the corresponding player
+    rows. A base image must already have the exact dimensions for the entries.
+    PNG encoding always covers the complete final image.
+    """
+    expected_size = (
+        LEADERBOARD_W,
+        LEADERBOARD_HEADER_H + len(entries) * LEADERBOARD_ENTRY_H,
+    )
+    if base_image is None:
+        image = Image.new("RGBA", expected_size, C_BG)
+        selected_slots = set(range(len(entries) + 1))
+    else:
+        if isinstance(base_image, bytes):
+            with Image.open(BytesIO(base_image)) as source:
+                source.load()
+                base = source.convert("RGBA")
+        else:
+            base = base_image
+        if base.size != expected_size:
+            raise ValueError(
+                f"base leaderboard image has size {base.size}, "
+                f"expected {expected_size}"
+            )
+        image = base.convert("RGBA").copy()
+        selected_slots = (
+            set(range(len(entries) + 1))
+            if redraw_slots is None
+            else set(redraw_slots)
+        )
+
+    if any(slot < 0 or slot > len(entries) for slot in selected_slots):
+        raise ValueError("redraw slot is outside the leaderboard")
+
+    fonts = _load_fonts()
+    draw = ImageDraw.Draw(image)
+    if 0 in selected_slots:
+        _draw_leaderboard_header(image, draw, fonts, current_season)
+    for slot in sorted(selected_slots - {0}):
+        _draw_leaderboard_entry(image, draw, fonts, entries[slot - 1])
+    _draw_leaderboard_frame(draw, len(entries))
+    return _png_bytes(image)
 
 
 def build_card(

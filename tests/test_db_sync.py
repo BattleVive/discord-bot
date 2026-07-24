@@ -121,6 +121,24 @@ async def test_init_db_sql_creates_expected_schema(postgres_db: None) -> None:
         )
         """
     )
+    assert not await pool.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'leaderboard_slots' AND column_name = 'png'
+        )
+        """
+    )
+    constraint = await pool.fetchval(
+        """
+        SELECT pg_get_constraintdef(oid)
+        FROM pg_constraint
+        WHERE conrelid = 'guild_config'::regclass
+          AND conname = 'guild_config_leaderboard_limit_range'
+        """
+    )
+    assert constraint is not None
+    assert "50" in constraint
     trigger_names = {
         row["trigger_name"]
         for row in await pool.fetch(
@@ -311,26 +329,147 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
 
 
 @pytest.mark.asyncio
-async def test_leaderboard_limit_and_slot_cache_are_isolated_by_guild(
+async def test_reset_preserves_cached_leaderboard_metadata_for_later_reuse(
+    postgres_db: None,
+) -> None:
+    await db.upsert_guild_config(1001, 2001, 3001)
+    await db.replace_leaderboard_slots(
+        1001,
+        [
+            {
+                "slot": 0,
+                "channel_id": 2001,
+                "message_id": 4001,
+                "season_year": 2026,
+                "season_number": 7,
+                "user_id": None,
+                "fingerprint": "header-a",
+            }
+        ],
+    )
+
+    await db.reset_guild_config(1001, 3021)
+
+    stored = await db.get_leaderboard_slots(1001)
+    assert stored[0]["fingerprint"] == "header-a"
+    assert stored[0]["channel_id"] is None
+    assert stored[0]["message_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_leaderboard_limit_and_slot_metadata_are_isolated_by_guild(
     postgres_db: None,
 ) -> None:
     await db.upsert_guild_config(1001, 2001, 3001)
     await db.upsert_guild_config(1002, 2002, 3002)
     await db.set_leaderboard_limit(1001, 5, 3011)
-    await db.upsert_leaderboard_slot(
-        1001, 0, 2001, 4001, 2026, 7, None, "header-a", b"png-a"
+    await db.replace_leaderboard_slots(
+        1001,
+        [
+            {
+                "slot": 0,
+                "channel_id": 2001,
+                "message_id": 4001,
+                "season_year": 2026,
+                "season_number": 7,
+                "user_id": None,
+                "fingerprint": "header-a",
+            }
+        ],
     )
-    await db.upsert_leaderboard_slot(
-        1002, 0, 2002, 4002, 2026, 7, None, "header-b", b"png-b"
+    await db.replace_leaderboard_slots(
+        1002,
+        [
+            {
+                "slot": 0,
+                "channel_id": 2002,
+                "message_id": 4002,
+                "season_year": 2026,
+                "season_number": 7,
+                "user_id": None,
+                "fingerprint": "header-b",
+            }
+        ],
     )
 
     assert (await db.get_guild_config(1001))["leaderboard_limit"] == 5
     assert (await db.get_guild_config(1002))["leaderboard_limit"] is None
-    assert (await db.get_leaderboard_slots(1001))[0]["png"] == b"png-a"
-    assert (await db.get_leaderboard_slots(1002))[0]["png"] == b"png-b"
+    assert (await db.get_leaderboard_slots(1001))[0]["fingerprint"] == "header-a"
+    assert (await db.get_leaderboard_slots(1002))[0]["fingerprint"] == "header-b"
 
     await db.set_leaderboard_limit(1001, None, 3012)
     assert (await db.get_guild_config(1001))["leaderboard_limit"] is None
+
+
+@pytest.mark.asyncio
+async def test_replacing_slot_metadata_is_transactional_and_removes_stale_slots(
+    postgres_db: None,
+) -> None:
+    await db.upsert_guild_config(1001, 2001, 3001)
+    original = [
+        {
+            "slot": 0,
+            "channel_id": 2001,
+            "message_id": 4001,
+            "season_year": 2026,
+            "season_number": 7,
+            "user_id": None,
+            "fingerprint": "header-a",
+        },
+        {
+            "slot": 1,
+            "channel_id": None,
+            "message_id": None,
+            "season_year": 2026,
+            "season_number": 7,
+            "user_id": USER_A_ID,
+            "fingerprint": "entry-a",
+        },
+    ]
+    await db.replace_leaderboard_slots(1001, original)
+
+    await db.replace_leaderboard_slots(
+        1001,
+        [
+            {
+                **original[0],
+                "fingerprint": "header-b",
+            }
+        ],
+    )
+
+    stored = await db.get_leaderboard_slots(1001)
+    assert [(row["slot"], row["fingerprint"]) for row in stored] == [(0, "header-b")]
+
+
+@pytest.mark.asyncio
+async def test_leaderboard_limit_is_constrained_to_one_through_fifty(
+    postgres_db: None,
+) -> None:
+    await db.upsert_guild_config(1001, 2001, 3001)
+    await db.set_leaderboard_limit(1001, 50, 3001)
+
+    assert (await db.get_guild_config(1001))["leaderboard_limit"] == 50
+    with pytest.raises(ValueError, match="50"):
+        await db.set_leaderboard_limit(1001, 51, 3001)
+
+
+@pytest.mark.asyncio
+async def test_disk_cache_migration_clamps_existing_limits_before_adding_range_constraint(
+    postgres_db: None,
+) -> None:
+    pool = db.get_pool()
+    await db.upsert_guild_config(1001, 2001, 3001)
+    await pool.execute(
+        "ALTER TABLE guild_config DROP CONSTRAINT guild_config_leaderboard_limit_range"
+    )
+    await pool.execute("UPDATE guild_config SET leaderboard_limit = 99 WHERE guild_id = 1001")
+
+    await pool.execute(
+        (SQL_DIR / "06_leaderboard_disk_cache.sql").read_text(encoding="utf-8")
+    )
+
+    assert (await db.get_guild_config(1001))["leaderboard_limit"] == 50
 
 
 @pytest.mark.asyncio

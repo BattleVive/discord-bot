@@ -10,6 +10,7 @@ app/data/*.json
 __pycache__
 .pytest_cache
 app/data/*.png
+app/data/leaderboards/
 #clankers  
 AGENTS.md
 .claude

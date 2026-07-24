@@ -61,14 +61,22 @@ Check logs with `docker compose logs -f bot` / `podman compose logs -f bot`.
 See [SCHEMA.md](./SCHEMA.md).
 
 When upgrading an existing PostgreSQL volume, the container's initialization
-scripts are not rerun automatically. Apply the new guild configuration schema
-once as a database administrator:
+scripts are not rerun automatically. Apply any migrations that the volume has
+not received, in numeric order, as a database administrator. These migrations
+are idempotent:
 
 ```
 psql "$DATABASE_URL" -f app/init-db/04_guild_config.sql
+psql "$DATABASE_URL" -f app/init-db/05_leaderboards.sql
+psql "$DATABASE_URL" -f app/init-db/06_leaderboard_disk_cache.sql
 ```
 
-Fresh databases receive this table automatically during initialization.
+Migration `06_leaderboard_disk_cache.sql` removes database-stored PNG data,
+clamps existing leaderboard limits above 50, and enforces the new 1–50 range.
+Complete leaderboard images are stored under
+`app/data/leaderboards/<guild_id>/`; the existing `app/data:/app/data` Compose
+mount persists them. Fresh databases receive all schema changes automatically
+during initialization.
 
 ---
 This project is licensed under the AGPL-3.0 (see LICENSE).

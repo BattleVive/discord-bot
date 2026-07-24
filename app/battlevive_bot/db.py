@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 import uuid
 from typing import Any
 
@@ -10,6 +11,7 @@ from .logs import logger
 from .models import Lobby
 from .models import SeasonRating
 from .models import User
+from .settings import LEADERBOARD_MAX_ENTRIES
 
 
 _pool: asyncpg.Pool | None = None
@@ -84,8 +86,13 @@ async def set_leaderboard_limit(
     leaderboard_limit: int | None,
     updated_by: int,
 ) -> None:
-    if leaderboard_limit is not None and leaderboard_limit <= 0:
-        raise ValueError("leaderboard_limit must be positive or None")
+    if leaderboard_limit is not None and not (
+        1 <= leaderboard_limit <= LEADERBOARD_MAX_ENTRIES
+    ):
+        raise ValueError(
+            f"leaderboard_limit must be between 1 and "
+            f"{LEADERBOARD_MAX_ENTRIES}, or None"
+        )
 
     pool = get_pool()
     await pool.execute(
@@ -186,7 +193,7 @@ async def get_leaderboard_slots(guild_id: int) -> list[dict[str, Any]]:
     rows = await get_pool().fetch(
         """
         SELECT guild_id, slot, channel_id, message_id, season_year,
-               season_number, user_id, fingerprint, png
+               season_number, user_id, fingerprint, updated_at
         FROM leaderboard_slots
         WHERE guild_id = $1
         ORDER BY slot
@@ -196,55 +203,60 @@ async def get_leaderboard_slots(guild_id: int) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-async def upsert_leaderboard_slot(
+async def replace_leaderboard_slots(
     guild_id: int,
-    slot: int,
-    channel_id: int | None,
-    message_id: int | None,
-    season_year: int | None,
-    season_number: int | None,
-    user_id: uuid.UUID | str | None,
-    fingerprint: str,
-    png: bytes,
+    slots: Sequence[dict[str, Any]],
 ) -> None:
-    if (channel_id is None) != (message_id is None):
-        raise ValueError("channel_id and message_id must both be set or both be None")
+    """Atomically replace one guild's complete leaderboard metadata."""
+    if not slots:
+        raise ValueError("leaderboard slots must include the header")
+    if [slot["slot"] for slot in slots] != list(range(len(slots))):
+        raise ValueError("leaderboard slots must be ordered and contiguous from zero")
 
-    await get_pool().execute(
-        """
-        INSERT INTO leaderboard_slots (
-            guild_id, slot, channel_id, message_id, season_year,
-            season_number, user_id, fingerprint, png
+    records: list[tuple[Any, ...]] = []
+    for slot in slots:
+        channel_id = slot["channel_id"]
+        message_id = slot["message_id"]
+        if (channel_id is None) != (message_id is None):
+            raise ValueError(
+                "channel_id and message_id must both be set or both be None"
+            )
+        if slot["slot"] == 0 and slot["user_id"] is not None:
+            raise ValueError("leaderboard header cannot have a user_id")
+        records.append(
+            (
+                guild_id,
+                slot["slot"],
+                channel_id,
+                message_id,
+                slot["season_year"],
+                slot["season_number"],
+                (
+                    uuid.UUID(str(slot["user_id"]))
+                    if slot["user_id"] is not None
+                    else None
+                ),
+                slot["fingerprint"],
+            )
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        ON CONFLICT (guild_id, slot) DO UPDATE
-        SET channel_id = EXCLUDED.channel_id,
-            message_id = EXCLUDED.message_id,
-            season_year = EXCLUDED.season_year,
-            season_number = EXCLUDED.season_number,
-            user_id = EXCLUDED.user_id,
-            fingerprint = EXCLUDED.fingerprint,
-            png = EXCLUDED.png,
-            updated_at = now()
-        """,
-        guild_id,
-        slot,
-        channel_id,
-        message_id,
-        season_year,
-        season_number,
-        uuid.UUID(str(user_id)) if user_id is not None else None,
-        fingerprint,
-        png,
-    )
 
-
-async def delete_leaderboard_slots_from(guild_id: int, first_slot: int) -> None:
-    await get_pool().execute(
-        "DELETE FROM leaderboard_slots WHERE guild_id = $1 AND slot >= $2",
-        guild_id,
-        first_slot,
-    )
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "DELETE FROM leaderboard_slots WHERE guild_id = $1",
+                guild_id,
+            )
+            await conn.executemany(
+                """
+                INSERT INTO leaderboard_slots (
+                    guild_id, slot, channel_id, message_id, season_year,
+                    season_number, user_id, fingerprint
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                records,
+            )
 
 
 async def get_users() -> list[User]:

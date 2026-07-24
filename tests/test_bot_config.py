@@ -185,14 +185,14 @@ async def test_config_reset_and_show_are_ephemeral(monkeypatch: pytest.MonkeyPat
     ]
     assert show_interaction.response.messages == [
         {
-            "content": "Leaderboard channel: <#456>.\nLeaderboard limit: all.",
+            "content": "Leaderboard channel: <#456>.\nLeaderboard limit: 50 (maximum).",
             "ephemeral": True,
         }
     ]
 
 
 @pytest.mark.asyncio
-async def test_config_limit_sets_positive_amount_and_omission_restores_all(
+async def test_config_limit_sets_amount_and_omission_restores_the_maximum(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[int, int | None, int]] = []
@@ -218,18 +218,19 @@ async def test_config_limit_sets_positive_amount_and_omission_restores_all(
 
     assert calls == [(789, 25, 123), (789, None, 123)]
     assert limited.response.messages[0]["content"] == "Leaderboard limit set to 25."
-    assert unlimited.response.messages[0]["content"] == "Leaderboard limit set to all."
+    assert unlimited.response.messages[0]["content"] == "Leaderboard limit set to 50 (maximum)."
 
 
 @pytest.mark.asyncio
-async def test_config_limit_rejects_non_positive_amount() -> None:
+@pytest.mark.parametrize("amount", [0, 51])
+async def test_config_limit_rejects_values_outside_the_supported_range(amount: int) -> None:
     interaction = make_interaction()
 
-    await bot_module.config_leaderboard_limit.callback(interaction, 0)
+    await bot_module.config_leaderboard_limit.callback(interaction, amount)
 
     assert interaction.response.messages == [
         {
-            "content": "Leaderboard limit must be a positive number.",
+            "content": "Leaderboard limit must be between 1 and 50.",
             "ephemeral": True,
         }
     ]

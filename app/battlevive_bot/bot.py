@@ -42,6 +42,7 @@ from .settings import COMMAND_SYNC_GUILD_ID
 from .settings import DATABASE_URL
 from .settings import DATA_DIR
 from .settings import DISCORD_BOT_TOKEN
+from .settings import LEADERBOARD_MAX_ENTRIES
 
 
 DATA_DIR.mkdir(exist_ok=True)
@@ -355,9 +356,9 @@ async def config_leaderboard_channel(
 
 @config_leaderboard_group.command(
     name="limit",
-    description="Set the number of leaderboard places, or omit it to show all",
+    description="Set leaderboard places from 1-50, or omit for the maximum",
 )
-@app_commands.describe(amount="Positive number of places; omit to show all")
+@app_commands.describe(amount="Number of places from 1-50; omit for the maximum of 50")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 async def config_leaderboard_limit(
@@ -366,9 +367,10 @@ async def config_leaderboard_limit(
 ) -> None:
     if not await _check_config_access(interaction):
         return
-    if amount is not None and amount <= 0:
+    if amount is not None and not (1 <= amount <= LEADERBOARD_MAX_ENTRIES):
         await interaction.response.send_message(
-            "Leaderboard limit must be a positive number.",
+            f"Leaderboard limit must be between 1 and "
+            f"{LEADERBOARD_MAX_ENTRIES}.",
             ephemeral=True,
         )
         return
@@ -386,7 +388,11 @@ async def config_leaderboard_limit(
             and bot.leaderboard_service is not None
         ):
             bot.leaderboard_service.request_reconciliation()
-        display = str(amount) if amount is not None else "all"
+        display = (
+            str(amount)
+            if amount is not None
+            else f"{LEADERBOARD_MAX_ENTRIES} (maximum)"
+        )
         await interaction.response.send_message(
             f"Leaderboard limit set to {display}.",
             ephemeral=True,
@@ -433,7 +439,12 @@ async def config_show(interaction: discord.Interaction) -> None:
             else "Leaderboard channel: not configured."
         )
         limit = config["leaderboard_limit"] if config else None
-        limit_message = f"Leaderboard limit: {limit if limit is not None else 'all'}."
+        limit_display = (
+            str(limit)
+            if limit is not None
+            else f"{LEADERBOARD_MAX_ENTRIES} (maximum)"
+        )
+        limit_message = f"Leaderboard limit: {limit_display}."
         message = f"{channel_message}\n{limit_message}"
         await interaction.response.send_message(message, ephemeral=True)
     except Exception:
