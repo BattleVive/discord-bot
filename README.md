@@ -1,94 +1,65 @@
 # Battlevive Discord Bot
 
-Discord bot that syncs player/lobby data from the Battlevive platform (via Supabase) and manages roles, ranks, and match info in Discord.
+Discord bot that syncs player, lobby, season rating, and leaderboard data from Battlevive/Supabase and manages Battlevive roles, ranks, and match info in Discord.
 
 [![Test Suite](https://github.com/voxix-dev/battlevive-bot/actions/workflows/tests.yml/badge.svg)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/tests.yml) [![Docker Image CI](https://github.com/voxix-dev/battlevive-bot/actions/workflows/docker-image.yml/badge.svg)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/docker-image.yml) [![CodeQL Advanced](https://github.com/voxix-dev/battlevive-bot/actions/workflows/codeql.yml/badge.svg)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/codeql.yml)
 
+This project is under active development.
+
+## Documentation
+
+Full documentation lives in the GitHub Wiki:
+
+- [Wiki home](https://github.com/voxix-dev/battlevive-bot/wiki)
+- [User Guide](https://github.com/voxix-dev/battlevive-bot/wiki/User-Guide)
+- [Server Admin Guide](https://github.com/voxix-dev/battlevive-bot/wiki/Server-Admin-Guide)
+- [Deployment](https://github.com/voxix-dev/battlevive-bot/wiki/Deployment)
+- [Developer Guide](https://github.com/voxix-dev/battlevive-bot/wiki/Developer-Guide)
+- [Database Schema](https://github.com/voxix-dev/battlevive-bot/wiki/Database-Schema)
+- [Troubleshooting](https://github.com/voxix-dev/battlevive-bot/wiki/Troubleshooting)
+
+
 ## Requirements
 
-- Docker or Podman (with compose support)
+- Docker or Podman with Compose support
 - A Discord bot token
 - Battlevive/Supabase API credentials
 
 ## Setup
 
-```
+```bash
 cd utils
 cp .env.example .env
-```
-
-Fill in the values in `.env`, then run:
-
-```
+# fill required values in .env
 ./init.sh
 ```
 
-This installs the helper script's dependencies and runs it to generate/finalize your `.env`. Follow its prompts before continuing.
-
 ## Running
 
-From the repo root, after `utils/init.sh` has completed:
+From the repository root after `utils/init.sh` completes:
 
-**Docker**
-
-```
+```bash
 docker compose up -d --build
 ```
 
-**Podman**
+or:
 
-```
-podman compose up -d --build --no-deps bot
-```
-
-This builds and recreates only the bot service; it assumes the database service
-is already running. Runtime files under `app/data/` (including the PostgreSQL
-data directory) are excluded from the build context, and the database container
-and data are not recreated or removed. For a build without restarting the bot,
-use `podman compose build bot`. `podman compose` may print that it is using an
-external Compose provider; that is normal for Podman.
-
-If `podman-compose` is installed and preferred, the equivalent commands are
-`podman-compose build bot` and `podman-compose up -d --no-deps bot`.
-
-For a standalone build, use `podman build -t battlevive-bot:local .`. Compose
-uses the same image tag, so the next `podman compose up -d` will use that build.
-
-Check logs with `docker compose logs -f bot` / `podman compose logs -f bot`.
-
-## Database schema
-
-See [SCHEMA.md](./SCHEMA.md).
-
-When upgrading an existing PostgreSQL volume, the container's initialization
-scripts are not rerun automatically. Apply any migrations that the volume has
-not received, in numeric order, as a database administrator. These migrations
-are idempotent:
-
-```
-psql "$DATABASE_URL" -f app/init-db/04_guild_config.sql
-psql "$DATABASE_URL" -f app/init-db/05_leaderboards.sql
-psql "$DATABASE_URL" -f app/init-db/06_leaderboard_disk_cache.sql
+```bash
+podman compose up -d --build
 ```
 
-Migration `06_leaderboard_disk_cache.sql` removes database-stored PNG data,
-clamps existing leaderboard limits above 50, and enforces the new 1–50 range.
-Complete leaderboard images are stored under
-`app/data/leaderboards/<guild_id>/`; the existing `app/data:/app/data` Compose
-mount persists them. Fresh databases receive all schema changes automatically
-during initialization.
+Check logs with `docker compose logs -f bot` or `podman compose logs -f bot`.
 
----
-This project is licensed under the AGPL-3.0 (see LICENSE).
+For a standalone image build:
+
+```bash
+podman build . --file Dockerfile --tag battlevive-bot:local
+```
+
+## License
+
+This project is licensed under the AGPL-3.0. See [LICENSE](./LICENSE).
 
 ## Third-party assets
 
-- Liberation Mono 2.1.5 is bundled under the SIL Open Font License 1.1. The
-  original license and copyright notice are in
-  [`app/assets/fonts/LiberationMono-LICENSE.txt`](./app/assets/fonts/LICENSE).
-  Upstream project and official archive:
-  [liberationfonts/liberation-fonts](https://github.com/liberationfonts/liberation-fonts),
-  [Liberation Fonts 2.1.5 TTF download](https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz).
-
-
-This project is under active development.
+- Liberation Mono 2.1.5 is bundled under the SIL Open Font License 1.1. The original license and copyright notice are in [`app/assets/fonts/LICENSE.txt`](./app/assets/fonts/LICENSE). Upstream project and official archive: [liberationfonts/liberation-fonts](https://github.com/liberationfonts/liberation-fonts), [Liberation Fonts 2.1.5 TTF download](https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz).
