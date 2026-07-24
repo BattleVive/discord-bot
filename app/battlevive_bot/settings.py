@@ -12,6 +12,7 @@ APP_DIR = Path(__file__).resolve().parents[1]
 ASSETS_DIR = APP_DIR / "assets"
 DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
+ENV_FILE_PATH = Path(os.getenv("ENV_FILE_PATH", "/app/.env"))
 
 
 # Environment

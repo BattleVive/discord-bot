@@ -42,7 +42,9 @@ from .settings import COMMAND_SYNC_GUILD_ID
 from .settings import DATABASE_URL
 from .settings import DATA_DIR
 from .settings import DISCORD_BOT_TOKEN
+from .settings import ENV_FILE_PATH
 from .settings import LEADERBOARD_MAX_ENTRIES
+from .token_persistence import save_tokens_to_env
 
 
 DATA_DIR.mkdir(exist_ok=True)
@@ -181,6 +183,11 @@ class BattleviveBot(commands.Bot):
     leaderboard_service: LeaderboardService | None = None
 
     async def close(self) -> None:
+        save_tokens_to_env(
+            ENV_FILE_PATH,
+            battlevive_tokens.JWT_token,
+            battlevive_tokens.refresh_token,
+        )
         if revalidate_tokens.is_running():
             revalidate_tokens.cancel()
         if refresh_infrequently_changing_data.is_running():

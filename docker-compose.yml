@@ -8,6 +8,7 @@ services:
     env_file:
       - .env
     volumes:
+      - ./.env:/app/.env:Z
       - ./app/data:/app/data:Z
       - ./app/logs:/app/logs:Z
     networks:
