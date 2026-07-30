@@ -47,11 +47,14 @@ def get_pool() -> asyncpg.Pool:
     return _pool
 
 
-async def get_guild_config(guild_id: int) -> dict[str, int | None] | None:
+async def get_guild_config(
+    guild_id: int,
+) -> dict[str, int | bool | None] | None:
     pool = get_pool()
     row = await pool.fetchrow(
         """
-        SELECT guild_id, leaderboard_channel_id, leaderboard_limit, updated_by
+        SELECT guild_id, leaderboard_channel_id, leaderboard_limit,
+               debug_commands_enabled, updated_by
         FROM guild_config
         WHERE guild_id = $1
         """,
@@ -106,6 +109,26 @@ async def set_leaderboard_limit(
         """,
         guild_id,
         leaderboard_limit,
+        updated_by,
+    )
+
+
+async def set_debug_commands_enabled(
+    guild_id: int,
+    enabled: bool,
+    updated_by: int,
+) -> None:
+    await get_pool().execute(
+        """
+        INSERT INTO guild_config (guild_id, debug_commands_enabled, updated_by)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET debug_commands_enabled = EXCLUDED.debug_commands_enabled,
+            updated_at = now(),
+            updated_by = EXCLUDED.updated_by
+        """,
+        guild_id,
+        enabled,
         updated_by,
     )
 
