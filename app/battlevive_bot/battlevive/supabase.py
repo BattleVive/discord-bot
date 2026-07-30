@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import aiohttp
+from urllib.parse import urlsplit
 
 from .tokens import TokenPair
 from ..logs import logger
@@ -14,10 +15,21 @@ class SupabaseTransport:
         *,
         session: aiohttp.ClientSession | None = None,
     ) -> None:
+        parsed_url = urlsplit(supabase_url)
+        if (
+            parsed_url.scheme != "https"
+            or not parsed_url.hostname
+            or parsed_url.username is not None
+            or parsed_url.password is not None
+        ):
+            raise ValueError("Supabase URL must be a safe HTTPS URL")
+        if not api_key:
+            raise ValueError("Supabase API key is required")
         self._supabase_url = supabase_url.rstrip("/")
         self._api_key = api_key
         self._session = session
         self._owns_session = session is None
+        self._timeout = aiohttp.ClientTimeout(total=15, connect=5)
 
     async def get(self, endpoint: str, access_token: str) -> object:
         session = self._get_session()
@@ -29,7 +41,11 @@ class SupabaseTransport:
         url = f"{self._supabase_url}/rest/v1/{endpoint}"
 
         try:
-            async with session.get(url, headers=headers) as response:
+            async with session.get(
+                url,
+                headers=headers,
+                timeout=self._timeout,
+            ) as response:
                 if response.status != 200:
                     await response.text()
                     logger.error(
@@ -57,7 +73,7 @@ class SupabaseTransport:
                 url,
                 headers=headers,
                 json=payload,
-                timeout=10,
+                timeout=self._timeout,
             ) as response:
                 if response.status != 200:
                     await response.text()
@@ -92,6 +108,6 @@ class SupabaseTransport:
 
     def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            self._session = aiohttp.ClientSession(timeout=self._timeout)
             self._owns_session = True
         return self._session

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import stat
 import tempfile
 
 
@@ -33,11 +34,30 @@ class TokenStore:
         self.path = Path(path)
 
     def load(self) -> TokenPair | None:
+        file_descriptor = -1
         try:
-            with self.path.open("r", encoding="utf-8") as file:
+            path_stat = self.path.lstat()
+            if not stat.S_ISREG(path_stat.st_mode):
+                return None
+            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            file_descriptor = os.open(self.path, flags)
+            opened_stat = os.fstat(file_descriptor)
+            if not stat.S_ISREG(opened_stat.st_mode):
+                os.close(file_descriptor)
+                file_descriptor = -1
+                return None
+            os.fchmod(file_descriptor, 0o600)
+            with os.fdopen(file_descriptor, "r", encoding="utf-8") as file:
+                file_descriptor = -1
                 record = json.load(file)
+        except FileNotFoundError:
+            return None
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return None
+        finally:
+            if file_descriptor >= 0:
+                os.close(file_descriptor)
 
         if not isinstance(record, dict):
             return None
@@ -48,6 +68,13 @@ class TokenStore:
 
     def save(self, tokens: TokenPair) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            existing_stat = self.path.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            if not stat.S_ISREG(existing_stat.st_mode):
+                raise OSError("Refusing to replace an unsafe token path")
         file_descriptor, temporary_name = tempfile.mkstemp(
             dir=self.path.parent,
             prefix=f".{self.path.name}.",
