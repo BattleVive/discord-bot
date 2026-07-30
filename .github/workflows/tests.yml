@@ -7,8 +7,7 @@ on:
     branches: ["main"]
 
 permissions:
-  checks: write
-  contents: write
+  contents: read
 
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.ref }}
@@ -19,6 +18,12 @@ jobs:
     name: Python 3.14
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      checks: write
+      contents: read
+    outputs:
+      passed: ${{ steps.test_report.outputs.passed }}
+      failed: ${{ steps.test_report.outputs.failed }}
 
     services:
       postgres:
@@ -75,46 +80,134 @@ jobs:
           reporter: java-junit
           fail-on-error: "false"
 
-      - name: Check out test badge data
-        if: >-
-          ${{ !cancelled() &&
-              github.event_name == 'push' &&
-              github.ref == 'refs/heads/main' &&
-              steps.test_report.outputs.passed != '' }}
-        uses: actions/checkout@v4
-        with:
-          ref: badges
-          path: test-badge
+  badge:
+    name: Test badge
+    needs: test
+    if: >-
+      ${{ always() &&
+          !cancelled() &&
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          needs.test.outputs.passed != '' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
-      - name: Update test badge
+    steps:
+      - name: Publish test badge
+        uses: actions/github-script@v7
         if: >-
-          ${{ !cancelled() &&
-              github.event_name == 'push' &&
-              github.ref == 'refs/heads/main' &&
-              steps.test_report.outputs.passed != '' }}
+          ${{ needs.test.outputs.passed != '' }}
         env:
-          PASSED: ${{ steps.test_report.outputs.passed }}
-          FAILED: ${{ steps.test_report.outputs.failed }}
-        run: |
-          color=brightgreen
-          if [ "$FAILED" != "0" ]; then
-            color=red
-          fi
+          PASSED: ${{ needs.test.outputs.passed }}
+          FAILED: ${{ needs.test.outputs.failed }}
+        with:
+          script: |
+            const passed = Number.parseInt(process.env.PASSED, 10)
+            const failed = Number.parseInt(process.env.FAILED, 10)
 
-          jq --compact-output \
-            --arg message "$PASSED passed | $FAILED failed" \
-            --arg color "$color" \
-            '{schemaVersion: 1, label: "tests", message: $message, color: $color}' \
-            > test-badge/tests.json
+            if (!Number.isSafeInteger(passed) || passed < 0 ||
+                !Number.isSafeInteger(failed) || failed < 0) {
+              core.setFailed('Test reporter returned invalid badge counts')
+              return
+            }
 
-          cd test-badge
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add tests.json
+            const owner = context.repo.owner
+            const repo = context.repo.repo
+            const branch = 'badges'
+            const path = 'tests.json'
+            const message = `${passed} passed | ${failed} failed`
+            const badge = `${JSON.stringify({
+              schemaVersion: 1,
+              label: 'tests',
+              message,
+              color: failed === 0 ? 'brightgreen' : 'red'
+            })}\n`
+            const commitMessage = `Badge: ${message}`
 
-          if git diff --cached --quiet; then
-            exit 0
-          fi
+            let branchExists = true
+            try {
+              await github.rest.git.getRef({
+                owner,
+                repo,
+                ref: `heads/${branch}`
+              })
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error
+              }
+              branchExists = false
+            }
 
-          git commit -m "Badge: $PASSED passed, $FAILED failed"
-          git push
+            if (!branchExists) {
+              const blob = await github.rest.git.createBlob({
+                owner,
+                repo,
+                content: badge,
+                encoding: 'utf-8'
+              })
+              const tree = await github.rest.git.createTree({
+                owner,
+                repo,
+                tree: [{
+                  path,
+                  mode: '100644',
+                  type: 'blob',
+                  sha: blob.data.sha
+                }]
+              })
+              const commit = await github.rest.git.createCommit({
+                owner,
+                repo,
+                message: commitMessage,
+                tree: tree.data.sha,
+                parents: []
+              })
+              await github.rest.git.createRef({
+                owner,
+                repo,
+                ref: `refs/heads/${branch}`,
+                sha: commit.data.sha
+              })
+              return
+            }
+
+            let existing = null
+            try {
+              const response = await github.rest.repos.getContent({
+                owner,
+                repo,
+                path,
+                ref: branch
+              })
+              if (Array.isArray(response.data) || response.data.type !== 'file') {
+                core.setFailed(`${path} on ${branch} is not a file`)
+                return
+              }
+              existing = response.data
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error
+              }
+            }
+
+            if (existing) {
+              const current = Buffer.from(
+                existing.content,
+                'base64'
+              ).toString('utf8')
+              if (current === badge) {
+                return
+              }
+            }
+
+            await github.rest.repos.createOrUpdateFileContents({
+              owner,
+              repo,
+              path,
+              message: commitMessage,
+              content: Buffer.from(badge).toString('base64'),
+              branch,
+              ...(existing ? {sha: existing.sha} : {})
+            })
