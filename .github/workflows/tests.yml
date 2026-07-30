@@ -8,7 +8,7 @@ on:
 
 permissions:
   checks: write
-  contents: read
+  contents: write
 
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.ref }}
@@ -67,9 +67,54 @@ jobs:
 
       - name: Publish test report
         if: ${{ !cancelled() }}
+        id: test_report
         uses: dorny/test-reporter@v2
         with:
           name: Pytest results
           path: test-results/pytest.xml
           reporter: java-junit
           fail-on-error: "false"
+
+      - name: Check out test badge data
+        if: >-
+          ${{ !cancelled() &&
+              github.event_name == 'push' &&
+              github.ref == 'refs/heads/main' &&
+              steps.test_report.outputs.passed != '' }}
+        uses: actions/checkout@v4
+        with:
+          ref: badges
+          path: test-badge
+
+      - name: Update test badge
+        if: >-
+          ${{ !cancelled() &&
+              github.event_name == 'push' &&
+              github.ref == 'refs/heads/main' &&
+              steps.test_report.outputs.passed != '' }}
+        env:
+          PASSED: ${{ steps.test_report.outputs.passed }}
+          FAILED: ${{ steps.test_report.outputs.failed }}
+        run: |
+          color=brightgreen
+          if [ "$FAILED" != "0" ]; then
+            color=red
+          fi
+
+          jq --compact-output \
+            --arg message "$PASSED passed | $FAILED failed" \
+            --arg color "$color" \
+            '{schemaVersion: 1, label: "tests", message: $message, color: $color}' \
+            > test-badge/tests.json
+
+          cd test-badge
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests.json
+
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+
+          git commit -m "Badge: $PASSED passed, $FAILED failed"
+          git push

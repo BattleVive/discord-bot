@@ -1,7 +1,9 @@
 name: battlevive
 services:
   bot:
-    image: voxix/battlevive-bot:latest
+    image: battlevive-bot:local
+    build:
+      context: .
     restart: unless-stopped
     env_file:
       - .env
