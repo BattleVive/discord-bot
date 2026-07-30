@@ -1,184 +1,434 @@
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Callable
 
+import aiohttp
 import pytest
 
-from battlevive_bot import battlevive_api
+from battlevive_bot.battlevive.client import BattleviveClient
+from battlevive_bot.battlevive.supabase import SupabaseTransport
+from battlevive_bot.battlevive.tokens import TokenPair
+from battlevive_bot.battlevive.tokens import TokenStore
 from tests.factories import lobby_payload
 from tests.factories import season_rating_payload
 from tests.factories import user_payload
 
 
-class FakeRequestsResponse:
-    def __init__(self, payload: dict[str, str]) -> None:
-        self._payload = payload
-        self.headers = {"content-type": "application/json"}
-        self.status_code = 200
-        self.text = "{}"
-        self.raise_called = False
-
-    def raise_for_status(self) -> None:
-        self.raise_called = True
-
-    def json(self) -> dict[str, str]:
-        return self._payload
-
-
-def test_revalidate_posts_refresh_token_and_returns_new_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
-    response = FakeRequestsResponse(
-        {
-            "refresh_token": "new-refresh",
-            "access_token": "new-access",
-        }
+def response_error(status: int) -> aiohttp.ClientResponseError:
+    return aiohttp.ClientResponseError(
+        request_info=SimpleNamespace(real_url="https://supabase.test/rest/v1/users"),
+        history=(),
+        status=status,
+        message="request failed",
     )
-    calls: list[dict[str, object]] = []
 
-    def fake_post(
-        url: str,
-        headers: dict[str, str],
-        json: dict[str, str | None],
-        timeout: int,
-    ) -> FakeRequestsResponse:
-        calls.append(
-            {
-                "url": url,
-                "headers": headers,
-                "json": json,
-                "timeout": timeout,
-            }
+
+class FakeTransport:
+    def __init__(
+        self,
+        *,
+        payloads: dict[str, object] | None = None,
+        refreshed_tokens: TokenPair | None = None,
+    ) -> None:
+        self.payloads = payloads or {}
+        self.refreshed_tokens = refreshed_tokens or TokenPair(
+            "new-access",
+            "new-refresh",
         )
-        return response
+        self.get_calls: list[tuple[str, str]] = []
+        self.refresh_calls: list[str] = []
+        self.closed = False
 
-    monkeypatch.setattr(battlevive_api, "SUPABASE_URL", "https://supabase.test")
-    monkeypatch.setattr(battlevive_api, "SUPABASE_API_KEY", "fake-api-key")
-    monkeypatch.setattr(battlevive_api.requests, "post", fake_post)
+    async def get(self, endpoint: str, access_token: str) -> object:
+        self.get_calls.append((endpoint, access_token))
+        payload = self.payloads[endpoint]
+        if isinstance(payload, BaseException):
+            raise payload
+        return payload
 
-    refresh_token, access_token = battlevive_api.BattleviveTokenManager.revalidate("old-refresh")
+    async def refresh(self, refresh_token: str) -> TokenPair:
+        self.refresh_calls.append(refresh_token)
+        if isinstance(self.refreshed_tokens, BaseException):
+            raise self.refreshed_tokens
+        return self.refreshed_tokens
 
-    assert refresh_token == "new-refresh"
-    assert access_token == "new-access"
-    assert response.raise_called is True
-    assert calls == [
-        {
-            "url": "https://supabase.test/auth/v1/token?grant_type=refresh_token",
-            "headers": {
-                "Content-Type": "application/json",
-                "apikey": "fake-api-key",
-            },
-            "json": {"refresh_token": "old-refresh"},
-            "timeout": 10,
-        }
+    async def close(self) -> None:
+        self.closed = True
+
+
+def make_client(
+    tmp_path: Path,
+    transport: FakeTransport,
+    *,
+    token_path: Path | None = None,
+) -> BattleviveClient:
+    return BattleviveClient(
+        bootstrap_access_token="bootstrap-access",
+        bootstrap_refresh_token="bootstrap-refresh",
+        token_path=token_path or tmp_path / "tokens.json",
+        supabase_url="https://supabase.test",
+        supabase_api_key="api-key",
+        transport=transport,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "endpoint", "payload", "summary"),
+    [
+        ("get_users", "users", [user_payload()], ["PlayerOne"]),
+        ("get_lobbies", "lobbies", [lobby_payload()], [101]),
+        (
+            "get_season_ratings",
+            "season_ratings",
+            [season_rating_payload()],
+            [1999],
+        ),
+        (
+            "get_user_trophies",
+            "user_trophies",
+            [{"kind": "champion"}],
+            [{"kind": "champion"}],
+        ),
+    ],
+)
+async def test_client_parses_every_endpoint(
+    tmp_path: Path,
+    method_name: str,
+    endpoint: str,
+    payload: object,
+    summary: list[object],
+) -> None:
+    transport = FakeTransport(payloads={endpoint: payload})
+    client = make_client(tmp_path, transport)
+
+    result = await getattr(client, method_name)()
+
+    if endpoint == "users":
+        actual = [item.discord_username for item in result]
+    elif endpoint == "lobbies":
+        actual = [item.id for item in result]
+    elif endpoint == "season_ratings":
+        actual = [item.mmr for item in result]
+    else:
+        actual = [item.json() for item in result]
+    assert actual == summary
+    assert transport.get_calls == [(endpoint, "bootstrap-access")]
+
+
+@pytest.mark.asyncio
+async def test_persisted_state_takes_precedence_over_bootstrap(
+    tmp_path: Path,
+) -> None:
+    token_path = tmp_path / "tokens.json"
+    TokenStore(token_path).save(TokenPair("persisted-access", "persisted-refresh"))
+    transport = FakeTransport(payloads={"users": [user_payload()]})
+    client = make_client(tmp_path, transport, token_path=token_path)
+
+    await client.get_users()
+    await client.refresh_credentials()
+
+    assert transport.get_calls == [("users", "persisted-access")]
+    assert transport.refresh_calls == ["persisted-refresh"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("contents", [None, "{bad-json", '{"access_token": "only"}'])
+async def test_missing_or_invalid_state_falls_back_to_bootstrap(
+    tmp_path: Path,
+    contents: str | None,
+) -> None:
+    token_path = tmp_path / "tokens.json"
+    if contents is not None:
+        token_path.write_text(contents, encoding="utf-8")
+    transport = FakeTransport(payloads={"users": [user_payload()]})
+    client = make_client(tmp_path, transport, token_path=token_path)
+
+    await client.get_users()
+
+    assert transport.get_calls == [("users", "bootstrap-access")]
+
+
+@pytest.mark.asyncio
+async def test_successful_refresh_updates_memory_and_persists_immediately(
+    tmp_path: Path,
+) -> None:
+    token_path = tmp_path / "tokens.json"
+    transport = FakeTransport(
+        payloads={"users": [user_payload()]},
+        refreshed_tokens=TokenPair("rotated-access", "rotated-refresh"),
+    )
+    client = make_client(tmp_path, transport, token_path=token_path)
+
+    await client.refresh_credentials()
+    await client.get_users()
+
+    assert TokenStore(token_path).load() == TokenPair(
+        "rotated-access",
+        "rotated-refresh",
+    )
+    assert transport.get_calls == [("users", "rotated-access")]
+
+
+@pytest.mark.asyncio
+async def test_failed_refresh_does_not_mutate_credentials(tmp_path: Path) -> None:
+    transport = FakeTransport(payloads={"users": [user_payload()]})
+
+    async def fail_refresh(refresh_token: str) -> TokenPair:
+        assert refresh_token == "bootstrap-refresh"
+        raise RuntimeError("upstream unavailable")
+
+    transport.refresh = fail_refresh
+    client = make_client(tmp_path, transport)
+
+    with pytest.raises(RuntimeError, match="upstream unavailable"):
+        await client.refresh_credentials()
+    await client.get_users()
+
+    assert transport.get_calls == [("users", "bootstrap-access")]
+
+
+@pytest.mark.asyncio
+async def test_persistence_failure_keeps_rotated_credentials_in_memory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    transport = FakeTransport(
+        payloads={"users": [user_payload()]},
+        refreshed_tokens=TokenPair("rotated-access", "rotated-refresh"),
+    )
+    client = make_client(tmp_path, transport)
+
+    def fail_save(tokens: TokenPair) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(client._token_store, "save", fail_save)
+
+    await client.refresh_credentials()
+    await client.get_users()
+
+    assert transport.get_calls == [("users", "rotated-access")]
+
+
+class RetryTransport(FakeTransport):
+    def __init__(self, retry_error: BaseException | None = None) -> None:
+        super().__init__(payloads={})
+        self.retry_error = retry_error
+
+    async def get(self, endpoint: str, access_token: str) -> object:
+        self.get_calls.append((endpoint, access_token))
+        if access_token == "bootstrap-access":
+            raise response_error(401)
+        if self.retry_error is not None:
+            raise self.retry_error
+        return [user_payload()]
+
+
+@pytest.mark.asyncio
+async def test_401_refreshes_and_retries_once(tmp_path: Path) -> None:
+    transport = RetryTransport()
+    client = make_client(tmp_path, transport)
+
+    users = await client.get_users()
+
+    assert [user.discord_username for user in users] == ["PlayerOne"]
+    assert transport.refresh_calls == ["bootstrap-refresh"]
+    assert transport.get_calls == [
+        ("users", "bootstrap-access"),
+        ("users", "new-access"),
     ]
 
 
-class FakeAiohttpResponse:
+@pytest.mark.asyncio
+async def test_retry_failure_is_propagated_without_another_refresh(
+    tmp_path: Path,
+) -> None:
+    retry_error = response_error(401)
+    transport = RetryTransport(retry_error=retry_error)
+    client = make_client(tmp_path, transport)
+
+    with pytest.raises(aiohttp.ClientResponseError) as caught:
+        await client.get_users()
+
+    assert caught.value is retry_error
+    assert transport.refresh_calls == ["bootstrap-refresh"]
+    assert len(transport.get_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_non_auth_error_propagates_without_refresh(tmp_path: Path) -> None:
+    error = response_error(500)
+    transport = FakeTransport(payloads={"users": error})
+    client = make_client(tmp_path, transport)
+
+    with pytest.raises(aiohttp.ClientResponseError) as caught:
+        await client.get_users()
+
+    assert caught.value is error
+    assert transport.refresh_calls == []
+
+
+class ConcurrentRetryTransport(FakeTransport):
+    def __init__(self) -> None:
+        super().__init__(payloads={})
+        self._old_requests = 0
+        self._both_old_requests_started = asyncio.Event()
+
+    async def get(self, endpoint: str, access_token: str) -> object:
+        self.get_calls.append((endpoint, access_token))
+        if access_token == "bootstrap-access":
+            self._old_requests += 1
+            if self._old_requests == 2:
+                self._both_old_requests_started.set()
+            await self._both_old_requests_started.wait()
+            raise response_error(401)
+        return [user_payload()]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_401_responses_share_one_refresh(tmp_path: Path) -> None:
+    transport = ConcurrentRetryTransport()
+    client = make_client(tmp_path, transport)
+
+    first, second = await asyncio.gather(
+        client.get_users(),
+        client.get_users(),
+    )
+
+    assert len(first) == len(second) == 1
+    assert transport.refresh_calls == ["bootstrap-refresh"]
+    assert transport.get_calls.count(("users", "bootstrap-access")) == 2
+    assert transport.get_calls.count(("users", "new-access")) == 2
+
+
+class FakeResponse:
     def __init__(self, status: int, payload: object, body: str = "") -> None:
         self.status = status
-        self._payload = payload
-        self._body = body
+        self.payload = payload
+        self.body = body
         self.raise_called = False
 
     async def json(self) -> object:
-        return self._payload
+        return self.payload
 
     async def text(self) -> str:
-        return self._body
+        return self.body
 
     def raise_for_status(self) -> None:
         self.raise_called = True
-        raise battlevive_api.aiohttp.ClientResponseError(
-            request_info=SimpleNamespace(real_url="https://supabase.test/rest/v1/users"),
-            history=(),
-            status=self.status,
-            message=self._body,
-        )
+        raise response_error(self.status)
 
 
-class FakeGetContext:
-    def __init__(self, response: FakeAiohttpResponse) -> None:
+class ResponseContext:
+    def __init__(self, response: FakeResponse) -> None:
         self.response = response
 
-    async def __aenter__(self) -> FakeAiohttpResponse:
+    async def __aenter__(self) -> FakeResponse:
         return self.response
 
-    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+    async def __aexit__(
+        self,
+        exc_type: object,
+        exc: object,
+        traceback: object,
+    ) -> None:
         return None
 
 
-def install_fake_session(
-    monkeypatch: pytest.MonkeyPatch,
-    response: FakeAiohttpResponse,
-) -> list[dict[str, object]]:
-    requests: list[dict[str, object]] = []
+class FakeSession:
+    def __init__(self, responses: list[FakeResponse]) -> None:
+        self.responses = responses
+        self.calls: list[tuple[str, str, dict[str, object]]] = []
+        self.closed = False
 
-    class FakeClientSession:
-        async def __aenter__(self) -> "FakeClientSession":
-            return self
+    def get(self, url: str, **kwargs: object) -> ResponseContext:
+        self.calls.append(("GET", url, kwargs))
+        return ResponseContext(self.responses.pop(0))
 
-        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
-            return None
+    def post(self, url: str, **kwargs: object) -> ResponseContext:
+        self.calls.append(("POST", url, kwargs))
+        return ResponseContext(self.responses.pop(0))
 
-        def get(self, url: str, headers: dict[str, str]) -> FakeGetContext:
-            requests.append({"url": url, "headers": headers})
-            return FakeGetContext(response)
-
-    monkeypatch.setattr(battlevive_api.aiohttp, "ClientSession", FakeClientSession)
-    return requests
+    async def close(self) -> None:
+        self.closed = True
 
 
-@pytest.mark.parametrize(
-    ("function_name", "endpoint", "payload", "expected_summary"),
-    [
-        ("query_users", "users", [user_payload()], ["PlayerOne"]),
-        ("query_lobbies", "lobbies", [lobby_payload()], [101]),
-        ("query_season_ratings", "season_ratings", [season_rating_payload()], [1999]),
-        ("query_user_trophies", "user_trophies", [{"kind": "champion"}], [{"kind": "champion"}]),
-    ],
-)
 @pytest.mark.asyncio
-async def test_query_endpoints_fetch_supabase_endpoint_and_parse_response(
-    monkeypatch: pytest.MonkeyPatch,
-    function_name: str,
-    endpoint: str,
-    payload: list[dict[str, object]],
-    expected_summary: list[object],
-) -> None:
-    monkeypatch.setattr(battlevive_api, "SUPABASE_URL", "https://supabase.test")
-    monkeypatch.setattr(battlevive_api, "SUPABASE_API_KEY", "fake-api-key")
-    response = FakeAiohttpResponse(status=200, payload=payload)
-    requests = install_fake_session(monkeypatch, response)
+@pytest.mark.parametrize(
+    "endpoint",
+    ["users", "lobbies", "season_ratings", "user_trophies"],
+)
+async def test_transport_builds_rest_urls_and_headers(endpoint: str) -> None:
+    session = FakeSession([FakeResponse(200, [])])
+    transport = SupabaseTransport(
+        "https://supabase.test/",
+        "api-key",
+        session=session,
+    )
 
-    result = await getattr(battlevive_api, function_name)("jwt-token")
+    assert await transport.get(endpoint, "access-token") == []
 
-    if endpoint == "users":
-        summary = [item.discord_username for item in result]
-    elif endpoint == "lobbies":
-        summary = [item.id for item in result]
-    elif endpoint == "season_ratings":
-        summary = [item.mmr for item in result]
-    else:
-        summary = [item.json() for item in result]
-
-    assert summary == expected_summary
-    assert requests == [
-        {
-            "url": f"https://supabase.test/rest/v1/{endpoint}",
-            "headers": {
-                "Authorization": "Bearer jwt-token",
-                "apikey": "fake-api-key",
-                "Content-Type": "application/json",
+    assert session.calls == [
+        (
+            "GET",
+            f"https://supabase.test/rest/v1/{endpoint}",
+            {
+                "headers": {
+                    "Authorization": "Bearer access-token",
+                    "apikey": "api-key",
+                    "Content-Type": "application/json",
+                }
             },
-        }
+        )
     ]
 
 
 @pytest.mark.asyncio
-async def test_query_users_raises_for_non_success_status(monkeypatch: pytest.MonkeyPatch) -> None:
-    response = FakeAiohttpResponse(status=401, payload=[], body="unauthorized")
-    install_fake_session(monkeypatch, response)
+async def test_transport_refresh_posts_token_and_parses_pair() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                {
+                    "access_token": "new-access",
+                    "refresh_token": "new-refresh",
+                },
+            )
+        ]
+    )
+    transport = SupabaseTransport(
+        "https://supabase.test",
+        "api-key",
+        session=session,
+    )
 
-    with pytest.raises(battlevive_api.aiohttp.ClientResponseError):
-        await battlevive_api.query_users("bad-token")
+    tokens = await transport.refresh("old-refresh")
 
-    assert response.raise_called is True
+    assert tokens == TokenPair("new-access", "new-refresh")
+    assert session.calls == [
+        (
+            "POST",
+            "https://supabase.test/auth/v1/token?grant_type=refresh_token",
+            {
+                "headers": {
+                    "Content-Type": "application/json",
+                    "apikey": "api-key",
+                },
+                "json": {"refresh_token": "old-refresh"},
+                "timeout": 10,
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_client_closes_transport(tmp_path: Path) -> None:
+    transport = FakeTransport()
+    client = make_client(tmp_path, transport)
+
+    await client.close()
+
+    assert transport.closed is True

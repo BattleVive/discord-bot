@@ -15,13 +15,9 @@ from discord.ext import commands
 from discord.ext import tasks
 # pyrefly: ignore [missing-import]
 from PIL import Image
-import requests
 
 from . import db
-from .battlevive_api import BattleviveTokenManager
-from .battlevive_api import query_lobbies
-from .battlevive_api import query_season_ratings
-from .battlevive_api import query_users
+from .battlevive import BattleviveClient
 from .db import close_pool
 from .db import get_pool
 from .db import init_pool
@@ -38,20 +34,24 @@ from .roles import give_battlevive_role
 from .roles import give_rank_roles
 from .settings import BATTLEVIVE_BOOTSTRAP_JWT
 from .settings import BATTLEVIVE_BOOTSTRAP_REFRESH_TOKEN
+from .settings import BATTLEVIVE_TOKEN_PATH
 from .settings import COMMAND_SYNC_GUILD_ID
 from .settings import DATABASE_URL
 from .settings import DATA_DIR
 from .settings import DISCORD_BOT_TOKEN
-from .settings import ENV_FILE_PATH
 from .settings import LEADERBOARD_MAX_ENTRIES
-from .token_persistence import save_tokens_to_env
+from .settings import SUPABASE_API_KEY
+from .settings import SUPABASE_URL
 
 
 DATA_DIR.mkdir(exist_ok=True)
 
-battlevive_tokens = BattleviveTokenManager(
-    JWT_token=BATTLEVIVE_BOOTSTRAP_JWT,
-    refresh_token=BATTLEVIVE_BOOTSTRAP_REFRESH_TOKEN,
+battlevive_client = BattleviveClient(
+    bootstrap_access_token=BATTLEVIVE_BOOTSTRAP_JWT,
+    bootstrap_refresh_token=BATTLEVIVE_BOOTSTRAP_REFRESH_TOKEN,
+    token_path=BATTLEVIVE_TOKEN_PATH,
+    supabase_url=SUPABASE_URL,
+    supabase_api_key=SUPABASE_API_KEY,
 )
 
 battlevive_users: list[User] = []
@@ -63,15 +63,12 @@ season_ratings: list[SeasonRating] = []
 @tasks.loop(minutes=30)
 async def revalidate_tokens() -> None:
     try:
-        new_refresh_token, new_JWT = BattleviveTokenManager.revalidate(
-            refresh_token=battlevive_tokens.refresh_token
+        await battlevive_client.refresh_credentials()
+    except Exception:
+        logger.exception(
+            "Failed to revalidate Battlevive credentials, retrying next cycle."
         )
-    except requests.exceptions.RequestException as error:
-        logger.error("Failed to revalidate tokens: %s", error)
-        raise
-
-    battlevive_tokens.JWT_token = new_JWT
-    battlevive_tokens.refresh_token = new_refresh_token
+        return
     logger.debug("Token revalidation cycle completed successfully.")
 
 
@@ -85,7 +82,7 @@ async def refresh_infrequently_changing_data() -> None:
     global battlevive_users
 
     try:
-        fetched_users = await query_users(battlevive_tokens.JWT_token)
+        fetched_users = await battlevive_client.get_users()
     except Exception:
         logger.exception("Failed to refresh Battlevive users, skipping this cycle.")
         return
@@ -121,8 +118,8 @@ async def refresh_frequently_changing_data() -> None:
 
     try:
         fetched_lobbies, fetched_season_ratings = await asyncio.gather(
-            query_lobbies(battlevive_tokens.JWT_token),
-            query_season_ratings(battlevive_tokens.JWT_token),
+            battlevive_client.get_lobbies(),
+            battlevive_client.get_season_ratings(),
         )
     except Exception:
         logger.exception(
@@ -138,7 +135,7 @@ async def refresh_frequently_changing_data() -> None:
     except MissingUsersError:
         logger.warning("Fetched data contains new users; refreshing users and retrying.")
         try:
-            fetched_users = await query_users(battlevive_tokens.JWT_token)
+            fetched_users = await battlevive_client.get_users()
             await sync_battlevive_data_to_db(
                 users=fetched_users,
                 lobbies=fetched_lobbies,
@@ -183,11 +180,6 @@ class BattleviveBot(commands.Bot):
     leaderboard_service: LeaderboardService | None = None
 
     async def close(self) -> None:
-        save_tokens_to_env(
-            ENV_FILE_PATH,
-            battlevive_tokens.JWT_token,
-            battlevive_tokens.refresh_token,
-        )
         if revalidate_tokens.is_running():
             revalidate_tokens.cancel()
         if refresh_infrequently_changing_data.is_running():
@@ -197,6 +189,7 @@ class BattleviveBot(commands.Bot):
         if self.leaderboard_service is not None:
             await self.leaderboard_service.stop()
             self.leaderboard_service = None
+        await battlevive_client.close()
         await close_pool()
         await super().close()
 
@@ -682,9 +675,9 @@ async def refresh(interaction: discord.Interaction) -> None:
     try:
         await interaction.response.defer(ephemeral=True)
         fetched_users, fetched_lobbies, fetched_season_ratings = await asyncio.gather(
-            query_users(battlevive_tokens.JWT_token),
-            query_lobbies(battlevive_tokens.JWT_token),
-            query_season_ratings(battlevive_tokens.JWT_token),
+            battlevive_client.get_users(),
+            battlevive_client.get_lobbies(),
+            battlevive_client.get_season_ratings(),
         )
         await sync_battlevive_data_to_db(
             fetched_users,

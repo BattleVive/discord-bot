@@ -1,16 +1,18 @@
-# Runtime state is mounted into containers and must never enter the build context.
+# Include only files consumed by Dockerfile.
+**
+!Dockerfile
+!apk-build-deps.txt
+!apk-runtime-deps.txt
+!app/
+!app/requirements.lock
+!app/assets/
+!app/assets/**
+!app/main.py
+!app/battlevive_bot/
+!app/battlevive_bot/**
+
+# Never traverse runtime mounts or include generated Python files.
 app/data/
 app/logs/
-
-# Local configuration and development files.
-.env
-.git/
-.github/
-.pytest_cache/
-.venv/
-.vscode/
 **/__pycache__/
-*.log
-AGENTS.md
-tests/
-utils/
+*.py[cod]

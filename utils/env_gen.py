@@ -6,6 +6,11 @@ import sys
 from pathlib import Path
 from shutil import copy2
 
+UTILS_DIR = Path(__file__).resolve().parent
+ROOT_DIR = UTILS_DIR.parent
+APP_DIR = ROOT_DIR / "app"
+sys.path.insert(0, str(APP_DIR))
+
 # pyrefly: ignore [missing-import]
 from playwright.sync_api import sync_playwright
 
@@ -14,19 +19,29 @@ from dotenv import load_dotenv
 # pyrefly: ignore [missing-import]
 from dotenv import set_key
 
-load_dotenv()
+from battlevive_bot.battlevive.tokens import TokenPair
+from battlevive_bot.battlevive.tokens import TokenStore
 
-AUTH_FILE = "playwright/.auth/state.json"
 
+load_dotenv(UTILS_DIR / ".env")
+
+
+AUTH_FILE = UTILS_DIR / "playwright/.auth/state.json"
+UTILS_ENV = UTILS_DIR / ".env"
+ROOT_ENV = ROOT_DIR / ".env"
+TOKEN_FILE = ROOT_DIR / "app/data/battlevive_tokens.json"
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 
 
-def login_discord():
+def login_discord() -> None:
+    AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
 
-        if os.path.exists(AUTH_FILE):
-            context = browser.new_context(storage_state=AUTH_FILE)
+        if AUTH_FILE.exists():
+            AUTH_FILE.chmod(0o600)
+            context = browser.new_context(storage_state=str(AUTH_FILE))
         else:
             context = browser.new_context()
 
@@ -38,59 +53,46 @@ def login_discord():
 
         input("Complete login in the browser, then press Enter here...")
 
-        context.storage_state(path=AUTH_FILE)
+        context.storage_state(path=str(AUTH_FILE))
+        AUTH_FILE.chmod(0o600)
         browser.close()
 
 
-def get_JWT_token() -> str:
-    if not os.path.exists(AUTH_FILE):
-        print(f"Missing: {AUTH_FILE}. Run save_state.py first.")
-        sys.exit(1)
+def get_token_pair() -> TokenPair:
+    if not AUTH_FILE.exists():
+        raise FileNotFoundError(f"Missing Playwright auth state: {AUTH_FILE}")
 
-    with open(AUTH_FILE, "r") as f:
-        state = json.load(f)
-
-    for origin in state.get("origins", []):
-        if origin["origin"] != "https://battlevive.com":
-            continue
-        for item in origin.get("localStorage", []):
-            if item["name"] == "sb-usfuamngimwsnnfemhsl-auth-token":
-                auth_data = json.loads(item["value"])
-                return auth_data["access_token"]
-
-    raise RuntimeError("Access token not found.")
-
-
-def get_refresh_token() -> str:
-    with open(AUTH_FILE, "r") as f:
-        state = json.load(f)
+    with AUTH_FILE.open("r", encoding="utf-8") as file:
+        state = json.load(file)
 
     for origin in state.get("origins", []):
-        if origin["origin"] != "https://battlevive.com":
+        if origin.get("origin") != "https://battlevive.com":
             continue
         for item in origin.get("localStorage", []):
-            if item["name"] == "sb-usfuamngimwsnnfemhsl-auth-token":
+            if item.get("name") == "sb-usfuamngimwsnnfemhsl-auth-token":
                 auth_data = json.loads(item["value"])
-                return auth_data["refresh_token"]
+                tokens = TokenPair.from_values(
+                    auth_data.get("access_token"),
+                    auth_data.get("refresh_token"),
+                )
+                if tokens is not None:
+                    return tokens
 
-    raise RuntimeError("Refresh token not found.")
+    raise RuntimeError("Complete token pair not found in Playwright auth state.")
 
 
-def main():
+def main() -> None:
     login_discord()
 
-    bootstrap_jwt = get_JWT_token()
-    bootstrap_refresh_token = get_refresh_token()
-
-    utils_env = Path(".env")
-    root_env = Path("../.env")
+    tokens = get_token_pair()
 
     # Always recreate .env files from utils/.env
-    copy2(utils_env, root_env)
+    copy2(UTILS_ENV, ROOT_ENV)
 
     # Inject generated values
-    set_key(root_env, "BOOTSTRAP_JWT", bootstrap_jwt)
-    set_key(root_env, "BOOTSTRAP_REFRESH_TOKEN", bootstrap_refresh_token)
+    set_key(ROOT_ENV, "BOOTSTRAP_JWT", tokens.access_token)
+    set_key(ROOT_ENV, "BOOTSTRAP_REFRESH_TOKEN", tokens.refresh_token)
+    TokenStore(TOKEN_FILE).save(tokens)
 
 
 if __name__ == "__main__":
