@@ -249,13 +249,14 @@ async def test_manual_refresh_preserves_result_order(
         ratings=fetched_ratings,
     )
     synced: list[tuple[object, ...]] = []
+    role_guilds: list[object] = []
     messages: list[tuple[str, bool]] = []
 
     async def sync_data(*args: object) -> None:
         synced.append(args)
 
-    async def no_op(*args: object) -> None:
-        return None
+    async def record_roles(*args: object, **kwargs: object) -> None:
+        role_guilds.append(kwargs["guild"])
 
     class Response:
         async def defer(self, *, ephemeral: bool) -> None:
@@ -267,15 +268,78 @@ async def test_manual_refresh_preserves_result_order(
 
     monkeypatch.setattr(bot_module, "battlevive_client", client)
     monkeypatch.setattr(bot_module, "sync_battlevive_data_to_db", sync_data)
-    monkeypatch.setattr(bot_module, "give_battlevive_role", no_op)
-    monkeypatch.setattr(bot_module, "give_rank_roles", no_op)
+    monkeypatch.setattr(bot_module, "give_battlevive_role", record_roles)
+    monkeypatch.setattr(bot_module, "give_rank_roles", record_roles)
     monkeypatch.setattr(bot_module.bot, "leaderboard_service", None)
-    interaction = SimpleNamespace(response=Response(), followup=Followup())
+    guild = SimpleNamespace(id=123)
+    user = SimpleNamespace(
+        guild_permissions=SimpleNamespace(manage_guild=True),
+    )
+    interaction = SimpleNamespace(
+        response=Response(),
+        followup=Followup(),
+        guild=guild,
+        user=user,
+    )
 
     await bot_module.refresh.callback(interaction)
 
     assert synced == [(users, fetched_lobbies, fetched_ratings)]
+    assert role_guilds == [guild, guild]
     assert messages == [("Battlevive data refreshed.", True)]
+
+
+@pytest.mark.asyncio
+async def test_manual_refresh_rejects_overlap_without_upstream_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeClient()
+    monkeypatch.setattr(bot_module, "battlevive_client", client)
+    messages: list[dict[str, object]] = []
+
+    class Response:
+        async def send_message(self, content: str, **kwargs: object) -> None:
+            messages.append({"content": content, **kwargs})
+
+    interaction = SimpleNamespace(
+        guild=SimpleNamespace(id=1),
+        user=SimpleNamespace(
+            guild_permissions=SimpleNamespace(manage_guild=True),
+        ),
+        response=Response(),
+    )
+    await bot_module._manual_refresh_lock.acquire()
+    try:
+        await bot_module.refresh.callback(interaction)
+    finally:
+        bot_module._manual_refresh_lock.release()
+
+    assert client.calls == []
+    assert messages[0]["content"].startswith("A manual refresh is already running")
+
+
+@pytest.mark.asyncio
+async def test_member_join_uses_only_targeted_local_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reconciled: list[object] = []
+    client = FakeClient()
+
+    async def reconcile(member: object) -> None:
+        reconciled.append(member)
+
+    monkeypatch.setattr(bot_module, "battlevive_client", client)
+    monkeypatch.setattr(bot_module, "reconcile_member_roles", reconcile)
+    monkeypatch.setattr(bot_module.bot, "leaderboard_service", None)
+    member = SimpleNamespace(
+        id=123,
+        guild=SimpleNamespace(id=456),
+    )
+
+    await bot_module.on_member_join(member)
+
+    assert reconciled == [member]
+    assert client.calls == []
 
 
 @pytest.mark.asyncio

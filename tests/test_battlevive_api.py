@@ -371,19 +371,17 @@ async def test_transport_builds_rest_urls_and_headers(endpoint: str) -> None:
 
     assert await transport.get(endpoint, "access-token") == []
 
-    assert session.calls == [
-        (
-            "GET",
-            f"https://supabase.test/rest/v1/{endpoint}",
-            {
-                "headers": {
-                    "Authorization": "Bearer access-token",
-                    "apikey": "api-key",
-                    "Content-Type": "application/json",
-                }
-            },
-        )
-    ]
+    method, url, kwargs = session.calls[0]
+    assert method == "GET"
+    assert url == f"https://supabase.test/rest/v1/{endpoint}"
+    assert kwargs["headers"] == {
+        "Authorization": "Bearer access-token",
+        "apikey": "api-key",
+        "Content-Type": "application/json",
+    }
+    assert isinstance(kwargs["timeout"], aiohttp.ClientTimeout)
+    assert kwargs["timeout"].total == 15
+    assert kwargs["timeout"].connect == 5
 
 
 @pytest.mark.asyncio
@@ -408,20 +406,16 @@ async def test_transport_refresh_posts_token_and_parses_pair() -> None:
     tokens = await transport.refresh("old-refresh")
 
     assert tokens == TokenPair("new-access", "new-refresh")
-    assert session.calls == [
-        (
-            "POST",
-            "https://supabase.test/auth/v1/token?grant_type=refresh_token",
-            {
-                "headers": {
-                    "Content-Type": "application/json",
-                    "apikey": "api-key",
-                },
-                "json": {"refresh_token": "old-refresh"},
-                "timeout": 10,
-            },
-        )
-    ]
+    method, url, kwargs = session.calls[0]
+    assert method == "POST"
+    assert url == "https://supabase.test/auth/v1/token?grant_type=refresh_token"
+    assert kwargs["headers"] == {
+        "Content-Type": "application/json",
+        "apikey": "api-key",
+    }
+    assert kwargs["json"] == {"refresh_token": "old-refresh"}
+    assert isinstance(kwargs["timeout"], aiohttp.ClientTimeout)
+    assert kwargs["timeout"].total == 15
 
 
 @pytest.mark.asyncio

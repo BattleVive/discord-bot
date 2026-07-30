@@ -121,6 +121,14 @@ async def test_init_db_sql_creates_expected_schema(postgres_db: None) -> None:
         )
         """
     )
+    assert await pool.fetchval(
+        """
+        SELECT column_default = 'false'
+        FROM information_schema.columns
+        WHERE table_name = 'guild_config'
+          AND column_name = 'debug_commands_enabled'
+        """
+    )
     assert not await pool.fetchval(
         """
         SELECT EXISTS (
@@ -304,17 +312,20 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
     await db.upsert_guild_config(1002, 2002, 3002)
 
     await db.upsert_guild_config(1001, 2011, 3011)
+    await db.set_debug_commands_enabled(1001, True, 3012)
 
     assert await db.get_guild_config(1001) == {
         "guild_id": 1001,
         "leaderboard_channel_id": 2011,
         "leaderboard_limit": None,
-        "updated_by": 3011,
+        "debug_commands_enabled": True,
+        "updated_by": 3012,
     }
     assert await db.get_guild_config(1002) == {
         "guild_id": 1002,
         "leaderboard_channel_id": 2002,
         "leaderboard_limit": None,
+        "debug_commands_enabled": False,
         "updated_by": 3002,
     }
 
@@ -324,6 +335,7 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
         "guild_id": 1001,
         "leaderboard_channel_id": None,
         "leaderboard_limit": None,
+        "debug_commands_enabled": True,
         "updated_by": 3021,
     }
 

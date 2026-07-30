@@ -47,7 +47,11 @@ class BattleviveClient:
         if self._tokens is None:
             raise ValueError("A complete Battlevive token pair is required")
 
-        if persisted_tokens is None and self._token_store.path.exists():
+        try:
+            token_path_exists = self._token_store.path.lstat() is not None
+        except OSError:
+            token_path_exists = False
+        if persisted_tokens is None and token_path_exists:
             logger.warning(
                 "Ignoring invalid Battlevive token state at %s",
                 self._token_store.path,

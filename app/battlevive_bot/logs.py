@@ -1,28 +1,50 @@
 #!/usr/bin/env python3
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import sys
 
 from .settings import LOG_DIR
 
 
-LOG_DIR.mkdir(exist_ok=True)
+LOG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+os.chmod(LOG_DIR, 0o700)
 
 formatter = logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
 
-bot_handler = logging.FileHandler(
-    filename=LOG_DIR / "bot.log",
-    encoding="utf-8",
-    mode="a",
-)
-bot_handler.setFormatter(formatter)
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUP_COUNT = 3
 
-discord_handler = logging.FileHandler(
-    filename=LOG_DIR / "discord.log",
-    encoding="utf-8",
-    mode="a",
-)
-discord_handler.setFormatter(formatter)
+
+class PrivateRotatingFileHandler(RotatingFileHandler):
+    def _open(self):
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        file_descriptor = os.open(self.baseFilename, flags, 0o600)
+        os.fchmod(file_descriptor, 0o600)
+        return os.fdopen(
+            file_descriptor,
+            self.mode,
+            encoding=self.encoding,
+            errors=self.errors,
+        )
+
+
+def _private_rotating_handler(filename: str) -> PrivateRotatingFileHandler:
+    path = LOG_DIR / filename
+    handler = PrivateRotatingFileHandler(
+        filename=path,
+        encoding="utf-8",
+        mode="a",
+        maxBytes=LOG_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT,
+    )
+    handler.setFormatter(formatter)
+    return handler
+
+
+bot_handler = _private_rotating_handler("bot.log")
+discord_handler = _private_rotating_handler("discord.log")
 
 bot_console_handler = logging.StreamHandler(sys.stdout)
 bot_console_handler.setFormatter(formatter)

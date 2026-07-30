@@ -8,6 +8,14 @@ services:
     volumes:
       - ./app/data:/app/data:Z
       - ./app/logs:/app/logs:Z
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
     networks:
       - battlevive-net
     depends_on:

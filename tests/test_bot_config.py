@@ -168,6 +168,7 @@ async def test_config_reset_and_show_are_ephemeral(monkeypatch: pytest.MonkeyPat
             "guild_id": guild_id,
             "leaderboard_channel_id": 456,
             "leaderboard_limit": None,
+            "debug_commands_enabled": False,
             "updated_by": 123,
         }
 
@@ -185,7 +186,7 @@ async def test_config_reset_and_show_are_ephemeral(monkeypatch: pytest.MonkeyPat
     ]
     assert show_interaction.response.messages == [
         {
-            "content": "Leaderboard channel: <#456>.\nLeaderboard limit: 50 (maximum).",
+            "content": "Leaderboard channel: <#456>.\nLeaderboard limit: 50 (maximum).\nDebug exports: disabled.",
             "ephemeral": True,
         }
     ]
@@ -205,6 +206,7 @@ async def test_config_limit_sets_amount_and_omission_restores_the_maximum(
             "guild_id": guild_id,
             "leaderboard_channel_id": None,
             "leaderboard_limit": None,
+            "debug_commands_enabled": False,
             "updated_by": 123,
         }
 
@@ -219,6 +221,29 @@ async def test_config_limit_sets_amount_and_omission_restores_the_maximum(
     assert calls == [(789, 25, 123), (789, None, 123)]
     assert limited.response.messages[0]["content"] == "Leaderboard limit set to 25."
     assert unlimited.response.messages[0]["content"] == "Leaderboard limit set to 50 (maximum)."
+
+
+@pytest.mark.asyncio
+async def test_config_debug_updates_only_the_current_guild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, bool, int]] = []
+
+    async def fake_set(guild_id: int, enabled: bool, updated_by: int) -> None:
+        calls.append((guild_id, enabled, updated_by))
+
+    monkeypatch.setattr(bot_module.db, "set_debug_commands_enabled", fake_set)
+    interaction = make_interaction()
+
+    await bot_module.config_debug.callback(interaction, True)
+
+    assert calls == [(789, True, 123)]
+    assert interaction.response.messages == [
+        {
+            "content": "Debug exports enabled for this server.",
+            "ephemeral": True,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -250,5 +275,8 @@ async def test_config_command_returns_ephemeral_error_when_database_fails(
     await bot_module.config_show.callback(interaction)
 
     assert interaction.response.messages == [
-        {"content": "Command failed. Check bot.log.", "ephemeral": True}
+        {
+            "content": "The command failed. Please try again later.",
+            "ephemeral": True,
+        }
     ]

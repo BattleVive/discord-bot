@@ -1,11 +1,27 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 import discord
 
 from . import db
 from .db import get_pool
 from .logs import logger
 from .models import SeasonRating
+
+
+BATTLEVIVE_PLAYER_ROLE = "Battlevive Player"
+RANK_ROLE_NAMES_ORDERED = tuple(name for _, name in SeasonRating.RANKS)
+RANK_ROLE_NAMES = frozenset(RANK_ROLE_NAMES_ORDERED)
+REQUIRED_ROLE_NAMES = (*RANK_ROLE_NAMES_ORDERED, BATTLEVIVE_PLAYER_ROLE)
+
+
+@dataclass(slots=True)
+class RoleCreationResult:
+    created: list[str] = field(default_factory=list)
+    existing: list[str] = field(default_factory=list)
+    rejected: dict[str, str] = field(default_factory=dict)
+    failed: dict[str, str] = field(default_factory=dict)
 
 
 def _normalized_username(value: str | None) -> str:
@@ -111,23 +127,95 @@ async def _resolve_and_link_member(
     return member
 
 
-async def create_roles(guild: discord.Guild) -> None:
-    logger.info("Creating Battlevive roles in guild '%s' (%s)", guild.name, guild.id)
+def _existing_role_problem(
+    role: discord.Role,
+    bot_member: discord.Member,
+) -> str | None:
+    if getattr(role, "managed", False):
+        return "the existing role is managed by an integration"
+    permissions = getattr(role, "permissions", None)
+    if permissions is not None and getattr(permissions, "value", 0):
+        return "the existing role has privileged permissions"
+    top_role = getattr(bot_member, "top_role", None)
+    role_position = getattr(role, "position", None)
+    top_position = getattr(top_role, "position", None)
+    if (
+        role_position is not None
+        and top_position is not None
+        and role_position >= top_position
+    ):
+        return "the existing role is not below the bot's highest role"
+    is_assignable = getattr(role, "is_assignable", None)
+    if callable(is_assignable) and not is_assignable():
+        return "the existing role cannot be assigned by the bot"
+    return None
 
-    for _, rank_name in SeasonRating.RANKS:
-        existing_role = discord.utils.get(guild.roles, name=rank_name)
+
+def _safe_assignable_role(
+    guild: discord.Guild,
+    role_name: str,
+) -> discord.Role | None:
+    role = discord.utils.get(guild.roles, name=role_name)
+    bot_member = guild.me
+    if role is None or bot_member is None:
+        return None
+    problem = _existing_role_problem(role, bot_member)
+    if problem is not None:
+        logger.warning(
+            "Refusing unsafe role '%s' in guild '%s' (%s): %s.",
+            role_name,
+            guild.name,
+            guild.id,
+            problem,
+        )
+        return None
+    return role
+
+
+async def create_roles(guild: discord.Guild) -> RoleCreationResult:
+    logger.info("Creating Battlevive roles in guild '%s' (%s)", guild.name, guild.id)
+    result = RoleCreationResult()
+    bot_member = guild.me
+    if (
+        bot_member is None
+        or not bot_member.guild_permissions.manage_roles
+        or bot_member.top_role <= guild.default_role
+    ):
+        for role_name in REQUIRED_ROLE_NAMES:
+            result.failed[role_name] = "the bot lacks Manage Roles"
+        return result
+
+    for role_name in REQUIRED_ROLE_NAMES:
+        existing_role = discord.utils.get(guild.roles, name=role_name)
 
         if existing_role is not None:
+            problem = _existing_role_problem(existing_role, bot_member)
+            if problem is not None:
+                result.rejected[role_name] = problem
+                logger.warning(
+                    "Rejected unsafe existing role '%s' in guild '%s' (%s): %s.",
+                    role_name,
+                    guild.name,
+                    guild.id,
+                    problem,
+                )
+                continue
             logger.debug(
                 "Role '%s' already exists in guild '%s' (%s), skipping.",
-                rank_name,
+                role_name,
                 guild.name,
                 guild.id,
             )
+            result.existing.append(role_name)
             continue
 
         try:
-            role = await guild.create_role(name=rank_name)
+            role = await guild.create_role(
+                name=role_name,
+                permissions=discord.Permissions.none(),
+                reason="Battlevive role setup",
+            )
+            result.created.append(role_name)
             logger.info(
                 "Created role '%s' (%s) in guild '%s' (%s).",
                 role.name,
@@ -136,71 +224,43 @@ async def create_roles(guild: discord.Guild) -> None:
                 guild.id,
             )
         except discord.Forbidden:
+            result.failed[role_name] = "Discord denied role creation"
             logger.exception(
                 "Missing permissions to create role '%s' in guild '%s' (%s).",
-                rank_name,
+                role_name,
                 guild.name,
                 guild.id,
             )
         except discord.HTTPException:
+            result.failed[role_name] = "Discord rejected role creation"
             logger.exception(
                 "Failed to create role '%s' in guild '%s' (%s).",
-                rank_name,
+                role_name,
                 guild.name,
                 guild.id,
             )
 
-    role_name = "Battlevive Player"
-    existing_role = discord.utils.get(guild.roles, name=role_name)
-
-    if existing_role is not None:
-        logger.debug(
-            "Role '%s' already exists in guild '%s' (%s), skipping.",
-            role_name,
-            guild.name,
-            guild.id,
-        )
-        return
-
-    try:
-        role = await guild.create_role(name=role_name)
-        logger.info(
-            "Created role '%s' (%s) in guild '%s' (%s).",
-            role.name,
-            role.id,
-            guild.name,
-            guild.id,
-        )
-    except discord.Forbidden:
-        logger.exception(
-            "Missing permissions to create role '%s' in guild '%s' (%s).",
-            role_name,
-            guild.name,
-            guild.id,
-        )
-    except discord.HTTPException:
-        logger.exception(
-            "Failed to create role '%s' in guild '%s' (%s).",
-            role_name,
-            guild.name,
-            guild.id,
-        )
+    return result
 
 
 async def give_battlevive_role(
     bot: discord.Client,
+    guild: discord.Guild | None = None,
 ) -> None:
-    role_name = "Battlevive Player"
     users = await db.get_users()
 
-    for guild in bot.guilds:
-        role = discord.utils.get(guild.roles, name=role_name)
+    guilds = [guild] if guild is not None else bot.guilds
+    for target_guild in guilds:
+        role = _safe_assignable_role(
+            target_guild,
+            BATTLEVIVE_PLAYER_ROLE,
+        )
         if role is None:
             continue
 
         for user in users:
             member = await _resolve_and_link_member(
-                guild,
+                target_guild,
                 user.id,
                 user.discord_id,
                 user.discord_username,
@@ -210,7 +270,7 @@ async def give_battlevive_role(
                 logger.debug(
                     "No member found for %s in guild '%s'",
                     user.discord_username,
-                    guild.name,
+                    target_guild.name,
                 )
                 continue
 
@@ -221,22 +281,22 @@ async def give_battlevive_role(
                         "Gave role '%s' to %s in guild '%s' (%s).",
                         role.name,
                         member,
-                        guild.name,
-                        guild.id,
+                        target_guild.name,
+                        target_guild.id,
                     )
                 except (discord.Forbidden, discord.HTTPException):
                     logger.exception(
                         "Failed to give role '%s' to %s in guild '%s' (%s).",
                         role.name,
                         member,
-                        guild.name,
-                        guild.id,
+                        target_guild.name,
+                        target_guild.id,
                     )
-
 
 
 async def give_rank_roles(
     bot: discord.Client,
+    guild: discord.Guild | None = None,
 ) -> None:
     pool = get_pool()
     users = await pool.fetch(
@@ -260,10 +320,11 @@ async def give_rank_roles(
         """
     )
 
-    for guild in bot.guilds:
+    guilds = [guild] if guild is not None else bot.guilds
+    for target_guild in guilds:
         for user in users:
             member = await _resolve_and_link_member(
-                guild,
+                target_guild,
                 str(user["id"]),
                 user["discord_id"],
                 user["discord_username"],
@@ -273,21 +334,21 @@ async def give_rank_roles(
                 logger.debug(
                     "No member found for %s in guild '%s'",
                     user["discord_username"],
-                    guild.name,
+                    target_guild.name,
                 )
                 continue
 
             logger.debug("id: %s username: %s", member.id, member.name)
 
             rank_name = SeasonRating.rank(user["mmr"])
-            role = discord.utils.get(guild.roles, name=rank_name)
+            role = _safe_assignable_role(target_guild, rank_name)
 
             if role is None:
                 logger.debug(
                     "Rank role '%s' not found in guild '%s' (%s), skipping user %s.",
                     rank_name,
-                    guild.name,
-                    guild.id,
+                    target_guild.name,
+                    target_guild.id,
                     member,
                 )
                 continue
@@ -295,7 +356,7 @@ async def give_rank_roles(
             old_rank_roles = [
                 role_item
                 for role_item in member.roles
-                if role_item.name in [rank for _, rank in SeasonRating.RANKS]
+                if role_item.name in RANK_ROLE_NAMES
                 and role_item != role
             ]
             try:
@@ -307,14 +368,128 @@ async def give_rank_roles(
                         "Updated rank role for %s to '%s' in guild '%s' (%s).",
                         member,
                         rank_name,
-                        guild.name,
-                        guild.id,
+                        target_guild.name,
+                        target_guild.id,
                     )
             except (discord.Forbidden, discord.HTTPException):
                 logger.exception(
                     "Failed to update rank role for %s in guild '%s' (%s).",
                     member,
-                    guild.name,
-                    guild.id,
+                    target_guild.name,
+                    target_guild.id,
                 )
                 continue
+
+
+async def reconcile_member_roles(member: discord.Member) -> None:
+    """Reconcile one joining member from local data without upstream requests."""
+    pool = get_pool()
+    user = await pool.fetchrow(
+        """
+        WITH current_season AS (
+            SELECT season_year, season_number
+            FROM season_ratings
+            ORDER BY updated_at DESC
+            LIMIT 1
+        )
+        SELECT users.id, users.discord_id, users.discord_username,
+               season_ratings.mmr
+        FROM users
+        LEFT JOIN season_ratings
+          ON season_ratings.user_id = users.id
+         AND (season_ratings.season_year, season_ratings.season_number) = (
+             SELECT season_year, season_number FROM current_season
+         )
+        WHERE users.discord_id = $1
+        """,
+        member.id,
+    )
+    if user is None:
+        candidate_names = {
+            value.strip().lower()
+            for value in (
+                getattr(member, "name", None),
+                getattr(member, "display_name", None),
+                getattr(member, "global_name", None),
+                getattr(member, "nick", None),
+            )
+            if value and value.strip()
+        }
+        if not candidate_names:
+            return
+        rows = await pool.fetch(
+            """
+            WITH current_season AS (
+                SELECT season_year, season_number
+                FROM season_ratings
+                ORDER BY updated_at DESC
+                LIMIT 1
+            )
+            SELECT users.id, users.discord_id, users.discord_username,
+                   season_ratings.mmr
+            FROM users
+            LEFT JOIN season_ratings
+              ON season_ratings.user_id = users.id
+             AND (season_ratings.season_year, season_ratings.season_number) = (
+                 SELECT season_year, season_number FROM current_season
+             )
+            WHERE users.discord_id IS NULL
+              AND lower(btrim(users.discord_username)) = ANY($1::text[])
+            """,
+            sorted(candidate_names),
+        )
+        user = next(
+            (
+                row
+                for row in rows
+                if _matching_member([member], row["discord_username"]) is member
+            ),
+            None,
+        )
+        if user is not None and not await db.set_user_discord_id(
+            str(user["id"]),
+            member.id,
+        ):
+            logger.warning(
+                "Could not safely link joining member %s (%s).",
+                member,
+                member.id,
+            )
+            return
+    if user is None:
+        return
+
+    player_role = _safe_assignable_role(
+        member.guild,
+        BATTLEVIVE_PLAYER_ROLE,
+    )
+    if player_role is not None and player_role not in member.roles:
+        await member.add_roles(
+            player_role,
+            reason="Battlevive member join reconciliation",
+        )
+
+    mmr = user["mmr"]
+    if mmr is None:
+        return
+    rank_role = _safe_assignable_role(
+        member.guild,
+        SeasonRating.rank(mmr),
+    )
+    if rank_role is None:
+        return
+    old_rank_roles = [
+        role
+        for role in member.roles
+        if role.name in RANK_ROLE_NAMES and role != rank_role
+    ]
+    if old_rank_roles:
+        await member.remove_roles(
+            *old_rank_roles,
+            reason="Battlevive member join reconciliation",
+        )
+    if rank_role not in member.roles:
+        await member.add_roles(
+            rank_role,
+            reason="Battlevive member join reconciliation",
+        )

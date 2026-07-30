@@ -52,6 +52,48 @@ def test_token_store_returns_none_when_state_is_missing(tmp_path: Path) -> None:
     assert TokenStore(tmp_path / "missing.json").load() is None
 
 
+def test_load_corrects_existing_token_permissions(tmp_path: Path) -> None:
+    token_path = tmp_path / "tokens.json"
+    token_path.write_text(
+        '{"access_token":"access","refresh_token":"refresh"}',
+        encoding="utf-8",
+    )
+    os.chmod(token_path, 0o644)
+
+    assert TokenStore(token_path).load() == TokenPair("access", "refresh")
+    assert token_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_load_rejects_symlink_directory_and_fifo_paths(tmp_path: Path) -> None:
+    target = tmp_path / "target.json"
+    target.write_text(
+        '{"access_token":"access","refresh_token":"refresh"}',
+        encoding="utf-8",
+    )
+    symlink = tmp_path / "symlink.json"
+    symlink.symlink_to(target)
+    directory = tmp_path / "directory"
+    directory.mkdir()
+    fifo = tmp_path / "tokens.fifo"
+    os.mkfifo(fifo)
+
+    assert TokenStore(symlink).load() is None
+    assert TokenStore(directory).load() is None
+    assert TokenStore(fifo).load() is None
+
+
+def test_save_refuses_unsafe_existing_path(tmp_path: Path) -> None:
+    target = tmp_path / "target.json"
+    target.write_text("leave-me", encoding="utf-8")
+    symlink = tmp_path / "tokens.json"
+    symlink.symlink_to(target)
+
+    with pytest.raises(OSError, match="unsafe token path"):
+        TokenStore(symlink).save(TokenPair("access", "refresh"))
+
+    assert target.read_text(encoding="utf-8") == "leave-me"
+
+
 def test_failed_replace_preserves_last_complete_pair(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

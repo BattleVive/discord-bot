@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from io import BytesIO
 import json
-import os
 
 # pyrefly: ignore [missing-import]
 import discord
@@ -32,19 +31,19 @@ from .models import User
 from .roles import create_roles
 from .roles import give_battlevive_role
 from .roles import give_rank_roles
+from .roles import reconcile_member_roles
 from .settings import BATTLEVIVE_BOOTSTRAP_JWT
 from .settings import BATTLEVIVE_BOOTSTRAP_REFRESH_TOKEN
 from .settings import BATTLEVIVE_TOKEN_PATH
-from .settings import COMMAND_SYNC_GUILD_ID
 from .settings import DATABASE_URL
 from .settings import DATA_DIR
+from .settings import DISCORD_COMMAND_GUILD_ID
 from .settings import DISCORD_BOT_TOKEN
 from .settings import LEADERBOARD_MAX_ENTRIES
 from .settings import SUPABASE_API_KEY
 from .settings import SUPABASE_URL
+from .settings import validate_runtime_settings
 
-
-DATA_DIR.mkdir(exist_ok=True)
 
 battlevive_client = BattleviveClient(
     bootstrap_access_token=BATTLEVIVE_BOOTSTRAP_JWT,
@@ -57,6 +56,11 @@ battlevive_client = BattleviveClient(
 battlevive_users: list[User] = []
 lobbies: list[Lobby] = []
 season_ratings: list[SeasonRating] = []
+_manual_refresh_lock = asyncio.Lock()
+_debug_export_running = False
+
+SAFE_COMMAND_ERROR = "The command failed. Please try again later."
+MAX_DEBUG_ATTACHMENT_BYTES = 8 * 1024 * 1024
 
 
 # Data refresh and background loops
@@ -172,7 +176,6 @@ async def refresh_frequently_changing_data_error(error: Exception) -> None:
 
 # Bot setup
 intents = discord.Intents.default()
-intents.message_content = True
 intents.members = True
 
 
@@ -194,31 +197,31 @@ class BattleviveBot(commands.Bot):
         await super().close()
 
 
-bot = BattleviveBot(command_prefix="!bt", intents=intents, strip_after_prefix=True)
+bot = BattleviveBot(command_prefix=(), intents=intents)
 
 
 # Events
-@bot.event
-async def on_message(message: discord.Message) -> None:
-    if message.author == bot.user:
-        return
-
-    logger.debug("Received message: '%s' from %s", message.content, message.author)
-    await bot.process_commands(message)
-
-
 @bot.event
 async def setup_hook() -> None:
     await init_pool(DATABASE_URL)
     bot.leaderboard_service = LeaderboardService(bot, DATABASE_URL)
     bot.leaderboard_service.start()
+
+    if DISCORD_COMMAND_GUILD_ID is None:
+        await bot.tree.sync()
+        logger.info("Synchronized Discord commands globally.")
+    else:
+        guild = discord.Object(id=DISCORD_COMMAND_GUILD_ID)
+        bot.tree.copy_global_to(guild=guild)
+        await bot.tree.sync(guild=guild)
+        logger.info(
+            "Synchronized Discord commands to development guild %s.",
+            DISCORD_COMMAND_GUILD_ID,
+        )
+
     revalidate_tokens.start()
     refresh_infrequently_changing_data.start()
     refresh_frequently_changing_data.start()
-
-    guild = discord.Object(id=COMMAND_SYNC_GUILD_ID)
-    bot.tree.copy_global_to(guild=guild)
-    await bot.tree.sync(guild=guild)
 
 
 @bot.event
@@ -230,7 +233,14 @@ async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent) -> None:
 
 @bot.event
 async def on_member_join(member: discord.Member) -> None:
-    await refresh_infrequently_changing_data()
+    try:
+        await reconcile_member_roles(member)
+    except (discord.Forbidden, discord.HTTPException):
+        logger.exception(
+            "Could not reconcile roles for joining member %s in guild %s.",
+            member.id,
+            member.guild.id,
+        )
     service = bot.leaderboard_service
     if service is not None:
         service.request_reconciliation()
@@ -263,20 +273,56 @@ config_reset_group = app_commands.Group(
 
 
 async def _check_config_access(interaction: discord.Interaction) -> bool:
-    if interaction.guild is None:
+    return await _check_guild_permission(
+        interaction,
+        permission="manage_guild",
+        permission_name="Manage Server",
+        action="change bot configuration",
+    )
+
+
+async def _check_guild_permission(
+    interaction: discord.Interaction,
+    *,
+    permission: str,
+    permission_name: str,
+    action: str,
+) -> bool:
+    guild = getattr(interaction, "guild", None)
+    if guild is None:
         await interaction.response.send_message(
             "This command can only be used in a server.",
             ephemeral=True,
         )
         return False
 
-    if not interaction.user.guild_permissions.manage_guild:
+    user = getattr(interaction, "user", None)
+    guild_permissions = getattr(user, "guild_permissions", None)
+    if not getattr(guild_permissions, permission, False):
         await interaction.response.send_message(
-            "You need the Manage Server permission to change bot configuration.",
+            f"You need the {permission_name} permission to {action}.",
             ephemeral=True,
         )
         return False
 
+    return True
+
+
+async def _check_debug_access(interaction: discord.Interaction) -> bool:
+    if not await _check_guild_permission(
+        interaction,
+        permission="manage_guild",
+        permission_name="Manage Server",
+        action="export debug data",
+    ):
+        return False
+    config = await db.get_guild_config(interaction.guild.id)
+    if config is None or not config["debug_commands_enabled"]:
+        await interaction.response.send_message(
+            "Debug exports are disabled for this server.",
+            ephemeral=True,
+        )
+        return False
     return True
 
 
@@ -304,7 +350,7 @@ async def _send_config_failure(
     logger.exception(message)
     if not interaction.response.is_done():
         await interaction.response.send_message(
-            "Command failed. Check bot.log.",
+            SAFE_COMMAND_ERROR,
             ephemeral=True,
         )
 
@@ -423,6 +469,34 @@ async def config_reset_leaderboard(interaction: discord.Interaction) -> None:
         await _send_config_failure(interaction, "config reset leaderboard failed")
 
 
+@config_group.command(
+    name="debug",
+    description="Enable or disable administrator debug exports",
+)
+@app_commands.describe(enabled="Whether debug export commands are enabled")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def config_debug(
+    interaction: discord.Interaction,
+    enabled: bool,
+) -> None:
+    if not await _check_config_access(interaction):
+        return
+    try:
+        await db.set_debug_commands_enabled(
+            interaction.guild.id,
+            enabled,
+            interaction.user.id,
+        )
+        status = "enabled" if enabled else "disabled"
+        await interaction.response.send_message(
+            f"Debug exports {status} for this server.",
+            ephemeral=True,
+        )
+    except Exception:
+        await _send_config_failure(interaction, "config debug failed")
+
+
 @config_group.command(name="show", description="Show this server's bot configuration")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
@@ -445,7 +519,13 @@ async def config_show(interaction: discord.Interaction) -> None:
             else f"{LEADERBOARD_MAX_ENTRIES} (maximum)"
         )
         limit_message = f"Leaderboard limit: {limit_display}."
-        message = f"{channel_message}\n{limit_message}"
+        debug_enabled = bool(config and config["debug_commands_enabled"])
+        debug_message = (
+            "Debug exports: enabled."
+            if debug_enabled
+            else "Debug exports: disabled."
+        )
+        message = f"{channel_message}\n{limit_message}\n{debug_message}"
         await interaction.response.send_message(message, ephemeral=True)
     except Exception:
         await _send_config_failure(interaction, "config show failed")
@@ -455,7 +535,27 @@ bot.tree.add_command(config_group)
 
 
 @bot.tree.command(name="create_roles", description="Create required roles")
+@app_commands.default_permissions(manage_roles=True)
+@app_commands.guild_only()
 async def create_roles_slash(interaction: discord.Interaction) -> None:
+    if not await _check_guild_permission(
+        interaction,
+        permission="manage_roles",
+        permission_name="Manage Roles",
+        action="create Battlevive roles",
+    ):
+        return
+    bot_member = interaction.guild.me
+    if (
+        bot_member is None
+        or not bot_member.guild_permissions.manage_roles
+    ):
+        await interaction.response.send_message(
+            "I need the Manage Roles permission to create Battlevive roles.",
+            ephemeral=True,
+        )
+        return
+
     logger.info(
         "create_roles called by %s in guild '%s' (%s)",
         interaction.user,
@@ -463,8 +563,23 @@ async def create_roles_slash(interaction: discord.Interaction) -> None:
         interaction.guild.id,
     )
     try:
-        await create_roles(interaction.guild)
-        await interaction.response.send_message("Created roles")
+        result = await create_roles(interaction.guild)
+        message = (
+            f"Role setup complete: {len(result.created)} created, "
+            f"{len(result.existing)} already present, "
+            f"{len(result.rejected)} unsafe existing roles rejected, "
+            f"{len(result.failed)} failed."
+        )
+        issues = {**result.rejected, **result.failed}
+        if issues:
+            issue_summary = "; ".join(
+                f"{name}: {reason}" for name, reason in issues.items()
+            )
+            message = f"{message}\nIssues: {issue_summary}"
+        await interaction.response.send_message(
+            message,
+            ephemeral=bool(result.rejected or result.failed),
+        )
     except Exception:
         logger.exception(
             "create_roles command failed for guild '%s' (%s)",
@@ -473,107 +588,151 @@ async def create_roles_slash(interaction: discord.Interaction) -> None:
         )
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                "Command failed. Check bot.log.",
+                SAFE_COMMAND_ERROR,
                 ephemeral=True,
             )
+
+
+def _json_attachment(name: str, records: list[object]) -> tuple[BytesIO, discord.File]:
+    buffer = BytesIO()
+    encoder = json.JSONEncoder(indent=2, default=str)
+    try:
+        for chunk in encoder.iterencode(records):
+            encoded_chunk = chunk.encode("utf-8")
+            if buffer.tell() + len(encoded_chunk) > MAX_DEBUG_ATTACHMENT_BYTES:
+                raise ValueError(
+                    "Debug export attachment exceeds the safe size limit"
+                )
+            buffer.write(encoded_chunk)
+        buffer.seek(0)
+        return buffer, discord.File(buffer, filename=name)
+    except BaseException:
+        buffer.close()
+        raise
+
+
+def _claim_debug_export() -> bool:
+    global _debug_export_running
+    if _debug_export_running:
+        return False
+    _debug_export_running = True
+    return True
+
+
+def _release_debug_export() -> None:
+    global _debug_export_running
+    _debug_export_running = False
+
+
+async def _send_debug_export(
+    interaction: discord.Interaction,
+    datasets: tuple[list[object], list[object], list[object]],
+) -> None:
+    attachments: list[tuple[BytesIO, discord.File]] = []
+    try:
+        for filename, records in zip(
+            ("users.json", "lobbies.json", "ratings.json"),
+            datasets,
+            strict=True,
+        ):
+            attachments.append(_json_attachment(filename, records))
+        await interaction.followup.send(
+            files=[attachment for _, attachment in attachments],
+            ephemeral=True,
+        )
+    finally:
+        for buffer, attachment in attachments:
+            attachment.close()
+            buffer.close()
 
 
 @bot.tree.command(
     name="debug_get_db_data",
     description="Dump all data from db unformatted",
 )
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
 async def debug_get_db_data(interaction: discord.Interaction) -> None:
     try:
-        logger.info("debug_get_battlevive_data called by %s", interaction.user)
-
-        users_file = DATA_DIR / "users.json"
-        lobbies_file = DATA_DIR / "lobbies.json"
-        ratings_file = DATA_DIR / "ratings.json"
-
-        db_lobbies = await db.get_lobbies()
-        db_users = await db.get_users()
-        db_ratings = await db.get_season_ratings()
-
-        logger.debug(
-            "Dumping %d users and %d lobbies and ratings %d.",
-            len(battlevive_users),
-            len(db_lobbies),
-            len(season_ratings),
-        )
-        with users_file.open("w", encoding="utf-8") as file:
-            json.dump([user.json() for user in db_users], file, indent=2)
-
-        with lobbies_file.open("w", encoding="utf-8") as file:
-            json.dump([lobby.json() for lobby in db_lobbies], file, indent=2)
-
-        with ratings_file.open("w", encoding="utf-8") as file:
-            json.dump([rating.json() for rating in db_ratings], file, indent=2)
-
-        await interaction.response.send_message(
-            files=[
-                discord.File(str(users_file)),
-                discord.File(str(lobbies_file)),
-                discord.File(str(ratings_file)),
-            ],
-            ephemeral=True,
-        )
-        os.remove(users_file)
-        os.remove(lobbies_file)
-        os.remove(ratings_file)
-
+        if not await _check_debug_access(interaction):
+            return
     except Exception:
-        logger.exception("debug_get_battlevive_data failed")
-
+        logger.exception("Debug export authorization failed.")
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                "Command failed. Check bot.log.",
+                SAFE_COMMAND_ERROR,
                 ephemeral=True,
             )
+        return
+    if not _claim_debug_export():
+        await interaction.response.send_message(
+            "Another debug export is already running. Try again shortly.",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        await interaction.response.defer(ephemeral=True)
+        db_users, db_lobbies, db_ratings = await asyncio.gather(
+            db.get_users(),
+            db.get_lobbies(),
+            db.get_season_ratings(),
+        )
+        await _send_debug_export(
+            interaction,
+            (
+                [user.json() for user in db_users],
+                [lobby.json() for lobby in db_lobbies],
+                [rating.json() for rating in db_ratings],
+            ),
+        )
+    except Exception:
+        logger.exception("Database debug export failed.")
+        await interaction.followup.send(SAFE_COMMAND_ERROR, ephemeral=True)
+    finally:
+        _release_debug_export()
 
 
 @bot.tree.command(
     name="debug_get_battlevive_data",
     description="Dump all data from battlevive unformatted",
 )
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
 async def debug_get_battlevive_data(interaction: discord.Interaction) -> None:
     try:
-        logger.info("debug_get_battlevive_data called by %s", interaction.user)
-
-        logger.debug(
-            "Dumping %d users and %d lobbies and ratings %d.",
-            len(battlevive_users),
-            len(lobbies),
-            len(season_ratings),
-        )
-        users_file = DATA_DIR / "users.json"
-        lobbies_file = DATA_DIR / "lobbies.json"
-        ratings_file = DATA_DIR / "ratings.json"
-
-        with users_file.open("w", encoding="utf-8") as file:
-            json.dump([user.json() for user in battlevive_users], file, indent=2)
-
-        with lobbies_file.open("w", encoding="utf-8") as file:
-            json.dump([lobby.json() for lobby in lobbies], file, indent=2)
-
-        with ratings_file.open("w", encoding="utf-8") as file:
-            json.dump([rating.json() for rating in season_ratings], file, indent=2)
-
-        await interaction.response.send_message(
-            files=[
-                discord.File(str(users_file)),
-                discord.File(str(lobbies_file)),
-                discord.File(str(ratings_file)),
-            ],
-            ephemeral=True,
-        )
+        if not await _check_debug_access(interaction):
+            return
     except Exception:
-        logger.exception("debug_get_battlevive_data failed")
-
+        logger.exception("Debug export authorization failed.")
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                "Command failed. Check bot.log.",
+                SAFE_COMMAND_ERROR,
                 ephemeral=True,
             )
+        return
+    if not _claim_debug_export():
+        await interaction.response.send_message(
+            "Another debug export is already running. Try again shortly.",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        await interaction.response.defer(ephemeral=True)
+        await _send_debug_export(
+            interaction,
+            (
+                [user.json() for user in list(battlevive_users)],
+                [lobby.json() for lobby in list(lobbies)],
+                [rating.json() for rating in list(season_ratings)],
+            ),
+        )
+    except Exception:
+        logger.exception("Battlevive debug export failed.")
+        await interaction.followup.send(SAFE_COMMAND_ERROR, ephemeral=True)
+    finally:
+        _release_debug_export()
 
 
 @bot.tree.command(
@@ -657,7 +816,7 @@ async def rank_command(interaction: discord.Interaction) -> None:
         )
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                "Command failed. Check bot.log.",
+                SAFE_COMMAND_ERROR,
                 ephemeral=True,
             )
 
@@ -672,31 +831,48 @@ async def refresh(interaction: discord.Interaction) -> None:
     global battlevive_users
     global season_ratings
     global lobbies
-    try:
-        await interaction.response.defer(ephemeral=True)
-        fetched_users, fetched_lobbies, fetched_season_ratings = await asyncio.gather(
-            battlevive_client.get_users(),
-            battlevive_client.get_lobbies(),
-            battlevive_client.get_season_ratings(),
-        )
-        await sync_battlevive_data_to_db(
-            fetched_users,
-            fetched_lobbies,
-            fetched_season_ratings,
-        )
-        await give_battlevive_role(bot)
-        await give_rank_roles(bot)
-    except Exception:
-        logger.exception("Manual refresh failed.")
-        await interaction.followup.send(
-            "Command failed. Check bot.log.",
+    if not await _check_guild_permission(
+        interaction,
+        permission="manage_guild",
+        permission_name="Manage Server",
+        action="refresh Battlevive data",
+    ):
+        return
+    if _manual_refresh_lock.locked():
+        await interaction.response.send_message(
+            "A manual refresh is already running. Try again shortly.",
             ephemeral=True,
         )
         return
 
-    battlevive_users = fetched_users
-    lobbies = fetched_lobbies
-    season_ratings = fetched_season_ratings
+    await interaction.response.defer(ephemeral=True)
+    try:
+        async with _manual_refresh_lock:
+            fetched_users, fetched_lobbies, fetched_season_ratings = (
+                await asyncio.gather(
+                    battlevive_client.get_users(),
+                    battlevive_client.get_lobbies(),
+                    battlevive_client.get_season_ratings(),
+                )
+            )
+            await sync_battlevive_data_to_db(
+                fetched_users,
+                fetched_lobbies,
+                fetched_season_ratings,
+            )
+            await give_battlevive_role(bot, guild=interaction.guild)
+            await give_rank_roles(bot, guild=interaction.guild)
+
+            battlevive_users = fetched_users
+            lobbies = fetched_lobbies
+            season_ratings = fetched_season_ratings
+    except Exception:
+        logger.exception("Manual refresh failed.")
+        await interaction.followup.send(
+            SAFE_COMMAND_ERROR,
+            ephemeral=True,
+        )
+        return
 
     service = bot.leaderboard_service
     if service is not None:
@@ -705,4 +881,5 @@ async def refresh(interaction: discord.Interaction) -> None:
 
 # Runtime
 def run() -> None:
+    validate_runtime_settings()
     bot.run(DISCORD_BOT_TOKEN, log_handler=None)
