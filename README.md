@@ -2,7 +2,7 @@
 
 Discord bot that syncs player, lobby, season rating, and leaderboard data from Battlevive/Supabase and manages Battlevive roles, ranks, and match info in Discord.
 
-[![Test Suite](https://github.com/voxix-dev/battlevive-bot/actions/workflows/tests.yml/badge.svg)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/tests.yml) [![Docker Image CI](https://github.com/voxix-dev/battlevive-bot/actions/workflows/docker-image.yml/badge.svg)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/docker-image.yml) [![CodeQL Advanced](https://github.com/voxix-dev/battlevive-bot/actions/workflows/codeql.yml/badge.svg)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/codeql.yml)
+[![Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fvoxix-dev%2Fbattlevive-bot%2Fbadges%2Ftests.json)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/tests.yml) [![Docker Image](https://github.com/voxix-dev/battlevive-bot/actions/workflows/docker-image.yml/badge.svg)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/docker-image.yml) [![CodeQL Advanced](https://github.com/voxix-dev/battlevive-bot/actions/workflows/codeql.yml/badge.svg)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/codeql.yml)
 
 This project is under active development.
 
@@ -34,23 +34,45 @@ cp .env.example .env
 ./init.sh
 ```
 
-## Running
+## Running in production
 
 From the repository root after `utils/init.sh` completes:
 
 ```bash
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 or:
 
 ```bash
-podman compose up -d --build
+podman compose pull
+podman compose up -d
 ```
 
 Check logs with `docker compose logs -f bot` or `podman compose logs -f bot`.
 
-For a standalone image build:
+The default Compose file uses the public
+[`voxix/battlevive-bot`](https://hub.docker.com/r/voxix/battlevive-bot) image. The
+`latest` and immutable `sha-<full-commit-sha>` tags support Linux AMD64 and
+ARM64.
+
+## Local development
+
+Build the source tree and start the local image with the development Compose
+file:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+or:
+
+```bash
+podman compose -f docker-compose.dev.yml up -d --build
+```
+
+For a standalone local image build:
 
 ```bash
 podman build . --file Dockerfile --tag battlevive-bot:local

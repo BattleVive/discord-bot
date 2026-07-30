@@ -1,21 +1,96 @@
-name: Docker Image CI
+name: Docker Image
 
 on:
-  push:
-    branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
+  workflow_run:
+    workflows: ["Test Suite"]
+    types: [completed]
 
 permissions:
   contents: read
 
+concurrency:
+  group: docker-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
 jobs:
-
-  build:
-
+  pull-request:
+    name: Pull request image
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: voxix/battlevive-bot:pr-${{ github.event.pull_request.number }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.event.pull_request.head.sha }}
+          cache-from: type=gha,scope=image-pr-${{ github.event.pull_request.number }}
+          cache-to: type=gha,mode=max,scope=image-pr-${{ github.event.pull_request.number }}
+
+  publish:
+    name: Publish image
+    if: >-
+      ${{ github.event_name == 'workflow_run' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Verify tests passed
+        env:
+          TEST_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: test "$TEST_CONCLUSION" = "success"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Verify tested revision
+        env:
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and publish image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            voxix/battlevive-bot:latest
+            voxix/battlevive-bot:sha-${{ github.event.workflow_run.head_sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
+          cache-from: type=gha,scope=image-main
+          cache-to: type=gha,mode=max,scope=image-main
