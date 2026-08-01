@@ -10,6 +10,10 @@ pytest.importorskip("asyncpg")
 from battlevive_bot import roles
 
 
+def test_active_lobby_role_is_part_of_unprivileged_role_setup() -> None:
+    assert roles.ACTIVE_LOBBY_ROLE in roles.REQUIRED_ROLE_NAMES
+
+
 class FakeMember:
     def __init__(self, member_id: int, name: str, display_name: str) -> None:
         self.id = member_id
@@ -141,8 +145,10 @@ async def test_create_roles_rejects_privileged_names_and_reports_partial_failure
         me = bot_member
         roles = [privileged]
         default_role = everyone_role
+        created_kwargs: dict[str, dict[str, object]] = {}
 
         async def create_role(self, *, name: str, **kwargs: object) -> FakeRole:
+            self.created_kwargs[name] = kwargs
             if name == second_name:
                 response = SimpleNamespace(status=403, reason="Forbidden", headers={})
                 raise discord.Forbidden(response, "denied")
@@ -157,6 +163,8 @@ async def test_create_roles_rejects_privileged_names_and_reports_partial_failure
     }
     assert result.failed == {second_name: "Discord denied role creation"}
     assert len(result.created) == len(roles.REQUIRED_ROLE_NAMES) - 2
+    assert RoleGuild.created_kwargs[roles.ACTIVE_LOBBY_ROLE]["mentionable"] is False
+    assert RoleGuild.created_kwargs[roles.ACTIVE_LOBBY_ROLE]["permissions"].value == 0
 
 
 def test_role_sync_refuses_privileged_reserved_role() -> None:

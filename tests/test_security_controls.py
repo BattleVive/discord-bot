@@ -134,12 +134,16 @@ async def test_setup_syncs_globally_by_default(
         def start(self) -> None:
             return None
 
+    class ActiveLobbyService(LeaderboardService):
+        pass
+
     async def sync(**kwargs: object) -> list[object]:
         calls.append(kwargs)
         return []
 
     monkeypatch.setattr(bot_module, "init_pool", init_pool)
     monkeypatch.setattr(bot_module, "LeaderboardService", LeaderboardService)
+    monkeypatch.setattr(bot_module, "ActiveLobbyService", ActiveLobbyService)
     monkeypatch.setattr(bot_module, "DISCORD_COMMAND_GUILD_ID", None)
     monkeypatch.setattr(bot_module.bot.tree, "sync", sync)
     monkeypatch.setattr(
@@ -159,6 +163,7 @@ async def test_setup_syncs_globally_by_default(
         lambda: None,
     )
     monkeypatch.setattr(bot_module.bot, "leaderboard_service", None)
+    monkeypatch.setattr(bot_module.bot, "active_lobby_service", None)
 
     await bot_module.setup_hook()
 
@@ -182,12 +187,16 @@ async def test_setup_can_sync_to_a_development_guild(
         def start(self) -> None:
             return None
 
+    class ActiveLobbyService(LeaderboardService):
+        pass
+
     async def sync(*, guild: object) -> list[object]:
         synced.append(guild.id)
         return []
 
     monkeypatch.setattr(bot_module, "init_pool", init_pool)
     monkeypatch.setattr(bot_module, "LeaderboardService", LeaderboardService)
+    monkeypatch.setattr(bot_module, "ActiveLobbyService", ActiveLobbyService)
     monkeypatch.setattr(bot_module, "DISCORD_COMMAND_GUILD_ID", 987654321)
     monkeypatch.setattr(
         bot_module.bot.tree,
@@ -207,6 +216,7 @@ async def test_setup_can_sync_to_a_development_guild(
         lambda: None,
     )
     monkeypatch.setattr(bot_module.bot, "leaderboard_service", None)
+    monkeypatch.setattr(bot_module.bot, "active_lobby_service", None)
 
     await bot_module.setup_hook()
 

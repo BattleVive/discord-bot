@@ -11,9 +11,14 @@ from .models import SeasonRating
 
 
 BATTLEVIVE_PLAYER_ROLE = "Battlevive Player"
+ACTIVE_LOBBY_ROLE = "Active Lobby"
 RANK_ROLE_NAMES_ORDERED = tuple(name for _, name in SeasonRating.RANKS)
 RANK_ROLE_NAMES = frozenset(RANK_ROLE_NAMES_ORDERED)
-REQUIRED_ROLE_NAMES = (*RANK_ROLE_NAMES_ORDERED, BATTLEVIVE_PLAYER_ROLE)
+REQUIRED_ROLE_NAMES = (
+    *RANK_ROLE_NAMES_ORDERED,
+    BATTLEVIVE_PLAYER_ROLE,
+    ACTIVE_LOBBY_ROLE,
+)
 
 
 @dataclass(slots=True)
@@ -213,6 +218,7 @@ async def create_roles(guild: discord.Guild) -> RoleCreationResult:
             role = await guild.create_role(
                 name=role_name,
                 permissions=discord.Permissions.none(),
+                mentionable=False,
                 reason="Battlevive role setup",
             )
             result.created.append(role_name)

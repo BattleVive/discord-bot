@@ -39,6 +39,8 @@ class FakeChannel:
         send: bool = True,
         attach: bool = True,
         history: bool = True,
+        embed: bool = True,
+        mention: bool = True,
         channel_type: discord.ChannelType = discord.ChannelType.text,
     ) -> None:
         self.id = 456
@@ -49,6 +51,8 @@ class FakeChannel:
             send_messages=send,
             attach_files=attach,
             read_message_history=history,
+            embed_links=embed,
+            mention_everyone=mention,
         )
 
     def permissions_for(self, member: object) -> SimpleNamespace:
@@ -186,10 +190,119 @@ async def test_config_reset_and_show_are_ephemeral(monkeypatch: pytest.MonkeyPat
     ]
     assert show_interaction.response.messages == [
         {
-            "content": "Leaderboard channel: <#456>.\nLeaderboard limit: 50 (maximum).\nDebug exports: disabled.",
+            "content": "Leaderboard channel: <#456>.\nLeaderboard limit: 50 (maximum).\n"
+            "Active-lobby channel: not configured.\n"
+            "Active-lobby notification role: not configured.\n"
+            "Debug exports: disabled.",
             "ephemeral": True,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_active_lobby_channel_requires_all_posting_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    interaction = make_interaction(channel=FakeChannel(mention=False))
+    called = False
+
+    async def fake_set(*args: object) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        bot_module.db,
+        "set_active_lobby_channel",
+        fake_set,
+        raising=False,
+    )
+
+    await bot_module.config_active_lobbies_channel.callback(
+        interaction,
+        interaction.channel,
+    )
+
+    assert called is False
+    assert "Mention @everyone" in interaction.response.messages[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_active_lobby_channel_and_reset_update_only_current_guild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    async def fake_set(*args: object) -> None:
+        calls.append(("set", *args))
+
+    async def fake_reset(*args: object) -> None:
+        calls.append(("reset", *args))
+
+    monkeypatch.setattr(
+        bot_module.db,
+        "set_active_lobby_channel",
+        fake_set,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bot_module.db,
+        "reset_active_lobby_config",
+        fake_reset,
+        raising=False,
+    )
+    monkeypatch.setattr(bot_module.bot, "active_lobby_service", None)
+    channel_interaction = make_interaction(channel=FakeChannel())
+    reset_interaction = make_interaction()
+
+    await bot_module.config_active_lobbies_channel.callback(
+        channel_interaction,
+        channel_interaction.channel,
+    )
+    await bot_module.config_reset_active_lobbies.callback(reset_interaction)
+
+    assert calls == [("set", 789, 456, 123), ("reset", 789, 123)]
+    assert channel_interaction.response.messages[0]["ephemeral"] is True
+    assert reset_interaction.response.messages[0]["ephemeral"] is True
+
+
+@pytest.mark.asyncio
+async def test_active_lobby_role_rejects_default_and_restores_generated_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    default = SimpleNamespace(id=1, name="@everyone", managed=False)
+    default.is_default = lambda: True
+    generated = SimpleNamespace(
+        id=2,
+        name="Active Lobby",
+        managed=False,
+        mention="<@&2>",
+    )
+    generated.is_default = lambda: False
+    calls: list[tuple[int, int | None, int]] = []
+
+    async def fake_set(guild_id: int, role_id: int | None, updated_by: int) -> None:
+        calls.append((guild_id, role_id, updated_by))
+
+    monkeypatch.setattr(
+        bot_module.db,
+        "set_active_lobby_role",
+        fake_set,
+        raising=False,
+    )
+    monkeypatch.setattr(bot_module.bot, "active_lobby_service", None)
+    rejected = make_interaction()
+    rejected.guild.default_role = default
+    rejected.guild.roles = [default, generated]
+    restored = make_interaction()
+    restored.guild.default_role = default
+    restored.guild.roles = [default, generated]
+
+    await bot_module.config_active_lobbies_role.callback(rejected, default)
+    await bot_module.config_active_lobbies_role.callback(restored, None)
+
+    assert calls == [(789, 2, 123)]
+    assert "non-default" in rejected.response.messages[0]["content"]
+    assert restored.response.messages[0]["content"].endswith("<@&2>.")
 
 
 @pytest.mark.asyncio
