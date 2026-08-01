@@ -391,6 +391,11 @@ def test_protected_command_decorators_match_runtime_policy() -> None:
         assert command.default_permissions.manage_guild is True
     assert bot_module.config_debug.guild_only is True
     assert bot_module.config_debug.default_permissions.manage_guild is True
+    assert bot_module.config_active_lobbies_moderator_role.guild_only is True
+    assert (
+        bot_module.config_active_lobbies_moderator_role.default_permissions.manage_guild
+        is True
+    )
 
 
 @pytest.mark.asyncio

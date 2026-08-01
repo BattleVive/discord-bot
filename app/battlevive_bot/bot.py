@@ -34,6 +34,7 @@ from .roles import create_roles
 from .roles import give_battlevive_role
 from .roles import give_rank_roles
 from .roles import reconcile_member_roles
+from .roles import WEBSITE_MODERATOR_ROLE
 from .settings import ASSETS_DIR
 from .settings import BATTLEVIVE_BOOTSTRAP_JWT
 from .settings import BATTLEVIVE_BOOTSTRAP_REFRESH_TOKEN
@@ -599,6 +600,58 @@ async def config_active_lobbies_role(
         await _send_config_failure(interaction, "config active lobbies role failed")
 
 
+@config_active_lobbies_group.command(
+    name="moderator_role",
+    description="Set the disputed-game moderator role, or omit for the default",
+)
+@app_commands.describe(
+    role="Safe role to notify; omit to use the generated Website Moderator role"
+)
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def config_active_lobbies_moderator_role(
+    interaction: discord.Interaction,
+    role: discord.Role | None = None,
+) -> None:
+    if not await _check_config_access(interaction):
+        return
+
+    selected = role or discord.utils.get(
+        interaction.guild.roles,
+        name=WEBSITE_MODERATOR_ROLE,
+    )
+    if selected is None:
+        await interaction.response.send_message(
+            "The Website Moderator role does not exist. Run /create_roles first or choose another role.",
+            ephemeral=True,
+        )
+        return
+    if not _safe_notification_role(interaction.guild, selected):
+        await interaction.response.send_message(
+            "Choose a non-default role that is not managed by an integration.",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        await db.set_website_moderator_role(
+            interaction.guild.id,
+            selected.id,
+            interaction.user.id,
+        )
+        if bot.active_lobby_service is not None:
+            bot.active_lobby_service.request_reconciliation()
+        await interaction.response.send_message(
+            f"Disputed-game notifications will mention {selected.mention}.",
+            ephemeral=True,
+        )
+    except Exception:
+        await _send_config_failure(
+            interaction,
+            "config active lobbies moderator role failed",
+        )
+
+
 @config_reset_group.command(
     name="leaderboard",
     description="Reset the leaderboard configuration",
@@ -703,6 +756,9 @@ async def config_show(interaction: discord.Interaction) -> None:
         )
         active_channel_id = config.get("active_lobby_channel_id") if config else None
         active_role_id = config.get("active_lobby_role_id") if config else None
+        moderator_role_id = (
+            config.get("website_moderator_role_id") if config else None
+        )
         active_channel_message = (
             f"Active-lobby channel: <#{active_channel_id}>."
             if active_channel_id is not None
@@ -713,9 +769,14 @@ async def config_show(interaction: discord.Interaction) -> None:
             if active_role_id is not None
             else "Active-lobby notification role: not configured."
         )
+        moderator_role_message = (
+            f"Website moderator role: <@&{moderator_role_id}>."
+            if moderator_role_id is not None
+            else "Website moderator role: not configured."
+        )
         message = (
             f"{channel_message}\n{limit_message}\n{active_channel_message}\n"
-            f"{active_role_message}\n{debug_message}"
+            f"{active_role_message}\n{moderator_role_message}\n{debug_message}"
         )
         await interaction.response.send_message(message, ephemeral=True)
     except Exception:
@@ -756,36 +817,50 @@ async def create_roles_slash(interaction: discord.Interaction) -> None:
     try:
         result = await create_roles(interaction.guild)
         config = await db.get_guild_config(interaction.guild.id)
-        configured_role_id = (
-            config.get("active_lobby_role_id") if config is not None else None
+        role_defaults = (
+            (
+                ACTIVE_LOBBY_ROLE,
+                config.get("active_lobby_role_id") if config is not None else None,
+                db.set_active_lobby_role,
+            ),
+            (
+                WEBSITE_MODERATOR_ROLE,
+                config.get("website_moderator_role_id") if config is not None else None,
+                db.set_website_moderator_role,
+            ),
         )
-        default_notification_role = result.safe_roles.get(ACTIVE_LOBBY_ROLE)
-        if (
-            default_notification_role is None
-            and ACTIVE_LOBBY_ROLE in result.existing
-            and ACTIVE_LOBBY_ROLE not in result.rejected
-            and ACTIVE_LOBBY_ROLE not in result.failed
-        ):
-            default_notification_role = discord.utils.get(
-                interaction.guild.roles,
-                name=ACTIVE_LOBBY_ROLE,
-            )
-        if (
-            configured_role_id is None
-            and default_notification_role is not None
-            and ACTIVE_LOBBY_ROLE not in result.rejected
-            and ACTIVE_LOBBY_ROLE not in result.failed
-            and not getattr(default_notification_role, "mentionable", False)
-            and _safe_notification_role(
-                interaction.guild,
-                default_notification_role,
-            )
-        ):
-            await db.set_active_lobby_role(
-                interaction.guild.id,
-                default_notification_role.id,
-                interaction.user.id,
-            )
+        config_changed = False
+        for role_name, configured_role_id, setter in role_defaults:
+            default_notification_role = result.safe_roles.get(role_name)
+            if (
+                default_notification_role is None
+                and role_name in result.existing
+                and role_name not in result.rejected
+                and role_name not in result.failed
+            ):
+                default_notification_role = discord.utils.get(
+                    interaction.guild.roles,
+                    name=role_name,
+                )
+            if (
+                configured_role_id is None
+                and default_notification_role is not None
+                and role_name not in result.rejected
+                and role_name not in result.failed
+                and not getattr(default_notification_role, "mentionable", False)
+                and _safe_notification_role(
+                    interaction.guild,
+                    default_notification_role,
+                )
+            ):
+                await setter(
+                    interaction.guild.id,
+                    default_notification_role.id,
+                    interaction.user.id,
+                )
+                config_changed = True
+        if config_changed and bot.active_lobby_service is not None:
+            bot.active_lobby_service.request_reconciliation()
         message = (
             f"Role setup complete: {len(result.created)} created, "
             f"{len(result.existing)} already present, "

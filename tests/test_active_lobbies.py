@@ -20,6 +20,7 @@ from battlevive_bot.active_lobbies import LobbyPollState
 from battlevive_bot.active_lobbies import MapResolver
 from battlevive_bot.active_lobbies import newest_confirmations
 from battlevive_bot.active_lobbies import result_confirmation_text
+from battlevive_bot.active_lobbies import result_is_disputed
 from battlevive_bot.active_lobbies import result_is_resolved
 from battlevive_bot.active_lobbies import validate_battlevive_url
 
@@ -213,6 +214,15 @@ def test_newest_confirmation_per_slot_drives_consensus_and_dispute() -> None:
         candidate(status="disputed", ended_at="done", winner_slot="team_two"),
         LobbyPollState(confirmations=disputed, draft_finalized=True),
     ) is True
+    assert result_is_disputed(candidate(ended_at="done"), state) is False
+    assert result_is_disputed(candidate(ended_at="done"), LobbyPollState(confirmations=disputed)) is True
+
+
+def test_authoritative_winner_resolves_ended_lobby_without_dispute_votes() -> None:
+    assert result_is_resolved(
+        candidate(status="finished", ended_at="done", winner_slot="team_one"),
+        LobbyPollState(draft_finalized=True),
+    ) is True
 
 
 def test_confirmation_ties_use_stable_id_and_unknown_winner_is_defensive() -> None:
@@ -327,6 +337,7 @@ class FakeDatabase:
         lobby_ids: list[int],
         *,
         notification_handled: bool,
+        dispute_notification_handled: bool,
     ) -> None:
         rows = self.posts.setdefault(guild_id, {})
         for lobby_id in lobby_ids:
@@ -339,10 +350,15 @@ class FakeDatabase:
                     "message_id": None,
                     "fingerprint": None,
                     "notification_handled": notification_handled,
+                    "dispute_notification_handled": dispute_notification_handled,
                 },
             )
             row["notification_handled"] = bool(
                 row["notification_handled"] or notification_handled
+            )
+            row["dispute_notification_handled"] = bool(
+                row["dispute_notification_handled"]
+                or dispute_notification_handled
             )
 
     async def record_active_lobby_post(
@@ -354,6 +370,7 @@ class FakeDatabase:
         fingerprint: str,
         *,
         notification_handled: bool,
+        dispute_notification_handled: bool,
     ) -> None:
         previous = self.posts.setdefault(guild_id, {}).get(lobby_id, {})
         self.posts[guild_id][lobby_id] = {
@@ -365,6 +382,10 @@ class FakeDatabase:
             "fingerprint": fingerprint,
             "notification_handled": bool(
                 previous.get("notification_handled") or notification_handled
+            ),
+            "dispute_notification_handled": bool(
+                previous.get("dispute_notification_handled")
+                or dispute_notification_handled
             ),
         }
 
@@ -643,8 +664,10 @@ class FakeChannel:
 
 
 class FakeRole:
-    id = 77
     managed = False
+
+    def __init__(self, role_id: int = 77) -> None:
+        self.id = role_id
 
     def is_default(self) -> bool:
         return False
@@ -656,12 +679,17 @@ class FakeGuild:
         self.me = object()
         self.channels = {channel.id: channel for channel in channels}
         self.role = FakeRole()
+        self.moderator_role = FakeRole(88)
+        self.roles = {
+            self.role.id: self.role,
+            self.moderator_role.id: self.moderator_role,
+        }
 
     def get_channel(self, channel_id: int) -> FakeChannel | None:
         return self.channels.get(channel_id)
 
     def get_role(self, role_id: int) -> FakeRole | None:
-        return self.role if role_id == self.role.id else None
+        return self.roles.get(role_id)
 
 
 @pytest.mark.asyncio
@@ -891,3 +919,64 @@ async def test_reopened_lobby_clears_consensus_and_never_repings(tmp_path: Path)
     assert len(channel.sent) == 1
     assert channel.sent[0].kwargs["content"] is None
     assert database.posts[1][165]["notification_handled"] is True
+
+
+@pytest.mark.asyncio
+async def test_dispute_replaces_post_pings_moderators_once_and_resolution_deletes(
+    tmp_path: Path,
+) -> None:
+    database = FakeDatabase()
+    bot = FakeBot()
+    channel = FakeChannel(10)
+    guild = FakeGuild(1, channel)
+    bot.guilds[1] = guild
+    service = ActiveLobbyService(
+        bot, FakeAPI(), database, None, "https://battlevive.test", tmp_path
+    )
+    config = {
+        "guild_id": 1,
+        "active_lobby_channel_id": 10,
+        "active_lobby_role_id": 77,
+        "website_moderator_role_id": 88,
+        "active_lobby_baseline_pending": True,
+    }
+    active = candidate()
+    await service._reconcile_guild(config, [active])
+    original = channel.sent[-1]
+    assert database.posts[1][165]["dispute_notification_handled"] is False
+
+    config["active_lobby_baseline_pending"] = False
+    disputed = candidate(status="awaiting_votes", ended_at="done")
+    state = service._states[165]
+    state.actions = [action(1, "team_one", "pick", "Lucie")]
+    state.confirmations = [
+        confirmation(1, "team_one", "team_one", 1),
+        confirmation(2, "team_two", "team_two", 2),
+    ]
+    state.draft_finalized = True
+
+    await service._reconcile_guild(config, [disputed])
+
+    alert = channel.sent[-1]
+    assert alert is not original
+    assert original.deleted is True
+    assert alert.kwargs["content"] == (
+        "⚠️ <@&88> disputed result needs moderator review."
+    )
+    allowed = alert.kwargs["allowed_mentions"]
+    assert allowed.roles == [guild.moderator_role]
+    assert allowed.users is False
+    assert allowed.everyone is False
+    assert database.posts[1][165]["dispute_notification_handled"] is True
+
+    await service._reconcile_guild(config, [disputed])
+    assert len(channel.sent) == 2
+
+    resolved = candidate(
+        status="finished",
+        ended_at="done",
+        winner_slot="team_two",
+    )
+    await service._reconcile_guild(config, [resolved])
+    assert alert.deleted is True
+    assert database.posts[1][165]["message_id"] is None

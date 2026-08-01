@@ -194,6 +194,7 @@ async def test_config_reset_and_show_are_ephemeral(monkeypatch: pytest.MonkeyPat
             "content": "Leaderboard channel: <#456>.\nLeaderboard limit: 50 (maximum).\n"
             "Active-lobby channel: not configured.\n"
             "Active-lobby notification role: not configured.\n"
+            "Website moderator role: not configured.\n"
             "Debug exports: disabled.",
             "ephemeral": True,
         }
@@ -306,6 +307,38 @@ async def test_active_lobby_role_rejects_default_and_restores_generated_default(
     assert restored.response.messages[0]["content"].endswith("<@&2>.")
 
 
+@pytest.mark.asyncio
+async def test_website_moderator_role_uses_generated_default_and_requests_reconcile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generated = SimpleNamespace(
+        id=3,
+        name=roles_module.WEBSITE_MODERATOR_ROLE,
+        managed=False,
+        mention="<@&3>",
+    )
+    generated.is_default = lambda: False
+    calls: list[tuple[int, int | None, int]] = []
+    service = SimpleNamespace(request_reconciliation=lambda: calls.append((0, None, 0)))
+
+    async def fake_set(guild_id: int, role_id: int | None, updated_by: int) -> None:
+        calls.append((guild_id, role_id, updated_by))
+
+    monkeypatch.setattr(bot_module.db, "set_website_moderator_role", fake_set)
+    monkeypatch.setattr(bot_module.bot, "active_lobby_service", service)
+    interaction = make_interaction()
+    interaction.guild.default_role = SimpleNamespace(id=1, name="@everyone")
+    interaction.guild.roles = [interaction.guild.default_role, generated]
+
+    await bot_module.config_active_lobbies_moderator_role.callback(
+        interaction,
+        None,
+    )
+
+    assert calls == [(789, 3, 123), (0, None, 0)]
+    assert interaction.response.messages[0]["content"].endswith("<@&3>.")
+
+
 class CommandRole:
     def __init__(
         self,
@@ -392,7 +425,10 @@ async def test_create_roles_autoselects_authoritative_edited_role_without_cache_
     configured: list[tuple[int, int, int]] = []
 
     async def get_config(guild_id: int) -> dict[str, object]:
-        return {"active_lobby_role_id": None}
+        return {
+            "active_lobby_role_id": None,
+            "website_moderator_role_id": 999,
+        }
 
     async def set_role(guild_id: int, role_id: int, updated_by: int) -> None:
         configured.append((guild_id, role_id, updated_by))
@@ -420,7 +456,10 @@ async def test_create_roles_autoselects_uncached_new_role_returned_by_discord(
     configured: list[tuple[int, int, int]] = []
 
     async def get_config(guild_id: int) -> dict[str, object]:
-        return {"active_lobby_role_id": None}
+        return {
+            "active_lobby_role_id": None,
+            "website_moderator_role_id": 999,
+        }
 
     async def set_role(guild_id: int, role_id: int, updated_by: int) -> None:
         configured.append((guild_id, role_id, updated_by))
@@ -432,6 +471,57 @@ async def test_create_roles_autoselects_uncached_new_role_returned_by_discord(
 
     assert created not in interaction.guild.roles
     assert configured == [(789, created.id, 123)]
+
+
+@pytest.mark.asyncio
+async def test_create_roles_autoselects_both_generated_notification_roles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = {
+        roles_module.ACTIVE_LOBBY_ROLE: CommandRole(
+            61,
+            roles_module.ACTIVE_LOBBY_ROLE,
+        ),
+        roles_module.WEBSITE_MODERATOR_ROLE: CommandRole(
+            62,
+            roles_module.WEBSITE_MODERATOR_ROLE,
+        ),
+    }
+
+    async def create_role(**kwargs: object) -> CommandRole:
+        return created[str(kwargs["name"])]
+
+    existing = [
+        CommandRole(index + 10, name)
+        for index, name in enumerate(roles_module.REQUIRED_ROLE_NAMES)
+        if name not in created
+    ]
+    interaction = role_setup_interaction(existing, create_role)
+    configured: list[tuple[str, int, int, int]] = []
+
+    async def get_config(guild_id: int) -> dict[str, object]:
+        return {
+            "active_lobby_role_id": None,
+            "website_moderator_role_id": None,
+        }
+
+    async def set_active(guild_id: int, role_id: int, updated_by: int) -> None:
+        configured.append(("active", guild_id, role_id, updated_by))
+
+    async def set_moderator(guild_id: int, role_id: int, updated_by: int) -> None:
+        configured.append(("moderator", guild_id, role_id, updated_by))
+
+    monkeypatch.setattr(bot_module.db, "get_guild_config", get_config)
+    monkeypatch.setattr(bot_module.db, "set_active_lobby_role", set_active)
+    monkeypatch.setattr(bot_module.db, "set_website_moderator_role", set_moderator)
+    monkeypatch.setattr(bot_module.bot, "active_lobby_service", None)
+
+    await bot_module.create_roles_slash.callback(interaction)
+
+    assert configured == [
+        ("active", 789, 61, 123),
+        ("moderator", 789, 62, 123),
+    ]
 
 
 @pytest.mark.asyncio

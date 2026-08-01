@@ -74,6 +74,13 @@ class ActiveLobbyDatabase(Protocol):
         updated_by: int,
     ) -> None: ...
 
+    async def set_website_moderator_role(
+        self,
+        guild_id: int,
+        role_id: int | None,
+        updated_by: int,
+    ) -> None: ...
+
     async def reset_active_lobby_config(
         self,
         guild_id: int,
@@ -91,6 +98,7 @@ class ActiveLobbyDatabase(Protocol):
         lobby_ids: Sequence[int],
         *,
         notification_handled: bool,
+        dispute_notification_handled: bool,
     ) -> None: ...
 
     async def record_active_lobby_post(
@@ -102,6 +110,7 @@ class ActiveLobbyDatabase(Protocol):
         fingerprint: str,
         *,
         notification_handled: bool,
+        dispute_notification_handled: bool,
     ) -> None: ...
 
     async def clear_active_lobby_post_message(
@@ -445,10 +454,7 @@ def result_is_resolved(candidate: Mapping[str, Any], state: LobbyPollState) -> b
     if candidate.get("ended_at") is None:
         return False
     winner_slot = _normalized_slot(candidate.get("winner_slot"))
-    if winner_slot in ("team_one", "team_two") and (
-        candidate.get("dispute_reason")
-        or "disput" in str(candidate.get("status", "")).casefold()
-    ):
+    if winner_slot in ("team_one", "team_two"):
         return True
     votes = newest_confirmations(state.confirmations)
     if len(votes) != 2:
@@ -460,10 +466,26 @@ def result_is_resolved(candidate: Mapping[str, Any], state: LobbyPollState) -> b
     return len(winners) == 1 and next(iter(winners)) in ("team_one", "team_two")
 
 
-def _phase(candidate: Mapping[str, Any], state: LobbyPollState) -> str:
+def result_is_disputed(
+    candidate: Mapping[str, Any],
+    state: LobbyPollState,
+) -> bool:
     if candidate.get("dispute_reason") or "disput" in str(
         candidate.get("status", "")
     ).casefold():
+        return True
+    votes = newest_confirmations(state.confirmations)
+    if len(votes) != 2:
+        return False
+    winners = {
+        _normalized_slot(_get(confirmation, "selected_winner"))
+        for confirmation in votes.values()
+    }
+    return len(winners) > 1
+
+
+def _phase(candidate: Mapping[str, Any], state: LobbyPollState) -> str:
+    if result_is_disputed(candidate, state):
         return "⚠️ Disputed"
     if candidate.get("ended_at") is not None:
         return "Awaiting result confirmation"
@@ -531,11 +553,8 @@ def build_active_lobby_embed(
     if candidate.get("ended_at") is not None:
         result_text = result_confirmation_text(candidate, state.confirmations)
         winner_slot = _normalized_slot(candidate.get("winner_slot"))
-        if (
-            winner_slot in ("team_one", "team_two")
-            and (candidate.get("dispute_reason") or "disput" in str(candidate.get("status", "")).casefold())
-        ):
-            result_text = f"✅ Moderator resolved: {_team_name(candidate, winner_slot)}"
+        if winner_slot in ("team_one", "team_two"):
+            result_text = f"✅ Result set: {_team_name(candidate, winner_slot)}"
         embed.add_field(
             name="Result Confirmation",
             value=_truncate(result_text, MAX_FIELD_VALUE),
@@ -786,8 +805,26 @@ class ActiveLobbyService:
             guild_id,
             lobby_ids,
             notification_handled=baseline_pending,
+            dispute_notification_handled=False,
         )
         if baseline_pending:
+            disputed_ids = [
+                int(candidate["id"])
+                for candidate in candidates
+                if result_is_disputed(
+                    candidate,
+                    self._states.setdefault(
+                        int(candidate["id"]),
+                        LobbyPollState(),
+                    ),
+                )
+            ]
+            await self.database.ensure_active_lobby_post_states(
+                guild_id,
+                disputed_ids,
+                notification_handled=True,
+                dispute_notification_handled=True,
+            )
             await self.database.complete_active_lobby_baseline(guild_id)
         stored = await self.database.get_active_lobby_post_states(guild_id)
         stored_by_id = {int(row["lobby_id"]): row for row in stored}
@@ -805,6 +842,10 @@ class ActiveLobbyService:
                 await self._delete_lobby_post(guild, row)
 
         role = self._notification_role(guild, config.get("active_lobby_role_id"))
+        moderator_role = self._notification_role(
+            guild,
+            config.get("website_moderator_role_id"),
+        )
         for candidate, state in visible:
             lobby_id = int(candidate["id"])
             rendered = build_active_lobby_embed(
@@ -818,9 +859,11 @@ class ActiveLobbyService:
                 guild_id,
                 channel,
                 candidate,
+                state,
                 stored_by_id.get(lobby_id),
                 rendered,
                 role,
+                moderator_role,
             )
 
         if visible:
@@ -834,11 +877,24 @@ class ActiveLobbyService:
         guild_id: int,
         channel: Any,
         candidate: Mapping[str, Any],
+        state: LobbyPollState,
         stored: Mapping[str, Any] | None,
         rendered: RenderedLobby,
         role: Any | None,
+        moderator_role: Any | None,
     ) -> None:
         lobby_id = int(candidate["id"])
+        notify = bool(
+            stored is not None
+            and not stored.get("notification_handled")
+            and role is not None
+        )
+        notify_dispute = bool(
+            stored is not None
+            and not stored.get("dispute_notification_handled")
+            and result_is_disputed(candidate, state)
+            and moderator_role is not None
+        )
         message = None
         same_channel = bool(
             stored
@@ -851,7 +907,7 @@ class ActiveLobbyService:
             except discord.NotFound:
                 message = None
 
-        if message is not None:
+        if message is not None and not (notify or notify_dispute):
             if stored.get("fingerprint") == rendered.fingerprint:
                 return
             await self._edit_lobby_message(message, rendered)
@@ -862,12 +918,30 @@ class ActiveLobbyService:
                 message.id,
                 rendered.fingerprint,
                 notification_handled=bool(stored.get("notification_handled")),
+                dispute_notification_handled=bool(
+                    stored.get("dispute_notification_handled")
+                ),
             )
             return
 
-        notify = bool(stored is not None and not stored.get("notification_handled"))
-        content = f"<@&{role.id}>" if notify and role is not None else None
-        message = await self._send_lobby_message(channel, rendered, content, role)
+        notified_roles: list[Any] = []
+        content_parts: list[str] = []
+        if notify and role is not None:
+            notified_roles.append(role)
+            content_parts.append(f"<@&{role.id}>")
+        if notify_dispute and moderator_role is not None:
+            if all(existing.id != moderator_role.id for existing in notified_roles):
+                notified_roles.append(moderator_role)
+            content_parts.append(
+                f"⚠️ <@&{moderator_role.id}> disputed result needs moderator review."
+            )
+        content = " ".join(content_parts) or None
+        message = await self._send_lobby_message(
+            channel,
+            rendered,
+            content,
+            notified_roles,
+        )
         old_reference = self._message_reference(stored, channel.id, message.id)
         if old_reference is not None:
             old_channel_id, old_message_id = old_reference
@@ -884,6 +958,11 @@ class ActiveLobbyService:
             message.id,
             rendered.fingerprint,
             notification_handled=True,
+            dispute_notification_handled=bool(
+                stored is not None
+                and stored.get("dispute_notification_handled")
+            )
+            or notify_dispute,
         )
 
         if old_reference is not None:
@@ -902,7 +981,7 @@ class ActiveLobbyService:
         channel: Any,
         rendered: RenderedLobby,
         content: str | None,
-        role: Any | None,
+        roles: Sequence[Any],
     ) -> Any:
         file = rendered.file()
         kwargs: dict[str, Any] = {
@@ -912,10 +991,10 @@ class ActiveLobbyService:
                 discord.AllowedMentions(
                     everyone=False,
                     users=False,
-                    roles=[role],
+                    roles=list(roles),
                     replied_user=False,
                 )
-                if content is not None and role is not None
+                if content is not None and roles
                 else discord.AllowedMentions.none()
             ),
         }

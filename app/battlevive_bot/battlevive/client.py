@@ -25,6 +25,7 @@ from ..models import UserTrophy
 from ..models import parse_lobbies
 from ..models import parse_lobby_captains
 from ..models import parse_lobby_draft_actions
+from ..models import parse_lobby_roster_members
 from ..models import parse_match_result_confirmations
 from ..models import parse_season_ratings
 from ..models import parse_user_trophies
@@ -90,7 +91,26 @@ class BattleviveClient:
         return await self._get_and_parse("users", parse_users)
 
     async def get_lobbies(self) -> list[Lobby]:
-        return await self._get_and_parse("lobbies", parse_lobbies)
+        lobbies, roster_members = await asyncio.gather(
+            self._get_and_parse("lobbies", parse_lobbies),
+            self._get_and_parse(
+                "lobby_slots",
+                parse_lobby_roster_members,
+                params=(
+                    ("select", "lobby_id,user_id,slot"),
+                    ("order", "joined_at.asc,id.asc"),
+                ),
+            ),
+        )
+        by_lobby = {lobby.id: lobby for lobby in lobbies}
+        for lobby in lobbies:
+            lobby.team_one_roster = []
+            lobby.team_two_roster = []
+        for member in roster_members:
+            lobby = by_lobby.get(member.lobby_id)
+            if lobby is not None:
+                getattr(lobby, f"{member.slot}_roster").append(member.user_id)
+        return lobbies
 
     async def get_season_ratings(self) -> list[SeasonRating]:
         return await self._get_and_parse(

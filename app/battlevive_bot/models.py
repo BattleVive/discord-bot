@@ -257,6 +257,24 @@ class LobbyCaptain:
 
 
 @dataclass(frozen=True)
+class LobbyRosterMember:
+    lobby_id: int
+    user_id: str
+    slot: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> LobbyRosterMember:
+        return cls(
+            lobby_id=_required_int(data, "lobby_id"),
+            user_id=_required_str(data, "user_id"),
+            slot=_required_choice(data, "slot", _TEAM_SLOTS),
+        )
+
+    def json(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class MatchResultConfirmation:
     id: int | str
     lobby_id: int
@@ -368,6 +386,15 @@ def parse_lobby_captains(
     json_data: str | list[dict[str, Any]],
 ) -> list[LobbyCaptain]:
     return [LobbyCaptain.from_dict(item) for item in _parse_collection(json_data)]
+
+
+def parse_lobby_roster_members(
+    json_data: str | list[dict[str, Any]],
+) -> list[LobbyRosterMember]:
+    return [
+        LobbyRosterMember.from_dict(item)
+        for item in _parse_collection(json_data)
+    ]
 
 
 def parse_match_result_confirmations(

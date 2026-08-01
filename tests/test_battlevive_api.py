@@ -121,7 +121,12 @@ async def test_client_parses_every_endpoint(
     payload: object,
     summary: list[object],
 ) -> None:
-    transport = FakeTransport(payloads={endpoint: payload})
+    payloads = {endpoint: payload}
+    if endpoint == "lobbies":
+        payloads["lobby_slots"] = [
+            {"lobby_id": 101, "user_id": user_payload()["id"], "slot": "team_one"}
+        ]
+    transport = FakeTransport(payloads=payloads)
     client = make_client(tmp_path, transport)
 
     result = await getattr(client, method_name)()
@@ -135,7 +140,46 @@ async def test_client_parses_every_endpoint(
     else:
         actual = [item.json() for item in result]
     assert actual == summary
-    assert transport.get_calls == [(endpoint, "bootstrap-access")]
+    expected_calls = [(endpoint, "bootstrap-access")]
+    if endpoint == "lobbies":
+        expected_calls.append(("lobby_slots", "bootstrap-access"))
+    assert transport.get_calls == expected_calls
+
+
+@pytest.mark.asyncio
+async def test_lobbies_hydrate_ordered_rosters_from_minimal_slot_query(
+    tmp_path: Path,
+) -> None:
+    transport = FakeTransport(
+        payloads={
+            "lobbies": [
+                lobby_payload(team_one_roster=[], team_two_roster=[]),
+            ],
+            "lobby_slots": [
+                {"lobby_id": 101, "user_id": "user-two", "slot": "team_one"},
+                {"lobby_id": 101, "user_id": "user-one", "slot": "team_one"},
+                {"lobby_id": 101, "user_id": "user-three", "slot": "team_two"},
+                {"lobby_id": 999, "user_id": "orphan", "slot": "team_one"},
+            ],
+        }
+    )
+    client = make_client(tmp_path, transport)
+
+    result = await client.get_lobbies()
+
+    assert result[0].team_one_roster == ["user-two", "user-one"]
+    assert result[0].team_two_roster == ["user-three"]
+    assert transport.get_params_calls == [
+        ("lobbies", "bootstrap-access", None),
+        (
+            "lobby_slots",
+            "bootstrap-access",
+            (
+                ("select", "lobby_id,user_id,slot"),
+                ("order", "joined_at.asc,id.asc"),
+            ),
+        ),
+    ]
 
 
 @pytest.mark.asyncio

@@ -12,12 +12,17 @@ from .models import SeasonRating
 
 BATTLEVIVE_PLAYER_ROLE = "Battlevive Player"
 ACTIVE_LOBBY_ROLE = "Active Lobby"
+WEBSITE_MODERATOR_ROLE = "Website Moderator"
+NOTIFICATION_ROLE_NAMES = frozenset(
+    {ACTIVE_LOBBY_ROLE, WEBSITE_MODERATOR_ROLE}
+)
 RANK_ROLE_NAMES_ORDERED = tuple(name for _, name in SeasonRating.RANKS)
 RANK_ROLE_NAMES = frozenset(RANK_ROLE_NAMES_ORDERED)
 REQUIRED_ROLE_NAMES = (
     *RANK_ROLE_NAMES_ORDERED,
     BATTLEVIVE_PLAYER_ROLE,
     ACTIVE_LOBBY_ROLE,
+    WEBSITE_MODERATOR_ROLE,
 )
 
 
@@ -207,7 +212,7 @@ async def create_roles(guild: discord.Guild) -> RoleCreationResult:
                 )
                 continue
             authoritative_role = existing_role
-            if role_name == ACTIVE_LOBBY_ROLE and getattr(
+            if role_name in NOTIFICATION_ROLE_NAMES and getattr(
                 existing_role,
                 "mentionable",
                 False,

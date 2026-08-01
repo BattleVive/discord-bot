@@ -59,7 +59,8 @@ async def get_guild_config(
         """
         SELECT guild_id, leaderboard_channel_id, leaderboard_limit,
                debug_commands_enabled, active_lobby_channel_id,
-               active_lobby_role_id, active_lobby_baseline_pending,
+               active_lobby_role_id, website_moderator_role_id,
+               active_lobby_baseline_pending,
                updated_by
         FROM guild_config
         WHERE guild_id = $1
@@ -185,6 +186,7 @@ async def get_configured_active_lobbies() -> list[dict[str, int | bool | None]]:
         """
         SELECT config.guild_id, config.active_lobby_channel_id,
                config.active_lobby_role_id,
+               config.website_moderator_role_id,
                config.active_lobby_baseline_pending, config.updated_by
         FROM guild_config AS config
         WHERE config.active_lobby_channel_id IS NOT NULL
@@ -273,17 +275,39 @@ async def set_active_lobby_role(
     )
 
 
+async def set_website_moderator_role(
+    guild_id: int,
+    role_id: int | None,
+    updated_by: int,
+) -> None:
+    await get_pool().execute(
+        """
+        INSERT INTO guild_config (guild_id, website_moderator_role_id, updated_by)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET website_moderator_role_id = EXCLUDED.website_moderator_role_id,
+            updated_at = now(),
+            updated_by = EXCLUDED.updated_by
+        """,
+        guild_id,
+        role_id,
+        updated_by,
+    )
+
+
 async def reset_active_lobby_config(guild_id: int, updated_by: int) -> None:
     await get_pool().execute(
         """
         INSERT INTO guild_config (
             guild_id, active_lobby_channel_id, active_lobby_role_id,
+            website_moderator_role_id,
             active_lobby_baseline_pending, updated_by
         )
-        VALUES ($1, NULL, NULL, TRUE, $2)
+        VALUES ($1, NULL, NULL, NULL, TRUE, $2)
         ON CONFLICT (guild_id) DO UPDATE
         SET active_lobby_channel_id = NULL,
             active_lobby_role_id = NULL,
+            website_moderator_role_id = NULL,
             active_lobby_baseline_pending = TRUE,
             updated_at = now(),
             updated_by = EXCLUDED.updated_by
@@ -696,7 +720,8 @@ async def get_active_lobby_post_states(guild_id: int) -> list[dict[str, Any]]:
     rows = await get_pool().fetch(
         """
         SELECT guild_id, lobby_id, channel_id, message_id, fingerprint,
-               first_seen_at, notification_handled, updated_at
+               first_seen_at, notification_handled,
+               dispute_notification_handled, updated_at
         FROM active_lobby_posts
         WHERE guild_id = $1
         ORDER BY lobby_id
@@ -711,6 +736,7 @@ async def ensure_active_lobby_post_states(
     lobby_ids: Sequence[int],
     *,
     notification_handled: bool,
+    dispute_notification_handled: bool,
 ) -> None:
     unique_lobby_ids = list(dict.fromkeys(lobby_ids))
     if not unique_lobby_ids:
@@ -718,20 +744,35 @@ async def ensure_active_lobby_post_states(
     await get_pool().executemany(
         """
         INSERT INTO active_lobby_posts (
-            guild_id, lobby_id, notification_handled
+            guild_id, lobby_id, notification_handled,
+            dispute_notification_handled
         )
-        VALUES ($1, $2, $3)
+        VALUES ($1, $2, $3, $4)
         ON CONFLICT (guild_id, lobby_id) DO UPDATE
         SET notification_handled = (
                 active_lobby_posts.notification_handled
                 OR EXCLUDED.notification_handled
             ),
+            dispute_notification_handled = (
+                active_lobby_posts.dispute_notification_handled
+                OR EXCLUDED.dispute_notification_handled
+            ),
             updated_at = now()
-        WHERE NOT active_lobby_posts.notification_handled
-          AND EXCLUDED.notification_handled
+        WHERE (
+            NOT active_lobby_posts.notification_handled
+            AND EXCLUDED.notification_handled
+        ) OR (
+            NOT active_lobby_posts.dispute_notification_handled
+            AND EXCLUDED.dispute_notification_handled
+        )
         """,
         [
-            (guild_id, lobby_id, notification_handled)
+            (
+                guild_id,
+                lobby_id,
+                notification_handled,
+                dispute_notification_handled,
+            )
             for lobby_id in unique_lobby_ids
         ],
     )
@@ -745,14 +786,15 @@ async def record_active_lobby_post(
     fingerprint: str,
     *,
     notification_handled: bool,
+    dispute_notification_handled: bool,
 ) -> None:
     await get_pool().execute(
         """
         INSERT INTO active_lobby_posts (
             guild_id, lobby_id, channel_id, message_id, fingerprint,
-            notification_handled
+            notification_handled, dispute_notification_handled
         )
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (guild_id, lobby_id) DO UPDATE
         SET channel_id = EXCLUDED.channel_id,
             message_id = EXCLUDED.message_id,
@@ -760,6 +802,10 @@ async def record_active_lobby_post(
             notification_handled = (
                 active_lobby_posts.notification_handled
                 OR EXCLUDED.notification_handled
+            ),
+            dispute_notification_handled = (
+                active_lobby_posts.dispute_notification_handled
+                OR EXCLUDED.dispute_notification_handled
             ),
             updated_at = now()
         """,
@@ -769,6 +815,7 @@ async def record_active_lobby_post(
         message_id,
         fingerprint,
         notification_handled,
+        dispute_notification_handled,
     )
 
 
@@ -1014,10 +1061,8 @@ async def sync_users_to_db(users: list[User]) -> None:
 
 
 async def sync_lobbies_to_db(lobbies: list[Lobby]) -> None:
-    if not lobbies:
-        return
-
     pool = get_pool()
+    upstream_ids = [lobby.id for lobby in lobbies]
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.executemany(
@@ -1170,6 +1215,29 @@ async def sync_lobbies_to_db(lobbies: list[Lobby]) -> None:
                 SET roster = EXCLUDED.roster
                 """,
                 roster_rows,
+            )
+
+            # The upstream list is authoritative. Preserve Discord references
+            # before the lobby FK cascade removes per-guild post state.
+            await conn.execute(
+                """
+                INSERT INTO active_lobby_obsolete_posts (
+                    guild_id, lobby_id, channel_id, message_id
+                )
+                SELECT guild_id, lobby_id, channel_id, message_id
+                FROM active_lobby_posts
+                WHERE message_id IS NOT NULL
+                  AND NOT (lobby_id = ANY($1::INTEGER[]))
+                ON CONFLICT (guild_id, channel_id, message_id) DO NOTHING
+                """,
+                upstream_ids,
+            )
+            await conn.execute(
+                """
+                DELETE FROM lobbies
+                WHERE NOT (id = ANY($1::INTEGER[]))
+                """,
+                upstream_ids,
             )
 
 

@@ -131,6 +131,24 @@ async def test_init_db_sql_creates_expected_schema(postgres_db: None) -> None:
     )
     assert await pool.fetchval(
         """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'guild_config'
+              AND column_name = 'website_moderator_role_id'
+        )
+        """
+    )
+    assert await pool.fetchval(
+        """
+        SELECT column_default = 'false'
+        FROM information_schema.columns
+        WHERE table_name = 'active_lobby_posts'
+          AND column_name = 'dispute_notification_handled'
+          AND is_nullable = 'NO'
+        """
+    )
+    assert await pool.fetchval(
+        """
         SELECT column_default = 'false'
         FROM information_schema.columns
         WHERE table_name = 'guild_config'
@@ -316,7 +334,15 @@ async def test_active_lobby_migration_preserves_legacy_rosters_without_captains(
     upgraded_config = await db.get_guild_config(1001)
     assert upgraded_config is not None
     assert upgraded_config["active_lobby_channel_id"] == 2001
+    assert upgraded_config["website_moderator_role_id"] is None
     assert upgraded_config["active_lobby_baseline_pending"] is True
+    assert await pool.fetchval(
+        """
+        SELECT dispute_notification_handled = FALSE
+        FROM active_lobby_posts
+        LIMIT 1
+        """
+    ) is None
     assert await pool.fetchval(
         "SELECT to_regclass('public.active_lobby_obsolete_posts') IS NOT NULL"
     )
@@ -622,6 +648,7 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
         "debug_commands_enabled": True,
         "active_lobby_channel_id": None,
         "active_lobby_role_id": None,
+        "website_moderator_role_id": None,
         "active_lobby_baseline_pending": True,
         "updated_by": 3012,
     }
@@ -632,6 +659,7 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
         "debug_commands_enabled": False,
         "active_lobby_channel_id": None,
         "active_lobby_role_id": None,
+        "website_moderator_role_id": None,
         "active_lobby_baseline_pending": True,
         "updated_by": 3002,
     }
@@ -645,6 +673,7 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
         "debug_commands_enabled": True,
         "active_lobby_channel_id": None,
         "active_lobby_role_id": None,
+        "website_moderator_role_id": None,
         "active_lobby_baseline_pending": True,
         "updated_by": 3021,
     }
@@ -720,6 +749,7 @@ async def test_pending_baseline_upgrades_existing_notification_state_monotonical
         1001,
         [lobby.id],
         notification_handled=False,
+        dispute_notification_handled=False,
     )
     original = (await db.get_active_lobby_post_states(1001))[0]
     assert original["notification_handled"] is False
@@ -728,9 +758,11 @@ async def test_pending_baseline_upgrades_existing_notification_state_monotonical
         1001,
         [lobby.id],
         notification_handled=True,
+        dispute_notification_handled=True,
     )
     upgraded = (await db.get_active_lobby_post_states(1001))[0]
     assert upgraded["notification_handled"] is True
+    assert upgraded["dispute_notification_handled"] is True
     assert upgraded["first_seen_at"] == original["first_seen_at"]
     assert upgraded["updated_at"] >= original["updated_at"]
 
@@ -738,6 +770,7 @@ async def test_pending_baseline_upgrades_existing_notification_state_monotonical
         1001,
         [lobby.id],
         notification_handled=False,
+        dispute_notification_handled=False,
     )
     retained = (await db.get_active_lobby_post_states(1001))[0]
     assert retained["notification_handled"] is True
@@ -792,6 +825,64 @@ async def test_obsolete_active_lobby_posts_are_idempotent_and_guild_isolated(
 
 
 @pytest.mark.asyncio
+async def test_authoritative_lobby_sync_queues_posts_before_deleting_missing_rows(
+    postgres_db: None,
+) -> None:
+    user = User.from_dict(user_payload(discord_id=None))
+    kept = Lobby.from_dict(
+        lobby_payload(
+            id=101,
+            lobby_number=101,
+            status="active",
+            team_one_roster=[USER_A_ID],
+            team_two_roster=[],
+        )
+    )
+    removed = Lobby.from_dict(
+        lobby_payload(
+            id=102,
+            lobby_number=102,
+            status="open",
+            team_one_roster=[USER_A_ID],
+            team_two_roster=[],
+        )
+    )
+    await db.sync_battlevive_data_to_db([user], [kept, removed])
+    await db.set_active_lobby_channel(1001, 2001, 3001)
+    await db.ensure_active_lobby_post_states(
+        1001,
+        [removed.id],
+        notification_handled=True,
+        dispute_notification_handled=False,
+    )
+    await db.record_active_lobby_post(
+        1001,
+        removed.id,
+        2001,
+        5001,
+        "removed",
+        notification_handled=True,
+        dispute_notification_handled=False,
+    )
+
+    await db.sync_lobbies_to_db([kept])
+
+    assert [lobby.id for lobby in await db.get_lobbies()] == [kept.id]
+    assert await db.get_active_lobby_post_states(1001) == []
+    obsolete = await db.get_active_lobby_obsolete_posts(1001)
+    assert [(row["lobby_id"], row["message_id"]) for row in obsolete] == [
+        (None, 5001)
+    ]
+    assert not await db.get_pool().fetchval(
+        "SELECT EXISTS (SELECT 1 FROM lobby_rosters WHERE lobby_id = $1)",
+        removed.id,
+    )
+
+    await db.sync_lobbies_to_db([])
+    assert await db.get_lobbies() == []
+
+
+@pytest.mark.asyncio
 async def test_active_lobby_config_and_post_history_survive_reset_for_cleanup(
     postgres_db: None,
 ) -> None:
@@ -806,16 +897,19 @@ async def test_active_lobby_config_and_post_history_survive_reset_for_cleanup(
     await db.sync_battlevive_data_to_db([user_a], [lobby])
     await db.set_active_lobby_channel(1001, 2001, 3001)
     await db.set_active_lobby_role(1001, 4001, 3002)
+    await db.set_website_moderator_role(1001, 4002, 3002)
     await db.ensure_active_lobby_post_states(
         1001,
         [lobby.id],
         notification_handled=True,
+        dispute_notification_handled=True,
     )
     first_seen = (await db.get_active_lobby_post_states(1001))[0]["first_seen_at"]
     await db.ensure_active_lobby_post_states(
         1001,
         [lobby.id],
         notification_handled=False,
+        dispute_notification_handled=False,
     )
     await db.record_active_lobby_post(
         1001,
@@ -824,6 +918,7 @@ async def test_active_lobby_config_and_post_history_survive_reset_for_cleanup(
         5001,
         "lobby-fingerprint",
         notification_handled=False,
+        dispute_notification_handled=False,
     )
     await db.record_active_lobby_empty_post(
         1001,
@@ -843,6 +938,7 @@ async def test_active_lobby_config_and_post_history_survive_reset_for_cleanup(
     config = await db.get_guild_config(1001)
     assert config["active_lobby_channel_id"] == 2001
     assert config["active_lobby_role_id"] == 4001
+    assert config["website_moderator_role_id"] == 4002
     state = (await db.get_active_lobby_post_states(1001))[0]
     assert state["first_seen_at"] == first_seen
     assert state["notification_handled"] is True
@@ -855,11 +951,13 @@ async def test_active_lobby_config_and_post_history_survive_reset_for_cleanup(
     reset_config = await db.get_guild_config(1001)
     assert reset_config["active_lobby_channel_id"] is None
     assert reset_config["active_lobby_role_id"] is None
+    assert reset_config["website_moderator_role_id"] is None
     assert await db.get_configured_active_lobbies() == [
         {
             "guild_id": 1001,
             "active_lobby_channel_id": None,
             "active_lobby_role_id": None,
+            "website_moderator_role_id": None,
             "active_lobby_baseline_pending": True,
             "updated_by": 3003,
         }

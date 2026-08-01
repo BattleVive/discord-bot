@@ -55,6 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_lobby_rosters_roster
 ALTER TABLE guild_config
     ADD COLUMN IF NOT EXISTS active_lobby_channel_id BIGINT,
     ADD COLUMN IF NOT EXISTS active_lobby_role_id BIGINT,
+    ADD COLUMN IF NOT EXISTS website_moderator_role_id BIGINT,
     ADD COLUMN IF NOT EXISTS active_lobby_baseline_pending BOOLEAN NOT NULL DEFAULT TRUE;
 
 CREATE TABLE IF NOT EXISTS active_lobby_posts (
@@ -65,10 +66,14 @@ CREATE TABLE IF NOT EXISTS active_lobby_posts (
     fingerprint            TEXT,
     first_seen_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     notification_handled   BOOLEAN NOT NULL DEFAULT FALSE,
+    dispute_notification_handled BOOLEAN NOT NULL DEFAULT FALSE,
     updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (guild_id, lobby_id),
     CHECK ((channel_id IS NULL) = (message_id IS NULL))
 );
+
+ALTER TABLE active_lobby_posts
+    ADD COLUMN IF NOT EXISTS dispute_notification_handled BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE INDEX IF NOT EXISTS idx_active_lobby_posts_message
     ON active_lobby_posts (guild_id, channel_id, message_id)
@@ -195,6 +200,7 @@ FOR EACH ROW
 WHEN (
     NEW.active_lobby_channel_id IS NOT NULL
     OR NEW.active_lobby_role_id IS NOT NULL
+    OR NEW.website_moderator_role_id IS NOT NULL
 )
 EXECUTE FUNCTION notify_active_lobbies_changed();
 
@@ -205,6 +211,7 @@ FOR EACH ROW
 WHEN (
     OLD.active_lobby_channel_id IS DISTINCT FROM NEW.active_lobby_channel_id
     OR OLD.active_lobby_role_id IS DISTINCT FROM NEW.active_lobby_role_id
+    OR OLD.website_moderator_role_id IS DISTINCT FROM NEW.website_moderator_role_id
     OR OLD.active_lobby_baseline_pending IS DISTINCT FROM NEW.active_lobby_baseline_pending
 )
 EXECUTE FUNCTION notify_active_lobbies_changed();
@@ -216,5 +223,6 @@ FOR EACH ROW
 WHEN (
     OLD.active_lobby_channel_id IS NOT NULL
     OR OLD.active_lobby_role_id IS NOT NULL
+    OR OLD.website_moderator_role_id IS NOT NULL
 )
 EXECUTE FUNCTION notify_active_lobbies_changed();

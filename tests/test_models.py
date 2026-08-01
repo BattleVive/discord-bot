@@ -11,6 +11,7 @@ from battlevive_bot.models import UserTrophy
 from battlevive_bot.models import parse_lobbies
 from battlevive_bot.models import parse_lobby_captains
 from battlevive_bot.models import parse_lobby_draft_actions
+from battlevive_bot.models import parse_lobby_roster_members
 from battlevive_bot.models import parse_match_result_confirmations
 from battlevive_bot.models import parse_season_ratings
 from battlevive_bot.models import parse_user_trophies
@@ -67,6 +68,15 @@ def test_active_lobby_models_parse_minimal_payloads() -> None:
         "slot": "team_one",
     }
 
+    roster_member = parse_lobby_roster_members(
+        [{"lobby_id": 101, "user_id": user_payload()["id"], "slot": "team_two"}]
+    )[0]
+    assert roster_member.json() == {
+        "lobby_id": 101,
+        "user_id": user_payload()["id"],
+        "slot": "team_two",
+    }
+
     confirmation = parse_match_result_confirmations(
         [match_result_confirmation_payload()]
     )[0]
@@ -88,6 +98,10 @@ def test_active_lobby_models_parse_minimal_payloads() -> None:
             lobby_draft_action_payload(action="trade"),
         ),
         (parse_lobby_captains, {"user_id": None, "slot": "team_one"}),
+        (
+            parse_lobby_roster_members,
+            {"lobby_id": 101, "user_id": "user", "slot": "spectator"},
+        ),
         (
             parse_lobby_captains,
             lobby_captain_payload(slot="captain"),
@@ -129,6 +143,7 @@ def test_invalid_active_lobby_entry_rejects_the_complete_response() -> None:
     [
         parse_lobby_draft_actions,
         parse_lobby_captains,
+        parse_lobby_roster_members,
         parse_match_result_confirmations,
     ],
 )
