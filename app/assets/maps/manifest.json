@@ -1,0 +1,52 @@
+{
+  "maps": [
+    {
+      "name": "Blackstone Arena",
+      "aliases": ["Blackstone", "Blackstonearena", "Blackstone Arena"],
+      "day": "blackstone-arena-day.png",
+      "night": "blackstone-arena-night.png"
+    },
+    {
+      "name": "Daharin Battlegrounds",
+      "aliases": ["Daharin", "Daharin Battleground", "Daharin Battlegrounds"],
+      "day": "daharin-battlegrounds-day.png",
+      "night": "daharin-battlegrounds-night.png"
+    },
+    {
+      "name": "Dragon Garden",
+      "aliases": ["Dragongarden", "Dragon Garden"],
+      "day": "dragon-garden-day.png",
+      "night": "dragon-garden-night.png"
+    },
+    {
+      "name": "Meriko Summit",
+      "aliases": ["Meriko", "Meriko Summit"],
+      "day": "meriko-summit-day.png",
+      "night": "meriko-summit-night.png"
+    },
+    {
+      "name": "Misty Woods",
+      "aliases": ["Misty", "Misty Wood", "Misty Woods"],
+      "day": "misty-woods-day.png",
+      "night": "misty-woods-night.png"
+    },
+    {
+      "name": "Mount Araz",
+      "aliases": ["Mountaraz", "Mount Araz"],
+      "day": "mount-araz-day.png",
+      "night": "mount-araz-night.png"
+    },
+    {
+      "name": "Orman Temple",
+      "aliases": ["Orman", "Orman Temple"],
+      "day": "orman-temple-day.png",
+      "night": "orman-temple-night.png"
+    },
+    {
+      "name": "Sky Ring",
+      "aliases": ["Skyring", "Sky Ring", "Sky Arena"],
+      "day": "sky-ring-day.png",
+      "night": "sky-ring-night.png"
+    }
+  ]
+}

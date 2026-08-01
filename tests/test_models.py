@@ -9,10 +9,16 @@ import pytest
 from battlevive_bot.models import SeasonRating
 from battlevive_bot.models import UserTrophy
 from battlevive_bot.models import parse_lobbies
+from battlevive_bot.models import parse_lobby_captains
+from battlevive_bot.models import parse_lobby_draft_actions
+from battlevive_bot.models import parse_match_result_confirmations
 from battlevive_bot.models import parse_season_ratings
 from battlevive_bot.models import parse_user_trophies
 from battlevive_bot.models import parse_users
 from tests.factories import lobby_payload
+from tests.factories import lobby_captain_payload
+from tests.factories import lobby_draft_action_payload
+from tests.factories import match_result_confirmation_payload
 from tests.factories import season_rating_payload
 from tests.factories import user_payload
 
@@ -46,6 +52,59 @@ def test_user_trophy_json_serializes_nested_datetimes() -> None:
         "earned_at": "2026-01-04T10:00:00+00:00",
         "history": ["2026-01-04T10:00:00+00:00"],
     }
+
+
+def test_active_lobby_models_parse_minimal_payloads() -> None:
+    draft = parse_lobby_draft_actions([lobby_draft_action_payload()])[0]
+    assert draft.lobby_id == 101
+    assert draft.step == 3
+    assert draft.champion == "Lucie"
+    assert draft.json()["created_at"] == "2026-01-02T18:16:00+00:00"
+
+    captain = parse_lobby_captains([lobby_captain_payload()])[0]
+    assert captain.json() == {
+        "user_id": "00000000-0000-0000-0000-000000000001",
+        "slot": "team_one",
+    }
+
+    confirmation = parse_match_result_confirmations(
+        [match_result_confirmation_payload()]
+    )[0]
+    assert confirmation.selected_winner == "team_one"
+    assert confirmation.captain_slot == "team_one"
+    assert confirmation.json()["created_at"] == "2026-01-02T19:00:00+00:00"
+
+
+@pytest.mark.parametrize(
+    ("parser", "payload"),
+    [
+        (parse_lobby_draft_actions, {"id": True}),
+        (parse_lobby_captains, {"user_id": None, "slot": "team_one"}),
+        (
+            parse_match_result_confirmations,
+            match_result_confirmation_payload(captain_slot=None),
+        ),
+    ],
+)
+def test_active_lobby_models_reject_malformed_payloads(
+    parser: object,
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises((KeyError, TypeError, ValueError)):
+        parser([payload])
+
+
+@pytest.mark.parametrize(
+    "parser",
+    [
+        parse_lobby_draft_actions,
+        parse_lobby_captains,
+        parse_match_result_confirmations,
+    ],
+)
+def test_active_lobby_models_require_array_responses(parser: object) -> None:
+    with pytest.raises(TypeError, match="array"):
+        parser({"error": "unexpected"})
 
 
 @pytest.mark.parametrize(

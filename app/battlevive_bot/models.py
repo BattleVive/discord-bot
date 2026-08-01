@@ -15,6 +15,38 @@ def _parse_dt(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value)
 
 
+def _required_str(data: dict[str, Any], key: str) -> str:
+    value = data[key]
+    if not isinstance(value, str) or not value:
+        raise TypeError(f"{key} must be a non-empty string")
+    return value
+
+
+def _required_int(data: dict[str, Any], key: str) -> int:
+    value = data[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{key} must be an integer")
+    return value
+
+
+def _required_id(data: dict[str, Any], key: str) -> int | str:
+    value = data[key]
+    if isinstance(value, bool) or not isinstance(value, (int, str)) or value == "":
+        raise TypeError(f"{key} must be an integer or non-empty string")
+    return value
+
+
+def _parse_collection(
+    json_data: str | list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    data = json.loads(json_data) if isinstance(json_data, str) else json_data
+    if not isinstance(data, list):
+        raise TypeError("response must be an array")
+    if not all(isinstance(item, dict) for item in data):
+        raise TypeError("response entries must be objects")
+    return data
+
+
 def _to_json(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -151,6 +183,75 @@ class Lobby:
         return _to_json(asdict(self))
 
 
+@dataclass(frozen=True)
+class LobbyDraftAction:
+    id: int | str
+    lobby_id: int
+    step: int
+    team_slot: str
+    action: str
+    champion: str | None
+    created_at: datetime
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> LobbyDraftAction:
+        champion = data.get("champion")
+        if champion is not None and not isinstance(champion, str):
+            raise TypeError("champion must be a string or null")
+        return cls(
+            id=_required_id(data, "id"),
+            lobby_id=_required_int(data, "lobby_id"),
+            step=_required_int(data, "step"),
+            team_slot=_required_str(data, "team_slot"),
+            action=_required_str(data, "action"),
+            champion=champion,
+            created_at=_parse_dt(_required_str(data, "created_at")),
+        )
+
+    def json(self) -> dict[str, Any]:
+        return _to_json(asdict(self))
+
+
+@dataclass(frozen=True)
+class LobbyCaptain:
+    user_id: str
+    slot: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> LobbyCaptain:
+        return cls(
+            user_id=_required_str(data, "user_id"),
+            slot=_required_str(data, "slot"),
+        )
+
+    def json(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class MatchResultConfirmation:
+    id: int | str
+    lobby_id: int
+    user_id: str
+    selected_winner: str
+    created_at: datetime
+    captain_slot: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MatchResultConfirmation:
+        return cls(
+            id=_required_id(data, "id"),
+            lobby_id=_required_int(data, "lobby_id"),
+            user_id=_required_str(data, "user_id"),
+            selected_winner=_required_str(data, "selected_winner"),
+            created_at=_parse_dt(_required_str(data, "created_at")),
+            captain_slot=_required_str(data, "captain_slot"),
+        )
+
+    def json(self) -> dict[str, Any]:
+        return _to_json(asdict(self))
+
+
 @dataclass
 class SeasonRating:
     id: int
@@ -211,20 +312,43 @@ class UserTrophy:
 
 
 def parse_users(json_data: str | list[dict[str, Any]]) -> list[User]:
-    data = json.loads(json_data) if isinstance(json_data, str) else json_data
-    return [User.from_dict(item) for item in data]
+    return [User.from_dict(item) for item in _parse_collection(json_data)]
 
 
 def parse_lobbies(json_data: str | list[dict[str, Any]]) -> list[Lobby]:
-    data = json.loads(json_data) if isinstance(json_data, str) else json_data
-    return [Lobby.from_dict(item) for item in data]
+    return [Lobby.from_dict(item) for item in _parse_collection(json_data)]
+
+
+def parse_lobby_draft_actions(
+    json_data: str | list[dict[str, Any]],
+) -> list[LobbyDraftAction]:
+    return [
+        LobbyDraftAction.from_dict(item)
+        for item in _parse_collection(json_data)
+    ]
+
+
+def parse_lobby_captains(
+    json_data: str | list[dict[str, Any]],
+) -> list[LobbyCaptain]:
+    return [LobbyCaptain.from_dict(item) for item in _parse_collection(json_data)]
+
+
+def parse_match_result_confirmations(
+    json_data: str | list[dict[str, Any]],
+) -> list[MatchResultConfirmation]:
+    return [
+        MatchResultConfirmation.from_dict(item)
+        for item in _parse_collection(json_data)
+    ]
 
 
 def parse_season_ratings(json_data: str | list[dict[str, Any]]) -> list[SeasonRating]:
-    data = json.loads(json_data) if isinstance(json_data, str) else json_data
-    return [SeasonRating.from_dict(item) for item in data]
+    return [
+        SeasonRating.from_dict(item)
+        for item in _parse_collection(json_data)
+    ]
 
 
 def parse_user_trophies(json_data: str | list[dict[str, Any]]) -> list[UserTrophy]:
-    data = json.loads(json_data) if isinstance(json_data, str) else json_data
-    return [UserTrophy.from_dict(item) for item in data]
+    return [UserTrophy.from_dict(item) for item in _parse_collection(json_data)]
