@@ -699,6 +699,53 @@ async def test_active_lobby_baseline_is_durable_across_moves_and_reset(
 
 
 @pytest.mark.asyncio
+async def test_pending_baseline_upgrades_existing_notification_state_monotonically(
+    postgres_db: None,
+) -> None:
+    user = User.from_dict(user_payload(discord_id=None))
+    lobby = Lobby.from_dict(
+        lobby_payload(
+            status="active",
+            team_one_roster=[USER_A_ID],
+            team_two_roster=[],
+        )
+    )
+    await db.sync_battlevive_data_to_db([user], [lobby])
+    await db.set_active_lobby_channel(1001, 2001, 3001)
+    config = await db.get_guild_config(1001)
+    assert config is not None
+    assert config["active_lobby_baseline_pending"] is True
+
+    await db.ensure_active_lobby_post_states(
+        1001,
+        [lobby.id],
+        notification_handled=False,
+    )
+    original = (await db.get_active_lobby_post_states(1001))[0]
+    assert original["notification_handled"] is False
+
+    await db.ensure_active_lobby_post_states(
+        1001,
+        [lobby.id],
+        notification_handled=True,
+    )
+    upgraded = (await db.get_active_lobby_post_states(1001))[0]
+    assert upgraded["notification_handled"] is True
+    assert upgraded["first_seen_at"] == original["first_seen_at"]
+    assert upgraded["updated_at"] >= original["updated_at"]
+
+    await db.ensure_active_lobby_post_states(
+        1001,
+        [lobby.id],
+        notification_handled=False,
+    )
+    retained = (await db.get_active_lobby_post_states(1001))[0]
+    assert retained["notification_handled"] is True
+    assert retained["first_seen_at"] == original["first_seen_at"]
+    assert retained["updated_at"] == upgraded["updated_at"]
+
+
+@pytest.mark.asyncio
 async def test_obsolete_active_lobby_posts_are_idempotent_and_guild_isolated(
     postgres_db: None,
 ) -> None:

@@ -721,7 +721,14 @@ async def ensure_active_lobby_post_states(
             guild_id, lobby_id, notification_handled
         )
         VALUES ($1, $2, $3)
-        ON CONFLICT (guild_id, lobby_id) DO NOTHING
+        ON CONFLICT (guild_id, lobby_id) DO UPDATE
+        SET notification_handled = (
+                active_lobby_posts.notification_handled
+                OR EXCLUDED.notification_handled
+            ),
+            updated_at = now()
+        WHERE NOT active_lobby_posts.notification_handled
+          AND EXCLUDED.notification_handled
         """,
         [
             (guild_id, lobby_id, notification_handled)
