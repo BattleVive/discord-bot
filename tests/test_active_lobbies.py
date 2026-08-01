@@ -215,6 +215,46 @@ def test_newest_confirmation_per_slot_drives_consensus_and_dispute() -> None:
     ) is True
 
 
+def test_confirmation_ties_use_stable_id_and_unknown_winner_is_defensive() -> None:
+    same_time = datetime(2026, 8, 1, 12, 1, tzinfo=UTC)
+    lower = confirmation(2, "team_one", "team_one", 1)
+    higher = confirmation(10, "team_one", "unknown_slot", 1)
+    lower.created_at = same_time
+    higher.created_at = same_time
+
+    latest = newest_confirmations([higher, lower])
+
+    assert latest["team_one"].id == 10
+    text = result_confirmation_text(candidate(), [lower, higher])
+    assert "Unknown team" in text
+    assert "✅ Red" not in text
+
+
+def test_compact_application_emoji_names_match_spaced_champions() -> None:
+    lookup = application_emoji_lookup(
+        [
+            FakeEmoji("ShenRao", "<:ShenRao:1>"),
+            FakeEmoji("RuhKaan", "<:RuhKaan:2>"),
+        ]
+    )
+    state = LobbyPollState(
+        actions=[
+            action(1, "team_one", "pick", "Shen Rao"),
+            action(2, "team_two", "pick", "Ruh Kaan"),
+        ]
+    )
+    rendered = build_active_lobby_embed(
+        candidate(),
+        state,
+        emoji_lookup=lookup,
+        map_resolver=MapResolver(Path("/nonexistent")),
+        battlevive_url="https://battlevive.test",
+    )
+
+    assert "<:ShenRao:1> Shen Rao" in rendered.embed.fields[0].value
+    assert "<:RuhKaan:2> Ruh Kaan" in rendered.embed.fields[1].value
+
+
 class FakeAPI:
     def __init__(self) -> None:
         self.calls: list[tuple[str, int]] = []
@@ -248,6 +288,9 @@ class FakeDatabase:
         self.finalize_failures = 0
         self.finalized: list[tuple[int, list[object]]] = []
         self.captains: list[tuple[int, list[object]]] = []
+        self.baseline_completions: list[int] = []
+        self.baseline_failures = 0
+        self.obsolete: list[dict[str, object]] = []
 
     async def get_active_lobby_candidates(self) -> list[dict[str, object]]:
         return self.candidates
@@ -269,6 +312,12 @@ class FakeDatabase:
     async def get_configured_active_lobbies(self) -> list[dict[str, object]]:
         return self.configs
 
+    async def complete_active_lobby_baseline(self, guild_id: int) -> None:
+        if self.baseline_failures:
+            self.baseline_failures -= 1
+            raise RuntimeError("baseline completion failed")
+        self.baseline_completions.append(guild_id)
+
     async def get_active_lobby_post_states(self, guild_id: int) -> list[dict[str, object]]:
         return [dict(row) for row in self.posts.get(guild_id, {}).values()]
 
@@ -281,7 +330,7 @@ class FakeDatabase:
     ) -> None:
         rows = self.posts.setdefault(guild_id, {})
         for lobby_id in lobby_ids:
-            rows.setdefault(
+            row = rows.setdefault(
                 lobby_id,
                 {
                     "guild_id": guild_id,
@@ -291,6 +340,9 @@ class FakeDatabase:
                     "fingerprint": None,
                     "notification_handled": notification_handled,
                 },
+            )
+            row["notification_handled"] = bool(
+                row["notification_handled"] or notification_handled
             )
 
     async def record_active_lobby_post(
@@ -358,6 +410,46 @@ class FakeDatabase:
             return False
         row.update(channel_id=None, message_id=None, fingerprint=None)
         return True
+
+    async def get_active_lobby_obsolete_posts(
+        self,
+        guild_id: int,
+    ) -> list[dict[str, object]]:
+        return [dict(row) for row in self.obsolete if row["guild_id"] == guild_id]
+
+    async def record_active_lobby_obsolete_post(
+        self,
+        guild_id: int,
+        channel_id: int,
+        message_id: int,
+        lobby_id: int | None,
+    ) -> None:
+        row = {
+            "guild_id": guild_id,
+            "channel_id": channel_id,
+            "message_id": message_id,
+            "lobby_id": lobby_id,
+        }
+        if row not in self.obsolete:
+            self.obsolete.append(row)
+
+    async def delete_active_lobby_obsolete_post(
+        self,
+        guild_id: int,
+        channel_id: int,
+        message_id: int,
+    ) -> bool:
+        before = len(self.obsolete)
+        self.obsolete = [
+            row
+            for row in self.obsolete
+            if not (
+                row["guild_id"] == guild_id
+                and row["channel_id"] == channel_id
+                and row["message_id"] == message_id
+            )
+        ]
+        return len(self.obsolete) < before
 
 
 class FakeBot:
@@ -499,12 +591,17 @@ class FakeMessage:
         self.channel = channel
         self.kwargs = kwargs
         self.deleted = False
+        self.delete_failures = 0
         self.edits: list[dict[str, object]] = []
 
     async def edit(self, **kwargs: object) -> None:
         self.edits.append(kwargs)
 
     async def delete(self) -> None:
+        if self.delete_failures:
+            self.delete_failures -= 1
+            response = SimpleNamespace(status=403, reason="Forbidden", headers={})
+            raise discord.Forbidden(response, "denied")
         self.deleted = True
         self.channel.messages.pop(self.id, None)
 
@@ -585,6 +682,7 @@ async def test_silent_baseline_one_time_ping_move_delete_recovery_and_reset(
         "guild_id": 1,
         "active_lobby_channel_id": 10,
         "active_lobby_role_id": 77,
+        "active_lobby_baseline_pending": True,
     }
     first = candidate()
 
@@ -592,6 +690,8 @@ async def test_silent_baseline_one_time_ping_move_delete_recovery_and_reset(
     first_message = old_channel.sent[-1]
     assert first_message.kwargs["content"] is None
     assert database.posts[1][165]["notification_handled"] is True
+    assert database.baseline_completions == [1]
+    config["active_lobby_baseline_pending"] = False
 
     second = candidate(166)
     await service._reconcile_guild(config, [first, second])
@@ -608,11 +708,25 @@ async def test_silent_baseline_one_time_ping_move_delete_recovery_and_reset(
     recovered = old_channel.sent[-1]
     assert recovered.kwargs["content"] is None
 
+    recovered.delete_failures = 1
     moved = {**config, "active_lobby_channel_id": 20}
     await service._reconcile_guild(moved, [first, second])
     assert len(new_channel.sent) == 2
-    assert recovered.deleted is True
+    assert recovered.deleted is False
+    assert database.obsolete == [
+        {
+            "guild_id": 1,
+            "channel_id": 10,
+            "message_id": recovered.id,
+            "lobby_id": 166,
+        }
+    ]
     assert database.posts[1][166]["channel_id"] == 20
+
+    await service._reconcile_guild(moved, [first, second])
+    assert recovered.deleted is True
+    assert database.obsolete == []
+    assert database.baseline_completions == [1]
 
     reset = {**moved, "active_lobby_channel_id": None}
     await service._reconcile_guild(reset, [first, second])
@@ -633,21 +747,147 @@ async def test_empty_state_is_singleton_and_moves_replacement_first(tmp_path: Pa
         bot, FakeAPI(), database, None, "https://battlevive.test", tmp_path
     )
 
-    await service._reconcile_guild(
-        {"guild_id": 1, "active_lobby_channel_id": 10, "active_lobby_role_id": None},
-        [],
-    )
+    config = {
+        "guild_id": 1,
+        "active_lobby_channel_id": 10,
+        "active_lobby_role_id": None,
+        "active_lobby_baseline_pending": True,
+    }
+    await service._reconcile_guild(config, [])
     original = old_channel.sent[0]
-    await service._reconcile_guild(
-        {"guild_id": 1, "active_lobby_channel_id": 10, "active_lobby_role_id": None},
-        [],
-    )
+    config["active_lobby_baseline_pending"] = False
+    await service._reconcile_guild(config, [])
     assert len(old_channel.sent) == 1
 
+    original.delete_failures = 1
     await service._reconcile_guild(
-        {"guild_id": 1, "active_lobby_channel_id": 20, "active_lobby_role_id": None},
+        {**config, "active_lobby_channel_id": 20},
         [],
     )
     assert len(new_channel.sent) == 1
-    assert original.deleted is True
+    assert original.deleted is False
+    assert database.obsolete[0]["lobby_id"] is None
     assert database.empty[1]["channel_id"] == 20
+
+    await service._reconcile_guild(
+        {**config, "active_lobby_channel_id": 20},
+        [],
+    )
+    assert original.deleted is True
+    assert database.obsolete == []
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_baseline_silences_lobbies_created_while_disabled(
+    tmp_path: Path,
+) -> None:
+    database = FakeDatabase()
+    bot = FakeBot()
+    channel = FakeChannel(10)
+    guild = FakeGuild(1, channel)
+    bot.guilds[1] = guild
+    service = ActiveLobbyService(
+        bot, FakeAPI(), database, None, "https://battlevive.test", tmp_path
+    )
+    first = candidate()
+    configured = {
+        "guild_id": 1,
+        "active_lobby_channel_id": 10,
+        "active_lobby_role_id": 77,
+        "active_lobby_baseline_pending": True,
+    }
+
+    await service._reconcile_guild(configured, [first])
+    configured["active_lobby_baseline_pending"] = False
+    reset = {**configured, "active_lobby_channel_id": None}
+    await service._reconcile_guild(reset, [first])
+    second = candidate(166)
+    await service._reconcile_guild(reset, [first, second])
+
+    reconfigured = {
+        **configured,
+        "active_lobby_channel_id": 10,
+        "active_lobby_baseline_pending": True,
+    }
+    await service._reconcile_guild(reconfigured, [first, second])
+
+    replacement_messages = channel.sent[-2:]
+    assert [message.kwargs["content"] for message in replacement_messages] == [
+        None,
+        None,
+    ]
+    assert database.posts[1][166]["notification_handled"] is True
+    assert database.baseline_completions == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_baseline_completion_failure_cannot_emit_role_ping(tmp_path: Path) -> None:
+    database = FakeDatabase()
+    database.baseline_failures = 1
+    bot = FakeBot()
+    channel = FakeChannel(10)
+    bot.guilds[1] = FakeGuild(1, channel)
+    service = ActiveLobbyService(
+        bot, FakeAPI(), database, None, "https://battlevive.test", tmp_path
+    )
+    config = {
+        "guild_id": 1,
+        "active_lobby_channel_id": 10,
+        "active_lobby_role_id": 77,
+        "active_lobby_baseline_pending": True,
+    }
+
+    with pytest.raises(RuntimeError, match="baseline completion"):
+        await service._reconcile_guild(config, [candidate()])
+    assert channel.sent == []
+
+    await service._reconcile_guild(config, [candidate()])
+    assert channel.sent[0].kwargs["content"] is None
+
+
+@pytest.mark.asyncio
+async def test_reopened_lobby_clears_consensus_and_never_repings(tmp_path: Path) -> None:
+    database = FakeDatabase()
+    bot = FakeBot()
+    api = FakeAPI()
+    channel = FakeChannel(10)
+    bot.guilds[1] = FakeGuild(1, channel)
+    service = ActiveLobbyService(
+        bot, api, database, None, "https://battlevive.test", tmp_path
+    )
+    active = candidate()
+    config = {
+        "guild_id": 1,
+        "active_lobby_channel_id": 10,
+        "active_lobby_role_id": 77,
+        "active_lobby_baseline_pending": True,
+    }
+    await service._reconcile_guild(config, [active])
+    config["active_lobby_baseline_pending"] = False
+    state = service._states[165]
+    state.confirmations = [
+        confirmation(1, "team_one", "team_one", 1),
+        confirmation(2, "team_two", "team_one", 2),
+    ]
+    state.draft_finalized = True
+    state.retry_at = service.clock() + 60
+
+    assert result_is_resolved(active, state) is False
+    await service._poll_lobby(active)
+    assert state.confirmations == []
+    assert api.calls == []
+    rendered = build_active_lobby_embed(
+        active,
+        state,
+        emoji_lookup={},
+        map_resolver=MapResolver(tmp_path),
+        battlevive_url="https://battlevive.test",
+    )
+    assert "Result Confirmation" not in [
+        field.name for field in rendered.embed.fields
+    ]
+    await service._reconcile_guild(config, [active])
+
+    assert len(channel.sent) == 1
+    assert channel.sent[0].kwargs["content"] is None
+    assert database.posts[1][165]["notification_handled"] is True

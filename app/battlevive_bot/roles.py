@@ -205,6 +205,39 @@ async def create_roles(guild: discord.Guild) -> RoleCreationResult:
                     problem,
                 )
                 continue
+            if role_name == ACTIVE_LOBBY_ROLE and getattr(
+                existing_role,
+                "mentionable",
+                False,
+            ):
+                try:
+                    await existing_role.edit(
+                        mentionable=False,
+                        reason="Battlevive role safety setup",
+                    )
+                except discord.Forbidden:
+                    result.failed[role_name] = (
+                        "Discord denied disabling role mentions"
+                    )
+                    logger.exception(
+                        "Missing permissions to make role '%s' non-mentionable "
+                        "in guild '%s' (%s).",
+                        role_name,
+                        guild.name,
+                        guild.id,
+                    )
+                    continue
+                except discord.HTTPException:
+                    result.failed[role_name] = (
+                        "Discord rejected disabling role mentions"
+                    )
+                    logger.exception(
+                        "Failed to make role '%s' non-mentionable in guild '%s' (%s).",
+                        role_name,
+                        guild.name,
+                        guild.id,
+                    )
+                    continue
             logger.debug(
                 "Role '%s' already exists in guild '%s' (%s), skipping.",
                 role_name,

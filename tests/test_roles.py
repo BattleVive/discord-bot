@@ -111,12 +111,21 @@ class FakeRole:
         position: int = 1,
         permissions: int = 0,
         managed: bool = False,
+        mentionable: bool = False,
     ) -> None:
         self.id = hash(name)
         self.name = name
         self.position = position
         self.permissions = SimpleNamespace(value=permissions)
         self.managed = managed
+        self.mentionable = mentionable
+        self.edits: list[dict[str, object]] = []
+
+    async def edit(self, **kwargs: object) -> "FakeRole":
+        self.edits.append(kwargs)
+        if "mentionable" in kwargs:
+            self.mentionable = bool(kwargs["mentionable"])
+        return self
 
     def is_assignable(self) -> bool:
         return True
@@ -165,6 +174,46 @@ async def test_create_roles_rejects_privileged_names_and_reports_partial_failure
     assert len(result.created) == len(roles.REQUIRED_ROLE_NAMES) - 2
     assert RoleGuild.created_kwargs[roles.ACTIVE_LOBBY_ROLE]["mentionable"] is False
     assert RoleGuild.created_kwargs[roles.ACTIVE_LOBBY_ROLE]["permissions"].value == 0
+
+
+@pytest.mark.asyncio
+async def test_create_roles_makes_existing_active_lobby_role_non_mentionable() -> None:
+    active_role = FakeRole(roles.ACTIVE_LOBBY_ROLE, mentionable=True)
+    existing = [
+        active_role,
+        *[
+            FakeRole(name)
+            for name in roles.REQUIRED_ROLE_NAMES
+            if name != roles.ACTIVE_LOBBY_ROLE
+        ],
+    ]
+    top_role = FakeRole("Bot", position=10)
+    everyone_role = FakeRole("@everyone", position=0)
+    bot_member = SimpleNamespace(
+        guild_permissions=SimpleNamespace(manage_roles=True),
+        top_role=top_role,
+    )
+
+    class RoleGuild:
+        id = 100
+        name = "Test Guild"
+        me = bot_member
+        roles = existing
+        default_role = everyone_role
+
+        async def create_role(self, **kwargs: object) -> FakeRole:
+            raise AssertionError("all roles already exist")
+
+    result = await roles.create_roles(RoleGuild())
+
+    assert result.failed == {}
+    assert active_role.mentionable is False
+    assert active_role.edits == [
+        {
+            "mentionable": False,
+            "reason": "Battlevive role safety setup",
+        }
+    ]
 
 
 def test_role_sync_refuses_privileged_reserved_role() -> None:

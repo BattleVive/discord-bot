@@ -58,6 +58,8 @@ class ActiveLobbyDatabase(Protocol):
 
     async def get_configured_active_lobbies(self) -> list[dict[str, Any]]: ...
 
+    async def complete_active_lobby_baseline(self, guild_id: int) -> None: ...
+
     async def set_active_lobby_channel(
         self,
         guild_id: int,
@@ -130,6 +132,26 @@ class ActiveLobbyDatabase(Protocol):
         message_id: int,
     ) -> bool: ...
 
+    async def get_active_lobby_obsolete_posts(
+        self,
+        guild_id: int,
+    ) -> list[dict[str, Any]]: ...
+
+    async def record_active_lobby_obsolete_post(
+        self,
+        guild_id: int,
+        channel_id: int,
+        message_id: int,
+        lobby_id: int | None,
+    ) -> None: ...
+
+    async def delete_active_lobby_obsolete_post(
+        self,
+        guild_id: int,
+        channel_id: int,
+        message_id: int,
+    ) -> bool: ...
+
 
 @dataclass(slots=True)
 class LobbyPollState:
@@ -168,6 +190,12 @@ def _get(value: object, key: str, default: Any = None) -> Any:
 
 def _normalized_name(value: object) -> str:
     return "-".join(re.findall(r"[a-z0-9]+", str(value).casefold()))
+
+
+def _emoji_keys(value: object) -> tuple[str, ...]:
+    separated = _normalized_name(value)
+    compact = separated.replace("-", "")
+    return tuple(dict.fromkeys(key for key in (separated, compact) if key))
 
 
 def _normalized_slot(value: object) -> str:
@@ -292,14 +320,16 @@ def application_emoji_lookup(emojis: Sequence[object]) -> dict[str, str]:
     result: dict[str, str] = {}
     for emoji in emojis:
         name = getattr(emoji, "name", None)
-        key = _normalized_name(name) if name else ""
-        if key:
+        for key in _emoji_keys(name) if name else ():
             result[key] = str(emoji)
     return result
 
 
 def _champion_line(champion: str, emoji_lookup: Mapping[str, str]) -> str:
-    emoji = emoji_lookup.get(_normalized_name(champion))
+    emoji = next(
+        (emoji_lookup[key] for key in _emoji_keys(champion) if key in emoji_lookup),
+        None,
+    )
     return f"{emoji} {champion}" if emoji else champion
 
 
@@ -359,15 +389,29 @@ def newest_confirmations(confirmations: Sequence[Any]) -> dict[str, Any]:
         if slot not in ("team_one", "team_two"):
             continue
         current = newest.get(slot)
-        created_at = _get(confirmation, "created_at")
-        if current is None or created_at >= _get(current, "created_at"):
+        if current is None or _confirmation_order(confirmation) > _confirmation_order(
+            current
+        ):
             newest[slot] = confirmation
     return newest
 
 
+def _confirmation_order(confirmation: Any) -> tuple[Any, tuple[int, int | str]]:
+    identifier = str(_get(confirmation, "id", ""))
+    id_order: tuple[int, int | str]
+    if identifier.isdecimal():
+        id_order = (0, int(identifier))
+    else:
+        id_order = (1, identifier)
+    return (_get(confirmation, "created_at"), id_order)
+
+
 def _team_name(candidate: Mapping[str, Any], slot: str) -> str:
-    fallback = "Team One" if slot == "team_one" else "Team Two"
-    return str(candidate.get(f"{slot}_name") or fallback)
+    if slot == "team_one":
+        return str(candidate.get("team_one_name") or "Team One")
+    if slot == "team_two":
+        return str(candidate.get("team_two_name") or "Team Two")
+    return "Unknown team"
 
 
 def result_confirmation_text(
@@ -398,6 +442,8 @@ def result_confirmation_text(
 
 
 def result_is_resolved(candidate: Mapping[str, Any], state: LobbyPollState) -> bool:
+    if candidate.get("ended_at") is None:
+        return False
     winner_slot = _normalized_slot(candidate.get("winner_slot"))
     if winner_slot in ("team_one", "team_two") and (
         candidate.get("dispute_reason")
@@ -482,7 +528,7 @@ def build_active_lobby_embed(
         map_name = resolved_map.name if resolved_map is not None else str(selected_map)
         embed.add_field(name="Selected Map", value=_truncate(map_name, MAX_FIELD_VALUE))
 
-    if candidate.get("ended_at") is not None or state.confirmations:
+    if candidate.get("ended_at") is not None:
         result_text = result_confirmation_text(candidate, state.confirmations)
         winner_slot = _normalized_slot(candidate.get("winner_slot"))
         if (
@@ -639,11 +685,13 @@ class ActiveLobbyService:
                     "user_id": str(captain_id),
                 }
 
+        ended = candidate.get("ended_at") is not None
+        if not ended:
+            state.confirmations.clear()
         if self.clock() < state.retry_at:
             return
 
         failed = False
-        ended = candidate.get("ended_at") is not None
         try:
             if not ended or not state.draft_finalized:
                 actions = await self.api.get_lobby_draft_actions(lobby_id)
@@ -715,6 +763,7 @@ class ActiveLobbyService:
         if guild is None:
             raise RuntimeError("configured guild is not available to the bot")
 
+        await self._cleanup_obsolete_posts(guild, guild_id)
         stored = await self.database.get_active_lobby_post_states(guild_id)
         empty = await self.database.get_active_lobby_empty_post(guild_id)
         channel_id = config.get("active_lobby_channel_id")
@@ -731,13 +780,15 @@ class ActiveLobbyService:
                 "Embed Links, Attach Files, Read Message History, and Mention Everyone"
             )
 
-        initial_baseline = not stored and empty is None
         lobby_ids = [int(candidate["id"]) for candidate in candidates]
+        baseline_pending = bool(config.get("active_lobby_baseline_pending"))
         await self.database.ensure_active_lobby_post_states(
             guild_id,
             lobby_ids,
-            notification_handled=initial_baseline,
+            notification_handled=baseline_pending,
         )
+        if baseline_pending:
+            await self.database.complete_active_lobby_baseline(guild_id)
         stored = await self.database.get_active_lobby_post_states(guild_id)
         stored_by_id = {int(row["lobby_id"]): row for row in stored}
 
@@ -817,6 +868,15 @@ class ActiveLobbyService:
         notify = bool(stored is not None and not stored.get("notification_handled"))
         content = f"<@&{role.id}>" if notify and role is not None else None
         message = await self._send_lobby_message(channel, rendered, content, role)
+        old_reference = self._message_reference(stored, channel.id, message.id)
+        if old_reference is not None:
+            old_channel_id, old_message_id = old_reference
+            await self.database.record_active_lobby_obsolete_post(
+                guild_id,
+                old_channel_id,
+                old_message_id,
+                lobby_id,
+            )
         await self.database.record_active_lobby_post(
             guild_id,
             lobby_id,
@@ -826,16 +886,16 @@ class ActiveLobbyService:
             notification_handled=True,
         )
 
-        if stored and stored.get("channel_id") and stored.get("message_id"):
-            if (
-                stored["channel_id"] != channel.id
-                or stored["message_id"] != message.id
-            ):
-                await self._delete_message_reference(
-                    self.bot.get_guild(guild_id),
-                    int(stored["channel_id"]),
-                    int(stored["message_id"]),
-                )
+        if old_reference is not None:
+            await self._cleanup_obsolete_post(
+                self.bot.get_guild(guild_id),
+                {
+                    "guild_id": guild_id,
+                    "channel_id": old_reference[0],
+                    "message_id": old_reference[1],
+                    "lobby_id": lobby_id,
+                },
+            )
 
     async def _send_lobby_message(
         self,
@@ -918,15 +978,66 @@ class ActiveLobbyService:
             embed=embed,
             allowed_mentions=discord.AllowedMentions.none(),
         )
+        old_reference = self._message_reference(stored, channel.id, message.id)
+        if old_reference is not None:
+            await self.database.record_active_lobby_obsolete_post(
+                guild_id,
+                old_reference[0],
+                old_reference[1],
+                None,
+            )
         await self.database.record_active_lobby_empty_post(
             guild_id, channel.id, message.id, fingerprint
         )
-        if stored and stored.get("channel_id") and stored.get("message_id"):
-            await self._delete_message_reference(
+        if old_reference is not None:
+            await self._cleanup_obsolete_post(
                 guild,
-                int(stored["channel_id"]),
-                int(stored["message_id"]),
+                {
+                    "guild_id": guild_id,
+                    "channel_id": old_reference[0],
+                    "message_id": old_reference[1],
+                    "lobby_id": None,
+                },
             )
+
+    @staticmethod
+    def _message_reference(
+        stored: Mapping[str, Any] | None,
+        current_channel_id: int,
+        current_message_id: int,
+    ) -> tuple[int, int] | None:
+        if stored is None:
+            return None
+        channel_id = stored.get("channel_id")
+        message_id = stored.get("message_id")
+        if channel_id is None or message_id is None:
+            return None
+        if (
+            int(channel_id) == current_channel_id
+            and int(message_id) == current_message_id
+        ):
+            return None
+        return int(channel_id), int(message_id)
+
+    async def _cleanup_obsolete_posts(self, guild: Any, guild_id: int) -> None:
+        rows = await self.database.get_active_lobby_obsolete_posts(guild_id)
+        for row in rows:
+            await self._cleanup_obsolete_post(guild, row)
+
+    async def _cleanup_obsolete_post(
+        self,
+        guild: Any,
+        row: Mapping[str, Any],
+    ) -> None:
+        channel_id = int(row["channel_id"])
+        message_id = int(row["message_id"])
+        if not await self._delete_message_reference(guild, channel_id, message_id):
+            return
+        await self.database.delete_active_lobby_obsolete_post(
+            int(row["guild_id"]),
+            channel_id,
+            message_id,
+        )
 
     async def _remove_all_posts(
         self,
