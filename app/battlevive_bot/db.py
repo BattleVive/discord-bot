@@ -59,7 +59,8 @@ async def get_guild_config(
         """
         SELECT guild_id, leaderboard_channel_id, leaderboard_limit,
                debug_commands_enabled, active_lobby_channel_id,
-               active_lobby_role_id, updated_by
+               active_lobby_role_id, active_lobby_baseline_pending,
+               updated_by
         FROM guild_config
         WHERE guild_id = $1
         """,
@@ -179,11 +180,12 @@ async def get_configured_leaderboards() -> list[dict[str, int | None]]:
     return [dict(row) for row in rows]
 
 
-async def get_configured_active_lobbies() -> list[dict[str, int | None]]:
+async def get_configured_active_lobbies() -> list[dict[str, int | bool | None]]:
     rows = await get_pool().fetch(
         """
         SELECT config.guild_id, config.active_lobby_channel_id,
-               config.active_lobby_role_id, config.updated_by
+               config.active_lobby_role_id,
+               config.active_lobby_baseline_pending, config.updated_by
         FROM guild_config AS config
         WHERE config.active_lobby_channel_id IS NOT NULL
            OR EXISTS (
@@ -197,6 +199,11 @@ async def get_configured_active_lobbies() -> list[dict[str, int | None]]:
                FROM active_lobby_empty_posts AS empty_posts
                WHERE empty_posts.guild_id = config.guild_id
                  AND empty_posts.message_id IS NOT NULL
+           )
+           OR EXISTS (
+               SELECT 1
+               FROM active_lobby_obsolete_posts AS obsolete_posts
+               WHERE obsolete_posts.guild_id = config.guild_id
            )
         ORDER BY config.guild_id
         """
@@ -212,17 +219,37 @@ async def set_active_lobby_channel(
     await get_pool().execute(
         """
         INSERT INTO guild_config (
-            guild_id, active_lobby_channel_id, updated_by
+            guild_id, active_lobby_channel_id,
+            active_lobby_baseline_pending, updated_by
         )
-        VALUES ($1, $2, $3)
+        VALUES ($1, $2, TRUE, $3)
         ON CONFLICT (guild_id) DO UPDATE
         SET active_lobby_channel_id = EXCLUDED.active_lobby_channel_id,
+            active_lobby_baseline_pending = CASE
+                WHEN guild_config.active_lobby_channel_id IS NULL
+                 AND EXCLUDED.active_lobby_channel_id IS NOT NULL
+                THEN TRUE
+                ELSE guild_config.active_lobby_baseline_pending
+            END,
             updated_at = now(),
             updated_by = EXCLUDED.updated_by
         """,
         guild_id,
         channel_id,
         updated_by,
+    )
+
+
+async def complete_active_lobby_baseline(guild_id: int) -> None:
+    await get_pool().execute(
+        """
+        UPDATE guild_config
+        SET active_lobby_baseline_pending = FALSE,
+            updated_at = now()
+        WHERE guild_id = $1
+          AND active_lobby_channel_id IS NOT NULL
+        """,
+        guild_id,
     )
 
 
@@ -250,12 +277,14 @@ async def reset_active_lobby_config(guild_id: int, updated_by: int) -> None:
     await get_pool().execute(
         """
         INSERT INTO guild_config (
-            guild_id, active_lobby_channel_id, active_lobby_role_id, updated_by
+            guild_id, active_lobby_channel_id, active_lobby_role_id,
+            active_lobby_baseline_pending, updated_by
         )
-        VALUES ($1, NULL, NULL, $2)
+        VALUES ($1, NULL, NULL, TRUE, $2)
         ON CONFLICT (guild_id) DO UPDATE
         SET active_lobby_channel_id = NULL,
             active_lobby_role_id = NULL,
+            active_lobby_baseline_pending = TRUE,
             updated_at = now(),
             updated_by = EXCLUDED.updated_by
         """,
@@ -822,6 +851,62 @@ async def clear_active_lobby_empty_post(
         message_id,
     )
     return bool(cleared)
+
+
+async def get_active_lobby_obsolete_posts(
+    guild_id: int,
+) -> list[dict[str, Any]]:
+    rows = await get_pool().fetch(
+        """
+        SELECT guild_id, lobby_id, channel_id, message_id, created_at
+        FROM active_lobby_obsolete_posts
+        WHERE guild_id = $1
+        ORDER BY created_at, channel_id, message_id
+        """,
+        guild_id,
+    )
+    return [dict(row) for row in rows]
+
+
+async def record_active_lobby_obsolete_post(
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+    lobby_id: int | None,
+) -> None:
+    await get_pool().execute(
+        """
+        INSERT INTO active_lobby_obsolete_posts (
+            guild_id, lobby_id, channel_id, message_id
+        )
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (guild_id, channel_id, message_id) DO NOTHING
+        """,
+        guild_id,
+        lobby_id,
+        channel_id,
+        message_id,
+    )
+
+
+async def delete_active_lobby_obsolete_post(
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+) -> bool:
+    deleted = await get_pool().fetchval(
+        """
+        DELETE FROM active_lobby_obsolete_posts
+        WHERE guild_id = $1
+          AND channel_id = $2
+          AND message_id = $3
+        RETURNING TRUE
+        """,
+        guild_id,
+        channel_id,
+        message_id,
+    )
+    return bool(deleted)
 
 
 async def get_season_ratings() -> list[SeasonRating]:

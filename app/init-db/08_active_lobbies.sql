@@ -54,7 +54,8 @@ CREATE INDEX IF NOT EXISTS idx_lobby_rosters_roster
 
 ALTER TABLE guild_config
     ADD COLUMN IF NOT EXISTS active_lobby_channel_id BIGINT,
-    ADD COLUMN IF NOT EXISTS active_lobby_role_id BIGINT;
+    ADD COLUMN IF NOT EXISTS active_lobby_role_id BIGINT,
+    ADD COLUMN IF NOT EXISTS active_lobby_baseline_pending BOOLEAN NOT NULL DEFAULT TRUE;
 
 CREATE TABLE IF NOT EXISTS active_lobby_posts (
     guild_id               BIGINT NOT NULL REFERENCES guild_config (guild_id) ON DELETE CASCADE,
@@ -81,6 +82,18 @@ CREATE TABLE IF NOT EXISTS active_lobby_empty_posts (
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK ((channel_id IS NULL) = (message_id IS NULL))
 );
+
+CREATE TABLE IF NOT EXISTS active_lobby_obsolete_posts (
+    guild_id       BIGINT NOT NULL REFERENCES guild_config (guild_id) ON DELETE CASCADE,
+    lobby_id       INTEGER REFERENCES lobbies (id) ON DELETE SET NULL,
+    channel_id     BIGINT NOT NULL,
+    message_id     BIGINT NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (guild_id, channel_id, message_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_active_lobby_obsolete_posts_created
+    ON active_lobby_obsolete_posts (guild_id, created_at);
 
 CREATE OR REPLACE FUNCTION notify_active_lobbies_changed()
 RETURNS trigger
@@ -155,6 +168,26 @@ CREATE TRIGGER lobby_rosters_active_lobby_delete
 AFTER DELETE ON lobby_rosters
 FOR EACH ROW EXECUTE FUNCTION notify_active_lobbies_changed();
 
+DROP TRIGGER IF EXISTS active_lobby_obsolete_posts_insert
+    ON active_lobby_obsolete_posts;
+CREATE TRIGGER active_lobby_obsolete_posts_insert
+AFTER INSERT ON active_lobby_obsolete_posts
+FOR EACH ROW EXECUTE FUNCTION notify_active_lobbies_changed();
+
+DROP TRIGGER IF EXISTS active_lobby_obsolete_posts_update
+    ON active_lobby_obsolete_posts;
+CREATE TRIGGER active_lobby_obsolete_posts_update
+AFTER UPDATE ON active_lobby_obsolete_posts
+FOR EACH ROW
+WHEN (OLD.* IS DISTINCT FROM NEW.*)
+EXECUTE FUNCTION notify_active_lobbies_changed();
+
+DROP TRIGGER IF EXISTS active_lobby_obsolete_posts_delete
+    ON active_lobby_obsolete_posts;
+CREATE TRIGGER active_lobby_obsolete_posts_delete
+AFTER DELETE ON active_lobby_obsolete_posts
+FOR EACH ROW EXECUTE FUNCTION notify_active_lobbies_changed();
+
 DROP TRIGGER IF EXISTS guild_config_active_lobby_insert ON guild_config;
 CREATE TRIGGER guild_config_active_lobby_insert
 AFTER INSERT ON guild_config
@@ -172,6 +205,7 @@ FOR EACH ROW
 WHEN (
     OLD.active_lobby_channel_id IS DISTINCT FROM NEW.active_lobby_channel_id
     OR OLD.active_lobby_role_id IS DISTINCT FROM NEW.active_lobby_role_id
+    OR OLD.active_lobby_baseline_pending IS DISTINCT FROM NEW.active_lobby_baseline_pending
 )
 EXECUTE FUNCTION notify_active_lobbies_changed();
 

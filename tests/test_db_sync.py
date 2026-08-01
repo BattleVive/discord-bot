@@ -39,6 +39,7 @@ TABLES = {
     "leaderboard_slots",
     "active_lobby_posts",
     "active_lobby_empty_posts",
+    "active_lobby_obsolete_posts",
 }
 
 
@@ -59,9 +60,9 @@ def get_test_database_url() -> str:
 
 async def reset_database(conn: asyncpg.Connection) -> None:
     await conn.execute(
-        "DROP TABLE IF EXISTS active_lobby_empty_posts, active_lobby_posts, "
-        "leaderboard_slots, guild_config, lobby_rosters, season_ratings, "
-        "lobbies, users CASCADE"
+        "DROP TABLE IF EXISTS active_lobby_obsolete_posts, "
+        "active_lobby_empty_posts, active_lobby_posts, leaderboard_slots, "
+        "guild_config, lobby_rosters, season_ratings, lobbies, users CASCADE"
     )
     for sql_file in sorted(SQL_DIR.glob("*.sql")):
         await conn.execute(sql_file.read_text(encoding="utf-8"))
@@ -69,9 +70,9 @@ async def reset_database(conn: asyncpg.Connection) -> None:
 
 async def drop_database_tables(conn: asyncpg.Connection) -> None:
     await conn.execute(
-        "DROP TABLE IF EXISTS active_lobby_empty_posts, active_lobby_posts, "
-        "leaderboard_slots, guild_config, lobby_rosters, season_ratings, "
-        "lobbies, users CASCADE"
+        "DROP TABLE IF EXISTS active_lobby_obsolete_posts, "
+        "active_lobby_empty_posts, active_lobby_posts, leaderboard_slots, "
+        "guild_config, lobby_rosters, season_ratings, lobbies, users CASCADE"
     )
 
 
@@ -136,6 +137,15 @@ async def test_init_db_sql_creates_expected_schema(postgres_db: None) -> None:
           AND column_name = 'debug_commands_enabled'
         """
     )
+    assert await pool.fetchval(
+        """
+        SELECT column_default = 'true'
+        FROM information_schema.columns
+        WHERE table_name = 'guild_config'
+          AND column_name = 'active_lobby_baseline_pending'
+          AND is_nullable = 'NO'
+        """
+    )
     assert not await pool.fetchval(
         """
         SELECT EXISTS (
@@ -149,6 +159,16 @@ async def test_init_db_sql_creates_expected_schema(postgres_db: None) -> None:
         SELECT EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_name = 'lobby_rosters' AND column_name = 'roster'
+        )
+        """
+    )
+    assert await pool.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM pg_indexes
+            WHERE tablename = 'active_lobby_obsolete_posts'
+              AND indexname = 'idx_active_lobby_obsolete_posts_created'
         )
         """
     )
@@ -197,6 +217,21 @@ async def test_init_db_sql_creates_expected_schema(postgres_db: None) -> None:
         "season_ratings_leaderboard_delete",
         "users_leaderboard_link_update",
     }.issubset(trigger_names)
+    obsolete_trigger_names = {
+        row["trigger_name"]
+        for row in await pool.fetch(
+            """
+            SELECT trigger_name
+            FROM information_schema.triggers
+            WHERE event_object_table = 'active_lobby_obsolete_posts'
+            """
+        )
+    }
+    assert {
+        "active_lobby_obsolete_posts_insert",
+        "active_lobby_obsolete_posts_update",
+        "active_lobby_obsolete_posts_delete",
+    }.issubset(obsolete_trigger_names)
 
 
 @pytest.mark.asyncio
@@ -209,6 +244,22 @@ async def test_active_lobby_migration_preserves_legacy_rosters_without_captains(
         if sql_file.name == "08_active_lobbies.sql":
             break
         await pool.execute(sql_file.read_text(encoding="utf-8"))
+
+    await pool.execute(
+        """
+        ALTER TABLE guild_config
+            ADD COLUMN active_lobby_channel_id BIGINT,
+            ADD COLUMN active_lobby_role_id BIGINT
+        """
+    )
+    await pool.execute(
+        """
+        INSERT INTO guild_config (
+            guild_id, active_lobby_channel_id, updated_by
+        )
+        VALUES (1001, 2001, 3001)
+        """
+    )
 
     await pool.execute(
         """
@@ -262,6 +313,13 @@ async def test_active_lobby_migration_preserves_legacy_rosters_without_captains(
     assert roster["picks"] == []
     assert roster["bans"] == []
     assert roster["draft_finalized_at"] is None
+    upgraded_config = await db.get_guild_config(1001)
+    assert upgraded_config is not None
+    assert upgraded_config["active_lobby_channel_id"] == 2001
+    assert upgraded_config["active_lobby_baseline_pending"] is True
+    assert await pool.fetchval(
+        "SELECT to_regclass('public.active_lobby_obsolete_posts') IS NOT NULL"
+    )
 
 
 @pytest.mark.asyncio
@@ -564,6 +622,7 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
         "debug_commands_enabled": True,
         "active_lobby_channel_id": None,
         "active_lobby_role_id": None,
+        "active_lobby_baseline_pending": True,
         "updated_by": 3012,
     }
     assert await db.get_guild_config(1002) == {
@@ -573,6 +632,7 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
         "debug_commands_enabled": False,
         "active_lobby_channel_id": None,
         "active_lobby_role_id": None,
+        "active_lobby_baseline_pending": True,
         "updated_by": 3002,
     }
 
@@ -585,8 +645,103 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
         "debug_commands_enabled": True,
         "active_lobby_channel_id": None,
         "active_lobby_role_id": None,
+        "active_lobby_baseline_pending": True,
         "updated_by": 3021,
     }
+
+
+@pytest.mark.asyncio
+async def test_active_lobby_baseline_is_durable_across_moves_and_reset(
+    postgres_db: None,
+) -> None:
+    await db.set_active_lobby_channel(1001, 2001, 3001)
+    configured = await db.get_guild_config(1001)
+    assert configured is not None
+    assert configured["active_lobby_baseline_pending"] is True
+
+    await db.complete_active_lobby_baseline(1001)
+    completed = await db.get_guild_config(1001)
+    assert completed is not None
+    assert completed["active_lobby_baseline_pending"] is False
+
+    await db.set_active_lobby_channel(1001, 2002, 3002)
+    moved = await db.get_guild_config(1001)
+    assert moved is not None
+    assert moved["active_lobby_channel_id"] == 2002
+    assert moved["active_lobby_baseline_pending"] is False
+
+    await db.reset_active_lobby_config(1001, 3003)
+    await db.complete_active_lobby_baseline(1001)
+    disabled = await db.get_guild_config(1001)
+    assert disabled is not None
+    assert disabled["active_lobby_channel_id"] is None
+    assert disabled["active_lobby_baseline_pending"] is True
+
+    user = User.from_dict(user_payload(discord_id=None))
+    lobby = Lobby.from_dict(
+        lobby_payload(
+            status="active",
+            team_one_roster=[USER_A_ID],
+            team_two_roster=[],
+        )
+    )
+    await db.sync_battlevive_data_to_db([user], [lobby])
+
+    await db.set_active_lobby_channel(1001, 2003, 3004)
+    reconfigured = (await db.get_configured_active_lobbies())[0]
+    assert reconfigured["active_lobby_channel_id"] == 2003
+    assert reconfigured["active_lobby_baseline_pending"] is True
+
+    await db.complete_active_lobby_baseline(1001)
+    final = await db.get_guild_config(1001)
+    assert final is not None
+    assert final["active_lobby_baseline_pending"] is False
+
+
+@pytest.mark.asyncio
+async def test_obsolete_active_lobby_posts_are_idempotent_and_guild_isolated(
+    postgres_db: None,
+) -> None:
+    user = User.from_dict(user_payload(discord_id=None))
+    lobby = Lobby.from_dict(
+        lobby_payload(
+            status="active",
+            team_one_roster=[USER_A_ID],
+            team_two_roster=[],
+        )
+    )
+    await db.sync_battlevive_data_to_db([user], [lobby])
+    await db.set_active_lobby_channel(1001, 2001, 3001)
+    await db.set_active_lobby_channel(1002, 2002, 3002)
+
+    await db.record_active_lobby_obsolete_post(1001, 2000, 5001, lobby.id)
+    await db.record_active_lobby_obsolete_post(1001, 2000, 5001, None)
+    await db.record_active_lobby_obsolete_post(1001, 2000, 5002, None)
+    await db.record_active_lobby_obsolete_post(1002, 2000, 5001, lobby.id)
+
+    first_guild = await db.get_active_lobby_obsolete_posts(1001)
+    assert len(first_guild) == 2
+    assert [row["lobby_id"] for row in first_guild] == [lobby.id, None]
+    assert all(row["guild_id"] == 1001 for row in first_guild)
+    assert len(await db.get_active_lobby_obsolete_posts(1002)) == 1
+
+    await db.reset_active_lobby_config(1001, 3003)
+    configured = await db.get_configured_active_lobbies()
+    reset_guild = next(row for row in configured if row["guild_id"] == 1001)
+    assert reset_guild["active_lobby_channel_id"] is None
+    assert reset_guild["active_lobby_baseline_pending"] is True
+
+    assert not await db.delete_active_lobby_obsolete_post(1001, 2000, 9999)
+    assert await db.delete_active_lobby_obsolete_post(1001, 2000, 5001)
+    assert [
+        row["message_id"]
+        for row in await db.get_active_lobby_obsolete_posts(1001)
+    ] == [5002]
+    assert len(await db.get_active_lobby_obsolete_posts(1002)) == 1
+
+    await db.get_pool().execute("DELETE FROM lobbies WHERE id = $1", lobby.id)
+    second_guild = await db.get_active_lobby_obsolete_posts(1002)
+    assert second_guild[0]["lobby_id"] is None
 
 
 @pytest.mark.asyncio
@@ -658,6 +813,7 @@ async def test_active_lobby_config_and_post_history_survive_reset_for_cleanup(
             "guild_id": 1001,
             "active_lobby_channel_id": None,
             "active_lobby_role_id": None,
+            "active_lobby_baseline_pending": True,
             "updated_by": 3003,
         }
     ]
@@ -983,6 +1139,21 @@ async def test_active_lobby_triggers_notify_for_relevant_changes(
 
         await db.set_active_lobby_channel(1001, 2001, 3002)
         assert '"table" : "guild_config"' in (
+            await asyncio.wait_for(notifications.get(), 1)
+        )[1]
+
+        await db.record_active_lobby_obsolete_post(
+            1001,
+            1999,
+            4999,
+            lobby.id,
+        )
+        assert '"table" : "active_lobby_obsolete_posts"' in (
+            await asyncio.wait_for(notifications.get(), 1)
+        )[1]
+
+        await db.delete_active_lobby_obsolete_post(1001, 1999, 4999)
+        assert '"table" : "active_lobby_obsolete_posts"' in (
             await asyncio.wait_for(notifications.get(), 1)
         )[1]
 

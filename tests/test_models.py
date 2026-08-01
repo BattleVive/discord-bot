@@ -79,10 +79,30 @@ def test_active_lobby_models_parse_minimal_payloads() -> None:
     ("parser", "payload"),
     [
         (parse_lobby_draft_actions, {"id": True}),
+        (
+            parse_lobby_draft_actions,
+            lobby_draft_action_payload(team_slot="spectator"),
+        ),
+        (
+            parse_lobby_draft_actions,
+            lobby_draft_action_payload(action="trade"),
+        ),
         (parse_lobby_captains, {"user_id": None, "slot": "team_one"}),
+        (
+            parse_lobby_captains,
+            lobby_captain_payload(slot="captain"),
+        ),
+        (
+            parse_match_result_confirmations,
+            match_result_confirmation_payload(selected_winner="draw"),
+        ),
         (
             parse_match_result_confirmations,
             match_result_confirmation_payload(captain_slot=None),
+        ),
+        (
+            parse_match_result_confirmations,
+            match_result_confirmation_payload(captain_slot="team_three"),
         ),
     ],
 )
@@ -92,6 +112,16 @@ def test_active_lobby_models_reject_malformed_payloads(
 ) -> None:
     with pytest.raises((KeyError, TypeError, ValueError)):
         parser([payload])
+
+
+def test_invalid_active_lobby_entry_rejects_the_complete_response() -> None:
+    payload = [
+        lobby_draft_action_payload(id=1),
+        lobby_draft_action_payload(id=2, action="trade"),
+    ]
+
+    with pytest.raises(ValueError, match="action"):
+        parse_lobby_draft_actions(payload)
 
 
 @pytest.mark.parametrize(

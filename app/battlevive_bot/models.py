@@ -9,6 +9,10 @@ from typing import Any
 from typing import ClassVar
 
 
+_TEAM_SLOTS = frozenset({"team_one", "team_two"})
+_DRAFT_ACTIONS = frozenset({"pick", "ban", "map_ban"})
+
+
 def _parse_dt(value: str | None) -> datetime | None:
     if value is None:
         return None
@@ -19,6 +23,18 @@ def _required_str(data: dict[str, Any], key: str) -> str:
     value = data[key]
     if not isinstance(value, str) or not value:
         raise TypeError(f"{key} must be a non-empty string")
+    return value
+
+
+def _required_choice(
+    data: dict[str, Any],
+    key: str,
+    choices: frozenset[str],
+) -> str:
+    value = _required_str(data, key)
+    if value not in choices:
+        allowed = ", ".join(sorted(choices))
+        raise ValueError(f"{key} must be one of: {allowed}")
     return value
 
 
@@ -202,8 +218,16 @@ class LobbyDraftAction:
             id=_required_id(data, "id"),
             lobby_id=_required_int(data, "lobby_id"),
             step=_required_int(data, "step"),
-            team_slot=_required_str(data, "team_slot"),
-            action=_required_str(data, "action"),
+            team_slot=_required_choice(
+                data,
+                "team_slot",
+                _TEAM_SLOTS,
+            ),
+            action=_required_choice(
+                data,
+                "action",
+                _DRAFT_ACTIONS,
+            ),
             champion=champion,
             created_at=_parse_dt(_required_str(data, "created_at")),
         )
@@ -221,7 +245,11 @@ class LobbyCaptain:
     def from_dict(cls, data: dict[str, Any]) -> LobbyCaptain:
         return cls(
             user_id=_required_str(data, "user_id"),
-            slot=_required_str(data, "slot"),
+            slot=_required_choice(
+                data,
+                "slot",
+                _TEAM_SLOTS,
+            ),
         )
 
     def json(self) -> dict[str, Any]:
@@ -243,9 +271,17 @@ class MatchResultConfirmation:
             id=_required_id(data, "id"),
             lobby_id=_required_int(data, "lobby_id"),
             user_id=_required_str(data, "user_id"),
-            selected_winner=_required_str(data, "selected_winner"),
+            selected_winner=_required_choice(
+                data,
+                "selected_winner",
+                _TEAM_SLOTS,
+            ),
             created_at=_parse_dt(_required_str(data, "created_at")),
-            captain_slot=_required_str(data, "captain_slot"),
+            captain_slot=_required_choice(
+                data,
+                "captain_slot",
+                _TEAM_SLOTS,
+            ),
         )
 
     def json(self) -> dict[str, Any]:
