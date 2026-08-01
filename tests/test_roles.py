@@ -174,6 +174,7 @@ async def test_create_roles_rejects_privileged_names_and_reports_partial_failure
     assert len(result.created) == len(roles.REQUIRED_ROLE_NAMES) - 2
     assert RoleGuild.created_kwargs[roles.ACTIVE_LOBBY_ROLE]["mentionable"] is False
     assert RoleGuild.created_kwargs[roles.ACTIVE_LOBBY_ROLE]["permissions"].value == 0
+    assert result.safe_roles[roles.ACTIVE_LOBBY_ROLE].name == roles.ACTIVE_LOBBY_ROLE
 
 
 @pytest.mark.asyncio
@@ -214,6 +215,7 @@ async def test_create_roles_makes_existing_active_lobby_role_non_mentionable() -
             "reason": "Battlevive role safety setup",
         }
     ]
+    assert result.safe_roles[roles.ACTIVE_LOBBY_ROLE] is active_role
 
 
 def test_role_sync_refuses_privileged_reserved_role() -> None:

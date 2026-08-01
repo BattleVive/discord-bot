@@ -8,6 +8,7 @@ discord = pytest.importorskip("discord")
 pytest.importorskip("asyncpg")
 
 from battlevive_bot import bot as bot_module
+from battlevive_bot import roles as roles_module
 
 
 def test_config_channel_exposes_text_and_news_channel_types() -> None:
@@ -303,6 +304,134 @@ async def test_active_lobby_role_rejects_default_and_restores_generated_default(
     assert calls == [(789, 2, 123)]
     assert "non-default" in rejected.response.messages[0]["content"]
     assert restored.response.messages[0]["content"].endswith("<@&2>.")
+
+
+class CommandRole:
+    def __init__(
+        self,
+        role_id: int,
+        name: str,
+        *,
+        mentionable: bool = False,
+        position: int = 1,
+    ) -> None:
+        self.id = role_id
+        self.name = name
+        self.mentionable = mentionable
+        self.position = position
+        self.managed = False
+        self.permissions = SimpleNamespace(value=0)
+        self.edit_result: CommandRole | None = None
+
+    async def edit(self, **kwargs: object) -> "CommandRole":
+        assert kwargs["mentionable"] is False
+        assert self.edit_result is not None
+        return self.edit_result
+
+    def is_assignable(self) -> bool:
+        return True
+
+    def is_default(self) -> bool:
+        return self.name == "@everyone"
+
+    def __le__(self, other: "CommandRole") -> bool:
+        return self.position <= other.position
+
+
+def role_setup_interaction(
+    roles: list[CommandRole],
+    create_role: object,
+) -> SimpleNamespace:
+    default_role = CommandRole(1, "@everyone", position=0)
+    bot_role = CommandRole(2, "Bot", position=100)
+    bot_member = SimpleNamespace(
+        guild_permissions=SimpleNamespace(manage_roles=True),
+        top_role=bot_role,
+    )
+    guild = SimpleNamespace(
+        id=789,
+        name="Role Test Guild",
+        roles=[default_role, *roles],
+        default_role=default_role,
+        me=bot_member,
+        create_role=create_role,
+    )
+    user = SimpleNamespace(
+        id=123,
+        guild_permissions=SimpleNamespace(manage_roles=True),
+    )
+    return SimpleNamespace(guild=guild, user=user, response=FakeResponse())
+
+
+def existing_setup_roles(active_role: CommandRole | None) -> list[CommandRole]:
+    result = [
+        CommandRole(index + 10, name)
+        for index, name in enumerate(roles_module.REQUIRED_ROLE_NAMES)
+        if name != roles_module.ACTIVE_LOBBY_ROLE
+    ]
+    if active_role is not None:
+        result.append(active_role)
+    return result
+
+
+@pytest.mark.asyncio
+async def test_create_roles_autoselects_authoritative_edited_role_without_cache_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cached = CommandRole(50, roles_module.ACTIVE_LOBBY_ROLE, mentionable=True)
+    edited = CommandRole(51, roles_module.ACTIVE_LOBBY_ROLE, mentionable=False)
+    cached.edit_result = edited
+
+    async def unexpected_create_role(**kwargs: object) -> CommandRole:
+        raise AssertionError("all required roles already exist")
+
+    interaction = role_setup_interaction(
+        existing_setup_roles(cached),
+        unexpected_create_role,
+    )
+    configured: list[tuple[int, int, int]] = []
+
+    async def get_config(guild_id: int) -> dict[str, object]:
+        return {"active_lobby_role_id": None}
+
+    async def set_role(guild_id: int, role_id: int, updated_by: int) -> None:
+        configured.append((guild_id, role_id, updated_by))
+
+    monkeypatch.setattr(bot_module.db, "get_guild_config", get_config)
+    monkeypatch.setattr(bot_module.db, "set_active_lobby_role", set_role)
+
+    await bot_module.create_roles_slash.callback(interaction)
+
+    assert cached.mentionable is True
+    assert configured == [(789, edited.id, 123)]
+
+
+@pytest.mark.asyncio
+async def test_create_roles_autoselects_uncached_new_role_returned_by_discord(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = CommandRole(61, roles_module.ACTIVE_LOBBY_ROLE, mentionable=False)
+
+    async def create_role(**kwargs: object) -> CommandRole:
+        assert kwargs["name"] == roles_module.ACTIVE_LOBBY_ROLE
+        return created
+
+    interaction = role_setup_interaction(existing_setup_roles(None), create_role)
+    configured: list[tuple[int, int, int]] = []
+
+    async def get_config(guild_id: int) -> dict[str, object]:
+        return {"active_lobby_role_id": None}
+
+    async def set_role(guild_id: int, role_id: int, updated_by: int) -> None:
+        configured.append((guild_id, role_id, updated_by))
+
+    monkeypatch.setattr(bot_module.db, "get_guild_config", get_config)
+    monkeypatch.setattr(bot_module.db, "set_active_lobby_role", set_role)
+
+    await bot_module.create_roles_slash.callback(interaction)
+
+    assert created not in interaction.guild.roles
+    assert configured == [(789, created.id, 123)]
 
 
 @pytest.mark.asyncio

@@ -759,10 +759,17 @@ async def create_roles_slash(interaction: discord.Interaction) -> None:
         configured_role_id = (
             config.get("active_lobby_role_id") if config is not None else None
         )
-        default_notification_role = discord.utils.get(
-            interaction.guild.roles,
-            name=ACTIVE_LOBBY_ROLE,
-        )
+        default_notification_role = result.safe_roles.get(ACTIVE_LOBBY_ROLE)
+        if (
+            default_notification_role is None
+            and ACTIVE_LOBBY_ROLE in result.existing
+            and ACTIVE_LOBBY_ROLE not in result.rejected
+            and ACTIVE_LOBBY_ROLE not in result.failed
+        ):
+            default_notification_role = discord.utils.get(
+                interaction.guild.roles,
+                name=ACTIVE_LOBBY_ROLE,
+            )
         if (
             configured_role_id is None
             and default_notification_role is not None

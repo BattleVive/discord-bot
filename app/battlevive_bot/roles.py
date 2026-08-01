@@ -27,6 +27,7 @@ class RoleCreationResult:
     existing: list[str] = field(default_factory=list)
     rejected: dict[str, str] = field(default_factory=dict)
     failed: dict[str, str] = field(default_factory=dict)
+    safe_roles: dict[str, discord.Role] = field(default_factory=dict)
 
 
 def _normalized_username(value: str | None) -> str:
@@ -205,13 +206,14 @@ async def create_roles(guild: discord.Guild) -> RoleCreationResult:
                     problem,
                 )
                 continue
+            authoritative_role = existing_role
             if role_name == ACTIVE_LOBBY_ROLE and getattr(
                 existing_role,
                 "mentionable",
                 False,
             ):
                 try:
-                    await existing_role.edit(
+                    authoritative_role = await existing_role.edit(
                         mentionable=False,
                         reason="Battlevive role safety setup",
                     )
@@ -238,6 +240,17 @@ async def create_roles(guild: discord.Guild) -> RoleCreationResult:
                         guild.id,
                     )
                     continue
+                if getattr(authoritative_role, "mentionable", False):
+                    result.failed[role_name] = (
+                        "Discord did not disable role mentions"
+                    )
+                    logger.warning(
+                        "Role '%s' remained mentionable in guild '%s' (%s).",
+                        role_name,
+                        guild.name,
+                        guild.id,
+                    )
+                    continue
             logger.debug(
                 "Role '%s' already exists in guild '%s' (%s), skipping.",
                 role_name,
@@ -245,6 +258,7 @@ async def create_roles(guild: discord.Guild) -> RoleCreationResult:
                 guild.id,
             )
             result.existing.append(role_name)
+            result.safe_roles[role_name] = authoritative_role
             continue
 
         try:
@@ -255,6 +269,7 @@ async def create_roles(guild: discord.Guild) -> RoleCreationResult:
                 reason="Battlevive role setup",
             )
             result.created.append(role_name)
+            result.safe_roles[role_name] = role
             logger.info(
                 "Created role '%s' (%s) in guild '%s' (%s).",
                 role.name,
