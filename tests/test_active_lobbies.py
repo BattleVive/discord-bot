@@ -29,6 +29,10 @@ def candidate(lobby_id: int = 165, **overrides: object) -> dict[str, object]:
     data: dict[str, object] = {
         "id": lobby_id,
         "lobby_number": lobby_id,
+        "title": "Friday Night Inhouse",
+        "lobby_type": "seasonal",
+        "region": "EU",
+        "match_size": 3,
         "game_number": 19,
         "url_year": 2026,
         "url_series": "season-one",
@@ -166,8 +170,9 @@ def test_embed_uses_case_insensitive_emojis_mentions_and_map_alias(
         battlevive_url="https://battlevive.test",
     )
 
-    assert rendered.embed.title == "Game 19 · Lobby #165"
+    assert rendered.embed.title == "Friday Night Inhouse"
     assert rendered.embed.url.endswith("/matchmaking/2026/season-one/GAME-19")
+    assert rendered.embed.description == "3v3 · EU · Draft · Step 3"
     team_values = [field.value for field in rendered.embed.fields[:2]]
     assert "👑 <@111>" in team_values[0]
     assert "Fallback Name" in team_values[0]
@@ -190,6 +195,19 @@ def test_unknown_map_and_missing_url_components_have_safe_fallback(tmp_path: Pat
     assert rendered.embed.url is None
     assert rendered.map_path is None
     assert rendered.embed.fields[2].value == "Future Arena"
+
+
+def test_embed_title_and_metadata_have_defensive_fallbacks(tmp_path: Path) -> None:
+    rendered = build_active_lobby_embed(
+        candidate(title="  ", match_size="3", region="  "),
+        LobbyPollState(),
+        emoji_lookup={},
+        map_resolver=MapResolver(tmp_path),
+        battlevive_url="https://battlevive.test",
+    )
+
+    assert rendered.embed.title == "Lobby #165"
+    assert rendered.embed.description == "Draft · Step 3"
 
 
 def test_newest_confirmation_per_slot_drives_consensus_and_dispute() -> None:
@@ -717,6 +735,8 @@ async def test_silent_baseline_one_time_ping_move_delete_recovery_and_reset(
     await service._reconcile_guild(config, [first])
     first_message = old_channel.sent[-1]
     assert first_message.kwargs["content"] is None
+    assert "<@111>" in first_message.kwargs["embed"].fields[0].value
+    assert first_message.kwargs["allowed_mentions"].users is False
     assert database.posts[1][165]["notification_handled"] is True
     assert database.baseline_completions == [1]
     config["active_lobby_baseline_pending"] = False

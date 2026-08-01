@@ -495,6 +495,22 @@ def _phase(candidate: Mapping[str, Any], state: LobbyPollState) -> str:
     return _truncate(str(candidate.get("status") or "Active").replace("_", " ").title(), 100)
 
 
+def _lobby_summary(candidate: Mapping[str, Any], state: LobbyPollState) -> str:
+    details: list[str] = []
+    match_size = candidate.get("match_size")
+    if (
+        isinstance(match_size, int)
+        and not isinstance(match_size, bool)
+        and match_size > 0
+    ):
+        details.append(f"{match_size}v{match_size}")
+    region = str(candidate.get("region") or "").strip()
+    if region:
+        details.append(region.upper())
+    details.append(_phase(candidate, state))
+    return " · ".join(details)
+
+
 def build_active_lobby_embed(
     candidate: Mapping[str, Any],
     state: LobbyPollState,
@@ -504,16 +520,11 @@ def build_active_lobby_embed(
     battlevive_url: str,
 ) -> RenderedLobby:
     lobby_number = candidate.get("lobby_number", candidate.get("id", "?"))
-    game_number = candidate.get("game_number")
-    title = (
-        f"Game {game_number} · Lobby #{lobby_number}"
-        if game_number is not None
-        else f"Lobby #{lobby_number}"
-    )
+    title = str(candidate.get("title") or "").strip() or f"Lobby #{lobby_number}"
     embed = discord.Embed(
         title=_truncate(title, MAX_EMBED_TITLE),
         url=build_match_url(candidate, battlevive_url),
-        description=_phase(candidate, state),
+        description=_lobby_summary(candidate, state),
         colour=discord.Colour.blurple(),
     )
 
