@@ -83,3 +83,39 @@ def season_rating_payload(**overrides: object) -> dict[str, object]:
     }
     data.update(overrides)
     return data
+
+
+def lobby_draft_action_payload(**overrides: object) -> dict[str, object]:
+    data: dict[str, object] = {
+        "id": 901,
+        "lobby_id": 101,
+        "step": 3,
+        "team_slot": "team_one",
+        "action": "pick",
+        "champion": "Lucie",
+        "created_at": "2026-01-02T18:16:00+00:00",
+    }
+    data.update(overrides)
+    return data
+
+
+def lobby_captain_payload(**overrides: object) -> dict[str, object]:
+    data: dict[str, object] = {
+        "user_id": USER_A_ID,
+        "slot": "team_one",
+    }
+    data.update(overrides)
+    return data
+
+
+def match_result_confirmation_payload(**overrides: object) -> dict[str, object]:
+    data: dict[str, object] = {
+        "id": 801,
+        "lobby_id": 101,
+        "user_id": USER_A_ID,
+        "selected_winner": "team_one",
+        "created_at": "2026-01-02T19:00:00+00:00",
+        "captain_slot": "team_one",
+    }
+    data.update(overrides)
+    return data

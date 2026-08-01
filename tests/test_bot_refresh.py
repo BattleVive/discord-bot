@@ -59,11 +59,19 @@ async def test_setup_starts_token_and_data_refresh_loops(
         def start(self) -> None:
             started.append("leaderboard")
 
+    class ActiveLobbyService:
+        def __init__(self, *args: object) -> None:
+            return None
+
+        def start(self) -> None:
+            started.append("active-lobbies")
+
     async def sync_tree(*args: object, **kwargs: object) -> list[object]:
         return []
 
     monkeypatch.setattr(bot_module, "init_pool", init_pool)
     monkeypatch.setattr(bot_module, "LeaderboardService", LeaderboardService)
+    monkeypatch.setattr(bot_module, "ActiveLobbyService", ActiveLobbyService)
     monkeypatch.setattr(
         bot_module.revalidate_tokens,
         "start",
@@ -82,10 +90,17 @@ async def test_setup_starts_token_and_data_refresh_loops(
     monkeypatch.setattr(bot_module.bot.tree, "copy_global_to", lambda **kwargs: None)
     monkeypatch.setattr(bot_module.bot.tree, "sync", sync_tree)
     monkeypatch.setattr(bot_module.bot, "leaderboard_service", None)
+    monkeypatch.setattr(bot_module.bot, "active_lobby_service", None)
 
     await bot_module.setup_hook()
 
-    assert started == ["leaderboard", "tokens", "infrequent", "frequent"]
+    assert started == [
+        "leaderboard",
+        "active-lobbies",
+        "tokens",
+        "infrequent",
+        "frequent",
+    ]
 
 
 @pytest.mark.asyncio
@@ -169,6 +184,12 @@ async def test_frequent_refresh_fetches_lobbies_and_ratings(
     monkeypatch.setattr(bot_module, "give_rank_roles", give_rank_role)
     monkeypatch.setattr(bot_module, "lobbies", [])
     monkeypatch.setattr(bot_module, "season_ratings", [])
+    requested: list[str] = []
+    monkeypatch.setattr(
+        bot_module.bot,
+        "active_lobby_service",
+        SimpleNamespace(request_reconciliation=lambda: requested.append("active")),
+    )
 
     await bot_module.refresh_frequently_changing_data.coro()
 
@@ -183,6 +204,7 @@ async def test_frequent_refresh_fetches_lobbies_and_ratings(
         }
     ]
     assert role_calls == ["rank"]
+    assert requested == ["active"]
 
 
 @pytest.mark.asyncio
@@ -271,6 +293,7 @@ async def test_manual_refresh_preserves_result_order(
     monkeypatch.setattr(bot_module, "give_battlevive_role", record_roles)
     monkeypatch.setattr(bot_module, "give_rank_roles", record_roles)
     monkeypatch.setattr(bot_module.bot, "leaderboard_service", None)
+    monkeypatch.setattr(bot_module.bot, "active_lobby_service", None)
     guild = SimpleNamespace(id=123)
     user = SimpleNamespace(
         guild_permissions=SimpleNamespace(manage_guild=True),

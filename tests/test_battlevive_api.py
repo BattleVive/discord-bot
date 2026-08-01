@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable
@@ -13,6 +15,9 @@ from battlevive_bot.battlevive.supabase import SupabaseTransport
 from battlevive_bot.battlevive.tokens import TokenPair
 from battlevive_bot.battlevive.tokens import TokenStore
 from tests.factories import lobby_payload
+from tests.factories import lobby_captain_payload
+from tests.factories import lobby_draft_action_payload
+from tests.factories import match_result_confirmation_payload
 from tests.factories import season_rating_payload
 from tests.factories import user_payload
 
@@ -39,11 +44,25 @@ class FakeTransport:
             "new-refresh",
         )
         self.get_calls: list[tuple[str, str]] = []
+        self.get_params_calls: list[
+            tuple[
+                str,
+                str,
+                Mapping[str, str] | Sequence[tuple[str, str]] | None,
+            ]
+        ] = []
         self.refresh_calls: list[str] = []
         self.closed = False
 
-    async def get(self, endpoint: str, access_token: str) -> object:
+    async def get(
+        self,
+        endpoint: str,
+        access_token: str,
+        *,
+        params: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
+    ) -> object:
         self.get_calls.append((endpoint, access_token))
+        self.get_params_calls.append((endpoint, access_token, params))
         payload = self.payloads[endpoint]
         if isinstance(payload, BaseException):
             raise payload
@@ -102,7 +121,12 @@ async def test_client_parses_every_endpoint(
     payload: object,
     summary: list[object],
 ) -> None:
-    transport = FakeTransport(payloads={endpoint: payload})
+    payloads = {endpoint: payload}
+    if endpoint == "lobbies":
+        payloads["lobby_slots"] = [
+            {"lobby_id": 101, "user_id": user_payload()["id"], "slot": "team_one"}
+        ]
+    transport = FakeTransport(payloads=payloads)
     client = make_client(tmp_path, transport)
 
     result = await getattr(client, method_name)()
@@ -116,7 +140,106 @@ async def test_client_parses_every_endpoint(
     else:
         actual = [item.json() for item in result]
     assert actual == summary
-    assert transport.get_calls == [(endpoint, "bootstrap-access")]
+    expected_calls = [(endpoint, "bootstrap-access")]
+    if endpoint == "lobbies":
+        expected_calls.append(("lobby_slots", "bootstrap-access"))
+    assert transport.get_calls == expected_calls
+
+
+@pytest.mark.asyncio
+async def test_lobbies_hydrate_ordered_rosters_from_minimal_slot_query(
+    tmp_path: Path,
+) -> None:
+    transport = FakeTransport(
+        payloads={
+            "lobbies": [
+                lobby_payload(team_one_roster=[], team_two_roster=[]),
+            ],
+            "lobby_slots": [
+                {"lobby_id": 101, "user_id": "user-two", "slot": "team_one"},
+                {"lobby_id": 101, "user_id": "user-one", "slot": "team_one"},
+                {"lobby_id": 101, "user_id": "user-three", "slot": "team_two"},
+                {"lobby_id": 999, "user_id": "orphan", "slot": "team_one"},
+            ],
+        }
+    )
+    client = make_client(tmp_path, transport)
+
+    result = await client.get_lobbies()
+
+    assert result[0].team_one_roster == ["user-two", "user-one"]
+    assert result[0].team_two_roster == ["user-three"]
+    assert transport.get_params_calls == [
+        ("lobbies", "bootstrap-access", None),
+        (
+            "lobby_slots",
+            "bootstrap-access",
+            (
+                ("select", "lobby_id,user_id,slot"),
+                ("order", "joined_at.asc,id.asc"),
+            ),
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "endpoint", "payload", "params"),
+    [
+        (
+            "get_lobby_draft_actions",
+            "lobby_draft_actions",
+            [lobby_draft_action_payload()],
+            (
+                (
+                    "select",
+                    "id,lobby_id,step,team_slot,action,champion,created_at",
+                ),
+                ("lobby_id", "eq.101"),
+                ("order", "step.asc"),
+            ),
+        ),
+        (
+            "get_lobby_captains",
+            "lobby_slots",
+            [lobby_captain_payload()],
+            (
+                ("select", "user_id,slot"),
+                ("lobby_id", "eq.101"),
+                ("is_captain", "eq.true"),
+            ),
+        ),
+        (
+            "get_match_result_confirmations",
+            "match_result_confirmations",
+            [match_result_confirmation_payload()],
+            (
+                (
+                    "select",
+                    "id,lobby_id,user_id,selected_winner,created_at,captain_slot",
+                ),
+                ("lobby_id", "eq.101"),
+                ("order", "created_at.asc"),
+            ),
+        ),
+    ],
+)
+async def test_active_lobby_endpoints_use_exact_minimal_queries(
+    tmp_path: Path,
+    method_name: str,
+    endpoint: str,
+    payload: object,
+    params: tuple[tuple[str, str], ...],
+) -> None:
+    transport = FakeTransport(payloads={endpoint: payload})
+    client = make_client(tmp_path, transport)
+
+    result = await getattr(client, method_name)(101)
+
+    assert len(result) == 1
+    assert transport.get_params_calls == [
+        (endpoint, "bootstrap-access", params)
+    ]
 
 
 @pytest.mark.asyncio
@@ -227,6 +350,21 @@ class RetryTransport(FakeTransport):
         return [user_payload()]
 
 
+class ActiveLobbyRetryTransport(FakeTransport):
+    async def get(
+        self,
+        endpoint: str,
+        access_token: str,
+        *,
+        params: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
+    ) -> object:
+        self.get_calls.append((endpoint, access_token))
+        self.get_params_calls.append((endpoint, access_token, params))
+        if access_token == "bootstrap-access":
+            raise response_error(401)
+        return [lobby_draft_action_payload()]
+
+
 @pytest.mark.asyncio
 async def test_401_refreshes_and_retries_once(tmp_path: Path) -> None:
     transport = RetryTransport()
@@ -240,6 +378,21 @@ async def test_401_refreshes_and_retries_once(tmp_path: Path) -> None:
         ("users", "bootstrap-access"),
         ("users", "new-access"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_active_lobby_query_keeps_exact_params_after_401_retry(
+    tmp_path: Path,
+) -> None:
+    transport = ActiveLobbyRetryTransport()
+    client = make_client(tmp_path, transport)
+
+    drafts = await client.get_lobby_draft_actions(101)
+
+    assert [draft.champion for draft in drafts] == ["Lucie"]
+    assert transport.refresh_calls == ["bootstrap-refresh"]
+    assert len(transport.get_params_calls) == 2
+    assert transport.get_params_calls[0][2] == transport.get_params_calls[1][2]
 
 
 @pytest.mark.asyncio
@@ -382,6 +535,29 @@ async def test_transport_builds_rest_urls_and_headers(endpoint: str) -> None:
     assert isinstance(kwargs["timeout"], aiohttp.ClientTimeout)
     assert kwargs["timeout"].total == 15
     assert kwargs["timeout"].connect == 5
+
+
+@pytest.mark.asyncio
+async def test_transport_forwards_query_values_for_safe_encoding() -> None:
+    session = FakeSession([FakeResponse(200, [])])
+    transport = SupabaseTransport(
+        "https://supabase.test",
+        "api-key",
+        session=session,
+    )
+    params = (
+        ("select", "id,lobby_id,champion"),
+        ("lobby_id", "eq.165"),
+        ("order", "created_at.asc"),
+    )
+
+    await transport.get(
+        "lobby_draft_actions",
+        "access-token",
+        params=params,
+    )
+
+    assert session.calls[0][2]["params"] == params
 
 
 @pytest.mark.asyncio

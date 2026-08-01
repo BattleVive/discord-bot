@@ -85,3 +85,4 @@ This project is licensed under the AGPL-3.0. See [LICENSE](./LICENSE).
 ## Third-party assets
 
 - Liberation Mono 2.1.5 is bundled under the SIL Open Font License 1.1. The original license and copyright notice are in [`app/assets/fonts/LICENSE.txt`](./app/assets/fonts/LICENSE). Upstream project and official archive: [liberationfonts/liberation-fonts](https://github.com/liberationfonts/liberation-fonts), [Liberation Fonts 2.1.5 TTF download](https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz).
+- Battlerite map artwork and derived champion emoji upload helpers are covered by the repository's [third-party asset notice](./app/assets/THIRD_PARTY_ASSETS.md).

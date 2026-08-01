@@ -8,7 +8,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./app/data:/app/data:Z
+      - ./app/data:/app/data:z
       - ./app/logs:/app/logs:Z
     read_only: true
     tmpfs:
@@ -33,7 +33,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-battlevive}
     volumes:
       - ./app/init-db:/docker-entrypoint-initdb.d:ro,Z
-      - ./app/data/postgresql:/var/lib/postgresql:Z
+      - ./app/data/postgresql:/var/lib/postgresql:z
     ports:
       - "127.0.0.1:5432:5432"  # host access for local psql/pgAdmin only; not needed for bot-to-db traffic
     networks:

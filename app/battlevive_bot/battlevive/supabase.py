@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-import aiohttp
+from collections.abc import Mapping
+from collections.abc import Sequence
 from urllib.parse import urlsplit
+
+import aiohttp
 
 from .tokens import TokenPair
 from ..logs import logger
@@ -31,7 +34,13 @@ class SupabaseTransport:
         self._owns_session = session is None
         self._timeout = aiohttp.ClientTimeout(total=15, connect=5)
 
-    async def get(self, endpoint: str, access_token: str) -> object:
+    async def get(
+        self,
+        endpoint: str,
+        access_token: str,
+        *,
+        params: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
+    ) -> object:
         session = self._get_session()
         headers = {
             "Authorization": f"Bearer {access_token}",
@@ -44,6 +53,7 @@ class SupabaseTransport:
             async with session.get(
                 url,
                 headers=headers,
+                params=params,
                 timeout=self._timeout,
             ) as response:
                 if response.status != 200:

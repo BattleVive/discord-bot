@@ -10,6 +10,11 @@ pytest.importorskip("asyncpg")
 from battlevive_bot import roles
 
 
+def test_active_lobby_role_is_part_of_unprivileged_role_setup() -> None:
+    assert roles.ACTIVE_LOBBY_ROLE in roles.REQUIRED_ROLE_NAMES
+    assert roles.WEBSITE_MODERATOR_ROLE in roles.REQUIRED_ROLE_NAMES
+
+
 class FakeMember:
     def __init__(self, member_id: int, name: str, display_name: str) -> None:
         self.id = member_id
@@ -107,12 +112,21 @@ class FakeRole:
         position: int = 1,
         permissions: int = 0,
         managed: bool = False,
+        mentionable: bool = False,
     ) -> None:
         self.id = hash(name)
         self.name = name
         self.position = position
         self.permissions = SimpleNamespace(value=permissions)
         self.managed = managed
+        self.mentionable = mentionable
+        self.edits: list[dict[str, object]] = []
+
+    async def edit(self, **kwargs: object) -> "FakeRole":
+        self.edits.append(kwargs)
+        if "mentionable" in kwargs:
+            self.mentionable = bool(kwargs["mentionable"])
+        return self
 
     def is_assignable(self) -> bool:
         return True
@@ -141,8 +155,10 @@ async def test_create_roles_rejects_privileged_names_and_reports_partial_failure
         me = bot_member
         roles = [privileged]
         default_role = everyone_role
+        created_kwargs: dict[str, dict[str, object]] = {}
 
         async def create_role(self, *, name: str, **kwargs: object) -> FakeRole:
+            self.created_kwargs[name] = kwargs
             if name == second_name:
                 response = SimpleNamespace(status=403, reason="Forbidden", headers={})
                 raise discord.Forbidden(response, "denied")
@@ -157,6 +173,87 @@ async def test_create_roles_rejects_privileged_names_and_reports_partial_failure
     }
     assert result.failed == {second_name: "Discord denied role creation"}
     assert len(result.created) == len(roles.REQUIRED_ROLE_NAMES) - 2
+    assert RoleGuild.created_kwargs[roles.ACTIVE_LOBBY_ROLE]["mentionable"] is False
+    assert RoleGuild.created_kwargs[roles.ACTIVE_LOBBY_ROLE]["permissions"].value == 0
+    assert RoleGuild.created_kwargs[roles.WEBSITE_MODERATOR_ROLE]["mentionable"] is False
+    assert RoleGuild.created_kwargs[roles.WEBSITE_MODERATOR_ROLE]["permissions"].value == 0
+    assert result.safe_roles[roles.ACTIVE_LOBBY_ROLE].name == roles.ACTIVE_LOBBY_ROLE
+
+
+@pytest.mark.asyncio
+async def test_create_roles_makes_existing_active_lobby_role_non_mentionable() -> None:
+    active_role = FakeRole(roles.ACTIVE_LOBBY_ROLE, mentionable=True)
+    existing = [
+        active_role,
+        *[
+            FakeRole(name)
+            for name in roles.REQUIRED_ROLE_NAMES
+            if name != roles.ACTIVE_LOBBY_ROLE
+        ],
+    ]
+    top_role = FakeRole("Bot", position=10)
+    everyone_role = FakeRole("@everyone", position=0)
+    bot_member = SimpleNamespace(
+        guild_permissions=SimpleNamespace(manage_roles=True),
+        top_role=top_role,
+    )
+
+    class RoleGuild:
+        id = 100
+        name = "Test Guild"
+        me = bot_member
+        roles = existing
+        default_role = everyone_role
+
+        async def create_role(self, **kwargs: object) -> FakeRole:
+            raise AssertionError("all roles already exist")
+
+    result = await roles.create_roles(RoleGuild())
+
+    assert result.failed == {}
+    assert active_role.mentionable is False
+    assert active_role.edits == [
+        {
+            "mentionable": False,
+            "reason": "Battlevive role safety setup",
+        }
+    ]
+    assert result.safe_roles[roles.ACTIVE_LOBBY_ROLE] is active_role
+
+
+@pytest.mark.asyncio
+async def test_create_roles_makes_existing_website_moderator_non_mentionable() -> None:
+    moderator_role = FakeRole(roles.WEBSITE_MODERATOR_ROLE, mentionable=True)
+    existing = [
+        moderator_role,
+        *[
+            FakeRole(name)
+            for name in roles.REQUIRED_ROLE_NAMES
+            if name != roles.WEBSITE_MODERATOR_ROLE
+        ],
+    ]
+    top_role = FakeRole("Bot", position=10)
+    everyone_role = FakeRole("@everyone", position=0)
+    bot_member = SimpleNamespace(
+        guild_permissions=SimpleNamespace(manage_roles=True),
+        top_role=top_role,
+    )
+
+    class RoleGuild:
+        id = 100
+        name = "Test Guild"
+        me = bot_member
+        roles = existing
+        default_role = everyone_role
+
+        async def create_role(self, **kwargs: object) -> FakeRole:
+            raise AssertionError("all roles already exist")
+
+    result = await roles.create_roles(RoleGuild())
+
+    assert result.failed == {}
+    assert moderator_role.mentionable is False
+    assert result.safe_roles[roles.WEBSITE_MODERATOR_ROLE] is moderator_role
 
 
 def test_role_sync_refuses_privileged_reserved_role() -> None:

@@ -11,9 +11,19 @@ from .models import SeasonRating
 
 
 BATTLEVIVE_PLAYER_ROLE = "Battlevive Player"
+ACTIVE_LOBBY_ROLE = "Active Lobby"
+WEBSITE_MODERATOR_ROLE = "Website Moderator"
+NOTIFICATION_ROLE_NAMES = frozenset(
+    {ACTIVE_LOBBY_ROLE, WEBSITE_MODERATOR_ROLE}
+)
 RANK_ROLE_NAMES_ORDERED = tuple(name for _, name in SeasonRating.RANKS)
 RANK_ROLE_NAMES = frozenset(RANK_ROLE_NAMES_ORDERED)
-REQUIRED_ROLE_NAMES = (*RANK_ROLE_NAMES_ORDERED, BATTLEVIVE_PLAYER_ROLE)
+REQUIRED_ROLE_NAMES = (
+    *RANK_ROLE_NAMES_ORDERED,
+    BATTLEVIVE_PLAYER_ROLE,
+    ACTIVE_LOBBY_ROLE,
+    WEBSITE_MODERATOR_ROLE,
+)
 
 
 @dataclass(slots=True)
@@ -22,6 +32,7 @@ class RoleCreationResult:
     existing: list[str] = field(default_factory=list)
     rejected: dict[str, str] = field(default_factory=dict)
     failed: dict[str, str] = field(default_factory=dict)
+    safe_roles: dict[str, discord.Role] = field(default_factory=dict)
 
 
 def _normalized_username(value: str | None) -> str:
@@ -200,6 +211,51 @@ async def create_roles(guild: discord.Guild) -> RoleCreationResult:
                     problem,
                 )
                 continue
+            authoritative_role = existing_role
+            if role_name in NOTIFICATION_ROLE_NAMES and getattr(
+                existing_role,
+                "mentionable",
+                False,
+            ):
+                try:
+                    authoritative_role = await existing_role.edit(
+                        mentionable=False,
+                        reason="Battlevive role safety setup",
+                    )
+                except discord.Forbidden:
+                    result.failed[role_name] = (
+                        "Discord denied disabling role mentions"
+                    )
+                    logger.exception(
+                        "Missing permissions to make role '%s' non-mentionable "
+                        "in guild '%s' (%s).",
+                        role_name,
+                        guild.name,
+                        guild.id,
+                    )
+                    continue
+                except discord.HTTPException:
+                    result.failed[role_name] = (
+                        "Discord rejected disabling role mentions"
+                    )
+                    logger.exception(
+                        "Failed to make role '%s' non-mentionable in guild '%s' (%s).",
+                        role_name,
+                        guild.name,
+                        guild.id,
+                    )
+                    continue
+                if getattr(authoritative_role, "mentionable", False):
+                    result.failed[role_name] = (
+                        "Discord did not disable role mentions"
+                    )
+                    logger.warning(
+                        "Role '%s' remained mentionable in guild '%s' (%s).",
+                        role_name,
+                        guild.name,
+                        guild.id,
+                    )
+                    continue
             logger.debug(
                 "Role '%s' already exists in guild '%s' (%s), skipping.",
                 role_name,
@@ -207,15 +263,18 @@ async def create_roles(guild: discord.Guild) -> RoleCreationResult:
                 guild.id,
             )
             result.existing.append(role_name)
+            result.safe_roles[role_name] = authoritative_role
             continue
 
         try:
             role = await guild.create_role(
                 name=role_name,
                 permissions=discord.Permissions.none(),
+                mentionable=False,
                 reason="Battlevive role setup",
             )
             result.created.append(role_name)
+            result.safe_roles[role_name] = role
             logger.info(
                 "Created role '%s' (%s) in guild '%s' (%s).",
                 role.name,

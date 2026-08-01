@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from datetime import datetime
+from datetime import timezone
 import uuid
 from typing import Any
 
@@ -9,6 +11,8 @@ import asyncpg
 
 from .logs import logger
 from .models import Lobby
+from .models import LobbyCaptain
+from .models import LobbyDraftAction
 from .models import SeasonRating
 from .models import User
 from .settings import LEADERBOARD_MAX_ENTRIES
@@ -54,7 +58,10 @@ async def get_guild_config(
     row = await pool.fetchrow(
         """
         SELECT guild_id, leaderboard_channel_id, leaderboard_limit,
-               debug_commands_enabled, updated_by
+               debug_commands_enabled, active_lobby_channel_id,
+               active_lobby_role_id, website_moderator_role_id,
+               active_lobby_baseline_pending,
+               updated_by
         FROM guild_config
         WHERE guild_id = $1
         """,
@@ -172,6 +179,142 @@ async def get_configured_leaderboards() -> list[dict[str, int | None]]:
         """
     )
     return [dict(row) for row in rows]
+
+
+async def get_configured_active_lobbies() -> list[dict[str, int | bool | None]]:
+    rows = await get_pool().fetch(
+        """
+        SELECT config.guild_id, config.active_lobby_channel_id,
+               config.active_lobby_role_id,
+               config.website_moderator_role_id,
+               config.active_lobby_baseline_pending, config.updated_by
+        FROM guild_config AS config
+        WHERE config.active_lobby_channel_id IS NOT NULL
+           OR EXISTS (
+               SELECT 1
+               FROM active_lobby_posts AS posts
+               WHERE posts.guild_id = config.guild_id
+                 AND posts.message_id IS NOT NULL
+           )
+           OR EXISTS (
+               SELECT 1
+               FROM active_lobby_empty_posts AS empty_posts
+               WHERE empty_posts.guild_id = config.guild_id
+                 AND empty_posts.message_id IS NOT NULL
+           )
+           OR EXISTS (
+               SELECT 1
+               FROM active_lobby_obsolete_posts AS obsolete_posts
+               WHERE obsolete_posts.guild_id = config.guild_id
+           )
+        ORDER BY config.guild_id
+        """
+    )
+    return [dict(row) for row in rows]
+
+
+async def set_active_lobby_channel(
+    guild_id: int,
+    channel_id: int | None,
+    updated_by: int,
+) -> None:
+    await get_pool().execute(
+        """
+        INSERT INTO guild_config (
+            guild_id, active_lobby_channel_id,
+            active_lobby_baseline_pending, updated_by
+        )
+        VALUES ($1, $2, TRUE, $3)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET active_lobby_channel_id = EXCLUDED.active_lobby_channel_id,
+            active_lobby_baseline_pending = CASE
+                WHEN guild_config.active_lobby_channel_id IS NULL
+                 AND EXCLUDED.active_lobby_channel_id IS NOT NULL
+                THEN TRUE
+                ELSE guild_config.active_lobby_baseline_pending
+            END,
+            updated_at = now(),
+            updated_by = EXCLUDED.updated_by
+        """,
+        guild_id,
+        channel_id,
+        updated_by,
+    )
+
+
+async def complete_active_lobby_baseline(guild_id: int) -> None:
+    await get_pool().execute(
+        """
+        UPDATE guild_config
+        SET active_lobby_baseline_pending = FALSE,
+            updated_at = now()
+        WHERE guild_id = $1
+          AND active_lobby_channel_id IS NOT NULL
+        """,
+        guild_id,
+    )
+
+
+async def set_active_lobby_role(
+    guild_id: int,
+    role_id: int | None,
+    updated_by: int,
+) -> None:
+    await get_pool().execute(
+        """
+        INSERT INTO guild_config (guild_id, active_lobby_role_id, updated_by)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET active_lobby_role_id = EXCLUDED.active_lobby_role_id,
+            updated_at = now(),
+            updated_by = EXCLUDED.updated_by
+        """,
+        guild_id,
+        role_id,
+        updated_by,
+    )
+
+
+async def set_website_moderator_role(
+    guild_id: int,
+    role_id: int | None,
+    updated_by: int,
+) -> None:
+    await get_pool().execute(
+        """
+        INSERT INTO guild_config (guild_id, website_moderator_role_id, updated_by)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET website_moderator_role_id = EXCLUDED.website_moderator_role_id,
+            updated_at = now(),
+            updated_by = EXCLUDED.updated_by
+        """,
+        guild_id,
+        role_id,
+        updated_by,
+    )
+
+
+async def reset_active_lobby_config(guild_id: int, updated_by: int) -> None:
+    await get_pool().execute(
+        """
+        INSERT INTO guild_config (
+            guild_id, active_lobby_channel_id, active_lobby_role_id,
+            website_moderator_role_id,
+            active_lobby_baseline_pending, updated_by
+        )
+        VALUES ($1, NULL, NULL, NULL, TRUE, $2)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET active_lobby_channel_id = NULL,
+            active_lobby_role_id = NULL,
+            website_moderator_role_id = NULL,
+            active_lobby_baseline_pending = TRUE,
+            updated_at = now(),
+            updated_by = EXCLUDED.updated_by
+        """,
+        guild_id,
+        updated_by,
+    )
 
 
 async def get_current_leaderboard_ratings() -> tuple[tuple[int, int] | None, list[dict[str, Any]]]:
@@ -375,6 +518,451 @@ async def get_lobbies() -> list[Lobby]:
     ]
 
 
+async def get_active_lobby_candidates() -> list[dict[str, Any]]:
+    """Load globally relevant lobbies with team and locally linked user state."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                lobbies.*,
+                COALESCE(team_one.roster, ARRAY[]::UUID[]) AS team_one_roster,
+                COALESCE(team_two.roster, ARRAY[]::UUID[]) AS team_two_roster,
+                team_one.captain_id AS team_one_captain_id,
+                team_two.captain_id AS team_two_captain_id,
+                COALESCE(team_one.picks, ARRAY[]::TEXT[]) AS team_one_picks,
+                COALESCE(team_two.picks, ARRAY[]::TEXT[]) AS team_two_picks,
+                COALESCE(team_one.bans, ARRAY[]::TEXT[]) AS team_one_bans,
+                COALESCE(team_two.bans, ARRAY[]::TEXT[]) AS team_two_bans,
+                CASE
+                    WHEN team_one.draft_finalized_at IS NOT NULL
+                     AND team_two.draft_finalized_at IS NOT NULL
+                    THEN GREATEST(
+                        team_one.draft_finalized_at,
+                        team_two.draft_finalized_at
+                    )
+                    ELSE NULL
+                END AS draft_finalized_at
+            FROM lobbies
+            LEFT JOIN lobby_rosters AS team_one
+              ON team_one.lobby_id = lobbies.id
+             AND team_one.team = 'team_one'
+            LEFT JOIN lobby_rosters AS team_two
+              ON team_two.lobby_id = lobbies.id
+             AND team_two.team = 'team_two'
+            WHERE lobbies.ended_at IS NULL
+               OR lower(lobbies.status) IN (
+                    'awaiting_result', 'awaiting_results',
+                    'awaiting_votes', 'disputed'
+               )
+               OR EXISTS (
+                    SELECT 1
+                    FROM active_lobby_posts AS posts
+                    WHERE posts.lobby_id = lobbies.id
+                      AND posts.message_id IS NOT NULL
+               )
+            ORDER BY lobbies.created_at, lobbies.id
+            """
+        )
+
+        referenced_user_ids: set[uuid.UUID] = set()
+        candidates: list[dict[str, Any]] = []
+        for row in rows:
+            candidate = dict(row)
+            if candidate["creator_id"] is not None:
+                candidate["creator_id"] = str(candidate["creator_id"])
+            for key in ("team_one_roster", "team_two_roster"):
+                candidate[key] = [str(user_id) for user_id in candidate[key]]
+                referenced_user_ids.update(
+                    uuid.UUID(user_id) for user_id in candidate[key]
+                )
+            for key in ("team_one_captain_id", "team_two_captain_id"):
+                captain_id = candidate[key]
+                if captain_id is not None:
+                    referenced_user_ids.add(captain_id)
+                    candidate[key] = str(captain_id)
+            candidates.append(candidate)
+
+        users_by_id: dict[str, dict[str, Any]] = {}
+        if referenced_user_ids:
+            user_rows = await conn.fetch(
+                """
+                SELECT id, discord_id, discord_username
+                FROM users
+                WHERE id = ANY($1::UUID[])
+                """,
+                list(referenced_user_ids),
+            )
+            users_by_id = {
+                str(row["id"]): {
+                    "id": str(row["id"]),
+                    "discord_id": row["discord_id"],
+                    "discord_username": row["discord_username"],
+                }
+                for row in user_rows
+            }
+
+    for candidate in candidates:
+        user_ids = set(candidate["team_one_roster"])
+        user_ids.update(candidate["team_two_roster"])
+        if candidate["team_one_captain_id"] is not None:
+            user_ids.add(candidate["team_one_captain_id"])
+        if candidate["team_two_captain_id"] is not None:
+            user_ids.add(candidate["team_two_captain_id"])
+        candidate["users_by_id"] = {
+            user_id: users_by_id[user_id]
+            for user_id in user_ids
+            if user_id in users_by_id
+        }
+    return candidates
+
+
+async def get_lobby_ids_for_user(user_id: str | uuid.UUID) -> list[int]:
+    rows = await get_pool().fetch(
+        """
+        SELECT lobby_id
+        FROM lobby_rosters
+        WHERE $1 = ANY(roster)
+        ORDER BY lobby_id
+        """,
+        uuid.UUID(str(user_id)),
+    )
+    return [row["lobby_id"] for row in rows]
+
+
+async def update_lobby_captains(
+    lobby_id: int,
+    captains: Sequence[LobbyCaptain],
+) -> None:
+    by_slot: dict[str, LobbyCaptain] = {}
+    for captain in captains:
+        if captain.slot not in {"team_one", "team_two"}:
+            raise ValueError(f"Unsupported captain slot: {captain.slot}")
+        if captain.slot in by_slot:
+            raise ValueError(f"Duplicate captain slot: {captain.slot}")
+        by_slot[captain.slot] = captain
+
+    if not by_slot:
+        return
+
+    await get_pool().executemany(
+        """
+        INSERT INTO lobby_rosters (lobby_id, team, captain_id)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (lobby_id, team) DO UPDATE
+        SET captain_id = EXCLUDED.captain_id
+        """,
+        [
+            (lobby_id, slot, uuid.UUID(captain.user_id))
+            for slot, captain in by_slot.items()
+        ],
+    )
+
+
+async def finalize_lobby_draft(
+    lobby_id: int,
+    actions: Sequence[LobbyDraftAction],
+    finalized_at: datetime | None = None,
+) -> None:
+    draft: dict[str, dict[str, list[tuple[int, str]]]] = {
+        "team_one": {"pick": [], "ban": []},
+        "team_two": {"pick": [], "ban": []},
+    }
+    for action in actions:
+        if action.lobby_id != lobby_id:
+            raise ValueError("Draft action belongs to a different lobby")
+        if action.action == "map_ban":
+            continue
+        if action.action not in {"pick", "ban"}:
+            continue
+        if action.team_slot not in draft:
+            raise ValueError(f"Unsupported draft team slot: {action.team_slot}")
+        if action.champion:
+            draft[action.team_slot][action.action].append(
+                (action.step, action.champion)
+            )
+
+    completed_at = finalized_at or datetime.now(timezone.utc)
+    records = []
+    for team in ("team_one", "team_two"):
+        picks = [
+            champion
+            for _, champion in sorted(draft[team]["pick"], key=lambda item: item[0])
+        ]
+        bans = [
+            champion
+            for _, champion in sorted(draft[team]["ban"], key=lambda item: item[0])
+        ]
+        records.append((lobby_id, team, picks, bans, completed_at))
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.executemany(
+                """
+                INSERT INTO lobby_rosters (
+                    lobby_id, team, picks, bans, draft_finalized_at
+                )
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (lobby_id, team) DO UPDATE
+                SET picks = EXCLUDED.picks,
+                    bans = EXCLUDED.bans,
+                    draft_finalized_at = COALESCE(
+                        lobby_rosters.draft_finalized_at,
+                        EXCLUDED.draft_finalized_at
+                    )
+                """,
+                records,
+            )
+
+
+async def get_active_lobby_post_states(guild_id: int) -> list[dict[str, Any]]:
+    rows = await get_pool().fetch(
+        """
+        SELECT guild_id, lobby_id, channel_id, message_id, fingerprint,
+               first_seen_at, notification_handled,
+               dispute_notification_handled, updated_at
+        FROM active_lobby_posts
+        WHERE guild_id = $1
+        ORDER BY lobby_id
+        """,
+        guild_id,
+    )
+    return [dict(row) for row in rows]
+
+
+async def ensure_active_lobby_post_states(
+    guild_id: int,
+    lobby_ids: Sequence[int],
+    *,
+    notification_handled: bool,
+    dispute_notification_handled: bool,
+) -> None:
+    unique_lobby_ids = list(dict.fromkeys(lobby_ids))
+    if not unique_lobby_ids:
+        return
+    await get_pool().executemany(
+        """
+        INSERT INTO active_lobby_posts (
+            guild_id, lobby_id, notification_handled,
+            dispute_notification_handled
+        )
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (guild_id, lobby_id) DO UPDATE
+        SET notification_handled = (
+                active_lobby_posts.notification_handled
+                OR EXCLUDED.notification_handled
+            ),
+            dispute_notification_handled = (
+                active_lobby_posts.dispute_notification_handled
+                OR EXCLUDED.dispute_notification_handled
+            ),
+            updated_at = now()
+        WHERE (
+            NOT active_lobby_posts.notification_handled
+            AND EXCLUDED.notification_handled
+        ) OR (
+            NOT active_lobby_posts.dispute_notification_handled
+            AND EXCLUDED.dispute_notification_handled
+        )
+        """,
+        [
+            (
+                guild_id,
+                lobby_id,
+                notification_handled,
+                dispute_notification_handled,
+            )
+            for lobby_id in unique_lobby_ids
+        ],
+    )
+
+
+async def record_active_lobby_post(
+    guild_id: int,
+    lobby_id: int,
+    channel_id: int,
+    message_id: int,
+    fingerprint: str,
+    *,
+    notification_handled: bool,
+    dispute_notification_handled: bool,
+) -> None:
+    await get_pool().execute(
+        """
+        INSERT INTO active_lobby_posts (
+            guild_id, lobby_id, channel_id, message_id, fingerprint,
+            notification_handled, dispute_notification_handled
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (guild_id, lobby_id) DO UPDATE
+        SET channel_id = EXCLUDED.channel_id,
+            message_id = EXCLUDED.message_id,
+            fingerprint = EXCLUDED.fingerprint,
+            notification_handled = (
+                active_lobby_posts.notification_handled
+                OR EXCLUDED.notification_handled
+            ),
+            dispute_notification_handled = (
+                active_lobby_posts.dispute_notification_handled
+                OR EXCLUDED.dispute_notification_handled
+            ),
+            updated_at = now()
+        """,
+        guild_id,
+        lobby_id,
+        channel_id,
+        message_id,
+        fingerprint,
+        notification_handled,
+        dispute_notification_handled,
+    )
+
+
+async def clear_active_lobby_post_message(
+    guild_id: int,
+    lobby_id: int,
+    channel_id: int,
+    message_id: int,
+) -> bool:
+    cleared = await get_pool().fetchval(
+        """
+        UPDATE active_lobby_posts
+        SET channel_id = NULL,
+            message_id = NULL,
+            fingerprint = NULL,
+            updated_at = now()
+        WHERE guild_id = $1
+          AND lobby_id = $2
+          AND channel_id = $3
+          AND message_id = $4
+        RETURNING TRUE
+        """,
+        guild_id,
+        lobby_id,
+        channel_id,
+        message_id,
+    )
+    return bool(cleared)
+
+
+async def get_active_lobby_empty_post(guild_id: int) -> dict[str, Any] | None:
+    row = await get_pool().fetchrow(
+        """
+        SELECT guild_id, channel_id, message_id, fingerprint, updated_at
+        FROM active_lobby_empty_posts
+        WHERE guild_id = $1
+        """,
+        guild_id,
+    )
+    return dict(row) if row is not None else None
+
+
+async def record_active_lobby_empty_post(
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+    fingerprint: str,
+) -> None:
+    await get_pool().execute(
+        """
+        INSERT INTO active_lobby_empty_posts (
+            guild_id, channel_id, message_id, fingerprint
+        )
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET channel_id = EXCLUDED.channel_id,
+            message_id = EXCLUDED.message_id,
+            fingerprint = EXCLUDED.fingerprint,
+            updated_at = now()
+        """,
+        guild_id,
+        channel_id,
+        message_id,
+        fingerprint,
+    )
+
+
+async def clear_active_lobby_empty_post(
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+) -> bool:
+    cleared = await get_pool().fetchval(
+        """
+        UPDATE active_lobby_empty_posts
+        SET channel_id = NULL,
+            message_id = NULL,
+            fingerprint = NULL,
+            updated_at = now()
+        WHERE guild_id = $1
+          AND channel_id = $2
+          AND message_id = $3
+        RETURNING TRUE
+        """,
+        guild_id,
+        channel_id,
+        message_id,
+    )
+    return bool(cleared)
+
+
+async def get_active_lobby_obsolete_posts(
+    guild_id: int,
+) -> list[dict[str, Any]]:
+    rows = await get_pool().fetch(
+        """
+        SELECT guild_id, lobby_id, channel_id, message_id, created_at
+        FROM active_lobby_obsolete_posts
+        WHERE guild_id = $1
+        ORDER BY created_at, channel_id, message_id
+        """,
+        guild_id,
+    )
+    return [dict(row) for row in rows]
+
+
+async def record_active_lobby_obsolete_post(
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+    lobby_id: int | None,
+) -> None:
+    await get_pool().execute(
+        """
+        INSERT INTO active_lobby_obsolete_posts (
+            guild_id, lobby_id, channel_id, message_id
+        )
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (guild_id, channel_id, message_id) DO NOTHING
+        """,
+        guild_id,
+        lobby_id,
+        channel_id,
+        message_id,
+    )
+
+
+async def delete_active_lobby_obsolete_post(
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+) -> bool:
+    deleted = await get_pool().fetchval(
+        """
+        DELETE FROM active_lobby_obsolete_posts
+        WHERE guild_id = $1
+          AND channel_id = $2
+          AND message_id = $3
+        RETURNING TRUE
+        """,
+        guild_id,
+        channel_id,
+        message_id,
+    )
+    return bool(deleted)
+
+
 async def get_season_ratings() -> list[SeasonRating]:
     pool = get_pool()
     rows = await pool.fetch("SELECT * FROM season_ratings")
@@ -473,10 +1061,8 @@ async def sync_users_to_db(users: list[User]) -> None:
 
 
 async def sync_lobbies_to_db(lobbies: list[Lobby]) -> None:
-    if not lobbies:
-        return
-
     pool = get_pool()
+    upstream_ids = [lobby.id for lobby in lobbies]
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.executemany(
@@ -585,26 +1171,74 @@ async def sync_lobbies_to_db(lobbies: list[Lobby]) -> None:
                 ],
             )
 
-            lobby_ids = [lobby.id for lobby in lobbies]
-            await conn.execute(
-                "DELETE FROM lobby_rosters WHERE lobby_id = ANY($1::int[])",
-                lobby_ids,
-            )
+            roster_user_ids = {
+                uuid.UUID(user_id)
+                for lobby in lobbies
+                for user_id in lobby.team_one_roster + lobby.team_two_roster
+            }
+            if roster_user_ids:
+                missing_user = await conn.fetchval(
+                    """
+                    SELECT requested.user_id
+                    FROM unnest($1::UUID[]) AS requested(user_id)
+                    LEFT JOIN users ON users.id = requested.user_id
+                    WHERE users.id IS NULL
+                    LIMIT 1
+                    """,
+                    list(roster_user_ids),
+                )
+                if missing_user is not None:
+                    raise asyncpg.ForeignKeyViolationError(
+                        "lobby roster references a missing user"
+                    )
 
             roster_rows = [
-                (lobby.id, uuid.UUID(user_id), "team_one")
-                for lobby in lobbies
-                for user_id in lobby.team_one_roster
-            ] + [
-                (lobby.id, uuid.UUID(user_id), "team_two")
-                for lobby in lobbies
-                for user_id in lobby.team_two_roster
-            ]
-            if roster_rows:
-                await conn.executemany(
-                    "INSERT INTO lobby_rosters (lobby_id, user_id, team) VALUES ($1, $2, $3)",
-                    roster_rows,
+                (
+                    lobby.id,
+                    "team_one",
+                    [uuid.UUID(user_id) for user_id in lobby.team_one_roster],
                 )
+                for lobby in lobbies
+            ] + [
+                (
+                    lobby.id,
+                    "team_two",
+                    [uuid.UUID(user_id) for user_id in lobby.team_two_roster],
+                )
+                for lobby in lobbies
+            ]
+            await conn.executemany(
+                """
+                INSERT INTO lobby_rosters (lobby_id, team, roster)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (lobby_id, team) DO UPDATE
+                SET roster = EXCLUDED.roster
+                """,
+                roster_rows,
+            )
+
+            # The upstream list is authoritative. Preserve Discord references
+            # before the lobby FK cascade removes per-guild post state.
+            await conn.execute(
+                """
+                INSERT INTO active_lobby_obsolete_posts (
+                    guild_id, lobby_id, channel_id, message_id
+                )
+                SELECT guild_id, lobby_id, channel_id, message_id
+                FROM active_lobby_posts
+                WHERE message_id IS NOT NULL
+                  AND NOT (lobby_id = ANY($1::INTEGER[]))
+                ON CONFLICT (guild_id, channel_id, message_id) DO NOTHING
+                """,
+                upstream_ids,
+            )
+            await conn.execute(
+                """
+                DELETE FROM lobbies
+                WHERE NOT (id = ANY($1::INTEGER[]))
+                """,
+                upstream_ids,
+            )
 
 
 async def sync_season_ratings_to_db(ratings: list[SeasonRating]) -> None:

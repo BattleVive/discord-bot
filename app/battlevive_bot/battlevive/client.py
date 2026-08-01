@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Mapping
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Callable
+from typing import Protocol
 from typing import TypeVar
 
 import aiohttp
@@ -13,10 +16,17 @@ from .tokens import TokenPair
 from .tokens import TokenStore
 from ..logs import logger
 from ..models import Lobby
+from ..models import LobbyCaptain
+from ..models import LobbyDraftAction
+from ..models import MatchResultConfirmation
 from ..models import SeasonRating
 from ..models import User
 from ..models import UserTrophy
 from ..models import parse_lobbies
+from ..models import parse_lobby_captains
+from ..models import parse_lobby_draft_actions
+from ..models import parse_lobby_roster_members
+from ..models import parse_match_result_confirmations
 from ..models import parse_season_ratings
 from ..models import parse_user_trophies
 from ..models import parse_users
@@ -24,6 +34,20 @@ from ..models import parse_users
 
 ParsedT = TypeVar("ParsedT")
 Parser = Callable[[object], list[ParsedT]]
+
+
+class ActiveLobbyAPI(Protocol):
+    async def get_lobby_draft_actions(
+        self,
+        lobby_id: int,
+    ) -> list[LobbyDraftAction]: ...
+
+    async def get_lobby_captains(self, lobby_id: int) -> list[LobbyCaptain]: ...
+
+    async def get_match_result_confirmations(
+        self,
+        lobby_id: int,
+    ) -> list[MatchResultConfirmation]: ...
 
 
 class BattleviveClient:
@@ -67,7 +91,26 @@ class BattleviveClient:
         return await self._get_and_parse("users", parse_users)
 
     async def get_lobbies(self) -> list[Lobby]:
-        return await self._get_and_parse("lobbies", parse_lobbies)
+        lobbies, roster_members = await asyncio.gather(
+            self._get_and_parse("lobbies", parse_lobbies),
+            self._get_and_parse(
+                "lobby_slots",
+                parse_lobby_roster_members,
+                params=(
+                    ("select", "lobby_id,user_id,slot"),
+                    ("order", "joined_at.asc,id.asc"),
+                ),
+            ),
+        )
+        by_lobby = {lobby.id: lobby for lobby in lobbies}
+        for lobby in lobbies:
+            lobby.team_one_roster = []
+            lobby.team_two_roster = []
+        for member in roster_members:
+            lobby = by_lobby.get(member.lobby_id)
+            if lobby is not None:
+                getattr(lobby, f"{member.slot}_roster").append(member.user_id)
+        return lobbies
 
     async def get_season_ratings(self) -> list[SeasonRating]:
         return await self._get_and_parse(
@@ -81,6 +124,51 @@ class BattleviveClient:
             parse_user_trophies,
         )
 
+    async def get_lobby_draft_actions(
+        self,
+        lobby_id: int,
+    ) -> list[LobbyDraftAction]:
+        return await self._get_and_parse(
+            "lobby_draft_actions",
+            parse_lobby_draft_actions,
+            params=(
+                (
+                    "select",
+                    "id,lobby_id,step,team_slot,action,champion,created_at",
+                ),
+                ("lobby_id", f"eq.{lobby_id}"),
+                ("order", "step.asc"),
+            ),
+        )
+
+    async def get_lobby_captains(self, lobby_id: int) -> list[LobbyCaptain]:
+        return await self._get_and_parse(
+            "lobby_slots",
+            parse_lobby_captains,
+            params=(
+                ("select", "user_id,slot"),
+                ("lobby_id", f"eq.{lobby_id}"),
+                ("is_captain", "eq.true"),
+            ),
+        )
+
+    async def get_match_result_confirmations(
+        self,
+        lobby_id: int,
+    ) -> list[MatchResultConfirmation]:
+        return await self._get_and_parse(
+            "match_result_confirmations",
+            parse_match_result_confirmations,
+            params=(
+                (
+                    "select",
+                    "id,lobby_id,user_id,selected_winner,created_at,captain_slot",
+                ),
+                ("lobby_id", f"eq.{lobby_id}"),
+                ("order", "created_at.asc"),
+            ),
+        )
+
     async def refresh_credentials(self) -> None:
         async with self._refresh_lock:
             await self._refresh_credentials()
@@ -92,19 +180,26 @@ class BattleviveClient:
         self,
         endpoint: str,
         parser: Parser[ParsedT],
+        *,
+        params: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
     ) -> list[ParsedT]:
         start = time.perf_counter()
         failed_access_token = self._tokens.access_token
 
         try:
-            raw = await self._transport.get(endpoint, failed_access_token)
+            raw = await self._transport_get(
+                endpoint,
+                failed_access_token,
+                params,
+            )
         except aiohttp.ClientResponseError as error:
             if error.status != 401:
                 raise
             await self._refresh_after_unauthorized(failed_access_token)
-            raw = await self._transport.get(
+            raw = await self._transport_get(
                 endpoint,
                 self._tokens.access_token,
+                params,
             )
 
         try:
@@ -116,6 +211,20 @@ class BattleviveClient:
         elapsed = time.perf_counter() - start
         logger.info("Fetched %d %s in %.2fs", len(result), endpoint, elapsed)
         return result
+
+    async def _transport_get(
+        self,
+        endpoint: str,
+        access_token: str,
+        params: Mapping[str, str] | Sequence[tuple[str, str]] | None,
+    ) -> object:
+        if params is None:
+            return await self._transport.get(endpoint, access_token)
+        return await self._transport.get(
+            endpoint,
+            access_token,
+            params=params,
+        )
 
     async def _refresh_after_unauthorized(
         self,
