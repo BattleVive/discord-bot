@@ -32,8 +32,6 @@ services:
     volumes:
       - ./app/init-db:/docker-entrypoint-initdb.d:ro,Z
       - ./app/data/postgresql:/var/lib/postgresql:z
-    ports:
-      - "127.0.0.1:5432:5432"  # host access for local psql/pgAdmin only; not needed for bot-to-db traffic
     networks:
       - battlevive-net
     healthcheck:

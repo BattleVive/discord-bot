@@ -39,20 +39,6 @@ class FakeResponse:
         return bool(self.messages)
 
 
-class FakePool:
-    async def fetchrow(self, query: str, discord_id: int) -> dict[str, object]:
-        assert "INNER JOIN season_ratings" in query
-        assert discord_id == 12345
-        return {
-            "discord_id": discord_id,
-            "discord_username": "PlayerOne",
-            "member_number": 42,
-            "mmr": 1500,
-            "wins": 12,
-            "losses": 8,
-        }
-
-
 @pytest.mark.asyncio
 async def test_rank_builds_a_fresh_in_memory_card_on_every_invocation(
     monkeypatch: pytest.MonkeyPatch,
@@ -64,7 +50,28 @@ async def test_rank_builds_a_fresh_in_memory_card_on_every_invocation(
         build_calls.append(kwargs)
         return b"fresh-png-" + str(len(build_calls)).encode()
 
-    monkeypatch.setattr(bot_module, "get_pool", lambda: FakePool())
+    async def resolve(member, refresh):
+        return SimpleNamespace(
+            status=bot_module.IdentityStatus.LINKED,
+            user={"id": "aa339e7a-19d0-4ce5-be96-ab852ad4b6be"},
+        )
+
+    async def profile(user_id):
+        return {
+            "discord_id": 12345,
+            "discord_username": "PlayerOne",
+            "member_number": 42,
+            "mmr": 1500,
+            "wins": 12,
+            "losses": 8,
+        }
+
+    async def reconcile(member):
+        return None
+
+    monkeypatch.setattr(bot_module, "resolve_member_identity", resolve)
+    monkeypatch.setattr(bot_module.db, "get_current_rank_profile", profile)
+    monkeypatch.setattr(bot_module, "reconcile_member_roles", reconcile)
     monkeypatch.setattr(bot_module, "build_card", fake_build_card)
     monkeypatch.setattr(bot_module, "DATA_DIR", tmp_path)
 
@@ -75,7 +82,11 @@ async def test_rank_builds_a_fresh_in_memory_card_on_every_invocation(
         display_name="Player One",
         display_avatar=FakeAvatar(),
     )
-    interaction = SimpleNamespace(user=user, response=response)
+    interaction = SimpleNamespace(
+        user=user,
+        guild=SimpleNamespace(id=1),
+        response=response,
+    )
 
     await bot_module.rank_command.callback(interaction)
     await bot_module.rank_command.callback(interaction)

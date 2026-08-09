@@ -40,6 +40,9 @@ TABLES = {
     "active_lobby_posts",
     "active_lobby_empty_posts",
     "active_lobby_obsolete_posts",
+    "user_discord_links",
+    "guild_command_channels",
+    "guild_created_roles",
 }
 
 
@@ -62,6 +65,7 @@ async def reset_database(conn: asyncpg.Connection) -> None:
     await conn.execute(
         "DROP TABLE IF EXISTS active_lobby_obsolete_posts, "
         "active_lobby_empty_posts, active_lobby_posts, leaderboard_slots, "
+        "guild_command_channels, guild_created_roles, user_discord_links, "
         "guild_config, lobby_rosters, season_ratings, lobbies, users CASCADE"
     )
     for sql_file in sorted(SQL_DIR.glob("*.sql")):
@@ -72,6 +76,7 @@ async def drop_database_tables(conn: asyncpg.Connection) -> None:
     await conn.execute(
         "DROP TABLE IF EXISTS active_lobby_obsolete_posts, "
         "active_lobby_empty_posts, active_lobby_posts, leaderboard_slots, "
+        "guild_command_channels, guild_created_roles, user_discord_links, "
         "guild_config, lobby_rosters, season_ratings, lobbies, users CASCADE"
     )
 
@@ -163,6 +168,12 @@ async def test_init_db_sql_creates_expected_schema(postgres_db: None) -> None:
           AND column_name = 'active_lobby_baseline_pending'
           AND is_nullable = 'NO'
         """
+    )
+    assert await pool.fetchval(
+        "SELECT column_default = '20' FROM information_schema.columns WHERE table_name = 'guild_config' AND column_name = 'rank_cooldown_seconds'"
+    )
+    assert await pool.fetchval(
+        "SELECT to_regclass('public.user_discord_links') IS NOT NULL"
     )
     assert not await pool.fetchval(
         """
@@ -318,6 +329,11 @@ async def test_active_lobby_migration_preserves_legacy_rosters_without_captains(
     migration = (SQL_DIR / "08_active_lobbies.sql").read_text(encoding="utf-8")
     await pool.execute(migration)
     await pool.execute(migration)
+    migration_09 = (SQL_DIR / "09_command_controls_and_identity_recovery.sql").read_text(
+        encoding="utf-8"
+    )
+    await pool.execute(migration_09)
+    await pool.execute(migration_09)
 
     roster = await pool.fetchrow(
         """
@@ -465,6 +481,148 @@ async def test_sync_upserts_in_dependency_order_and_preserves_bot_owned_discord_
     assert await pool.fetchval("SELECT COUNT(*) FROM users") == 2
     assert await pool.fetchval("SELECT COUNT(*) FROM lobbies") == 1
     assert await pool.fetchval("SELECT COUNT(*) FROM season_ratings") == 1
+
+
+@pytest.mark.asyncio
+async def test_authoritative_delete_retains_link_and_same_uuid_rehydrates(
+    postgres_db: None,
+) -> None:
+    user = User.from_dict(user_payload(discord_id=None))
+    await db.sync_users_to_db([user])
+    assert await db.set_user_discord_id(USER_A_ID, 111111111111111111)
+
+    deleted = await db.sync_users_to_db([])
+    assert deleted == [uuid.UUID(USER_A_ID)]
+    assert await db.get_active_user_by_discord_id(111111111111111111) is None
+    assert await db.get_pool().fetchval(
+        "SELECT discord_id FROM user_discord_links WHERE user_id = $1",
+        uuid.UUID(USER_A_ID),
+    ) == 111111111111111111
+
+    await db.sync_users_to_db([user])
+    restored = await db.get_active_user_by_discord_id(111111111111111111)
+    assert restored is not None
+    assert restored["id"] == uuid.UUID(USER_A_ID)
+    assert restored["discord_id"] == 111111111111111111
+
+
+@pytest.mark.asyncio
+async def test_migration_09_copies_existing_links_and_is_idempotent(
+    postgres_db: None,
+) -> None:
+    await db.get_pool().execute(
+        """
+        INSERT INTO users (
+            id, discord_username, discord_id, member_number, tournaments_joined
+        )
+        VALUES ($1, 'PlayerOne', $2, 7, 0)
+        """,
+        uuid.UUID(USER_A_ID),
+        111111111111111111,
+    )
+    migration = (
+        SQL_DIR / "09_command_controls_and_identity_recovery.sql"
+    ).read_text(encoding="utf-8")
+    await db.get_pool().execute(migration)
+    await db.get_pool().execute(migration)
+    assert await db.get_pool().fetchval(
+        "SELECT discord_id FROM user_discord_links WHERE user_id = $1",
+        uuid.UUID(USER_A_ID),
+    ) == 111111111111111111
+
+
+@pytest.mark.asyncio
+async def test_different_uuid_can_reclaim_only_an_inactive_recovery_link(
+    postgres_db: None,
+) -> None:
+    old_user = User.from_dict(user_payload(discord_id=None))
+    new_user = User.from_dict(
+        user_payload(id=USER_B_ID, discord_id=None, member_number=8)
+    )
+    await db.sync_users_to_db([old_user, new_user])
+    assert await db.set_user_discord_id(USER_A_ID, 111111111111111111)
+    assert not await db.set_user_discord_id(USER_B_ID, 111111111111111111)
+
+    await db.sync_users_to_db([new_user])
+    assert await db.set_user_discord_id(USER_B_ID, 111111111111111111)
+    assert await db.get_pool().fetchval(
+        "SELECT user_id FROM user_discord_links WHERE discord_id = $1",
+        111111111111111111,
+    ) == uuid.UUID(USER_B_ID)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_linking_cannot_duplicate_or_steal_active_link(
+    postgres_db: None,
+) -> None:
+    user_a = User.from_dict(user_payload(discord_id=None))
+    user_b = User.from_dict(
+        user_payload(id=USER_B_ID, discord_id=None, member_number=8)
+    )
+    await db.sync_users_to_db([user_a, user_b])
+    results = await asyncio.gather(
+        db.set_user_discord_id(USER_A_ID, 111111111111111111),
+        db.set_user_discord_id(USER_B_ID, 111111111111111111),
+    )
+    assert sorted(results) == [False, True]
+    assert await db.get_pool().fetchval(
+        "SELECT count(*) FROM user_discord_links WHERE discord_id = $1",
+        111111111111111111,
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_command_controls_and_generated_role_ownership_round_trip(
+    postgres_db: None,
+) -> None:
+    await db.set_rank_cooldown_seconds(1001, 0, 3001)
+    assert (await db.get_guild_config(1001))["rank_cooldown_seconds"] == 0
+    await db.set_rank_cooldown_seconds(1001, 3600, 3001)
+    assert (await db.get_guild_config(1001))["rank_cooldown_seconds"] == 3600
+    with pytest.raises(ValueError):
+        await db.set_rank_cooldown_seconds(1001, -1, 3001)
+    with pytest.raises(ValueError):
+        await db.set_rank_cooldown_seconds(1001, 3601, 3001)
+
+    await db.set_command_channel_rule(1001, 2001, "allow", 3001)
+    await db.set_command_channel_rule(1001, 2001, "block", 3002)
+    assert [rule["rule"] for rule in await db.get_command_channel_rules(1001)] == [
+        "block"
+    ]
+    assert await db.remove_command_channel_rule(1001, 2001)
+    assert not await db.remove_command_channel_rule(1001, 2001)
+
+    await db.record_created_role(1001, "active_lobby", 4001, 3001)
+    assert (await db.get_created_role(1001, "active_lobby"))["role_id"] == 4001
+    assert await db.forget_created_role(1001, "active_lobby", 4001)
+
+
+@pytest.mark.asyncio
+async def test_authoritative_delete_cascades_and_scrubs_dependent_records(
+    postgres_db: None,
+) -> None:
+    user_a = User.from_dict(user_payload(discord_id=None))
+    user_b = User.from_dict(
+        user_payload(id=USER_B_ID, discord_id=None, member_number=8)
+    )
+    lobby = Lobby.from_dict(
+        lobby_payload(
+            creator_id=USER_A_ID,
+            team_one_roster=[USER_A_ID, USER_B_ID],
+            team_two_roster=[],
+        )
+    )
+    rating = SeasonRating.from_dict(season_rating_payload(user_id=USER_A_ID))
+    await db.sync_battlevive_data_to_db([user_a, user_b], [lobby], [rating])
+
+    await db.sync_users_to_db([user_b])
+    pool = db.get_pool()
+    assert await pool.fetchval("SELECT count(*) FROM season_ratings") == 0
+    assert await pool.fetchval("SELECT creator_id FROM lobbies WHERE id = $1", lobby.id) is None
+    assert await pool.fetchval(
+        "SELECT roster::TEXT[] FROM lobby_rosters WHERE lobby_id = $1 AND team = 'team_one'",
+        lobby.id,
+    ) == [USER_B_ID]
 
 
 @pytest.mark.asyncio
@@ -650,6 +808,7 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
         "active_lobby_role_id": None,
         "website_moderator_role_id": None,
         "active_lobby_baseline_pending": True,
+        "rank_cooldown_seconds": 20,
         "updated_by": 3012,
     }
     assert await db.get_guild_config(1002) == {
@@ -661,6 +820,7 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
         "active_lobby_role_id": None,
         "website_moderator_role_id": None,
         "active_lobby_baseline_pending": True,
+        "rank_cooldown_seconds": 20,
         "updated_by": 3002,
     }
 
@@ -675,6 +835,7 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
         "active_lobby_role_id": None,
         "website_moderator_role_id": None,
         "active_lobby_baseline_pending": True,
+        "rank_cooldown_seconds": 20,
         "updated_by": 3021,
     }
 
