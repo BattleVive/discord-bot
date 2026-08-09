@@ -18,11 +18,12 @@ from PIL import Image
 from . import db
 from .active_lobbies import ActiveLobbyService
 from .battlevive import BattleviveClient
+from .command_access import BattleviveCommandTree
+from .command_access import CommandAccessService
 from .db import close_pool
-from .db import get_pool
 from .db import init_pool
-from .db import MissingUsersError
-from .db import sync_battlevive_data_to_db
+from .identity import IdentityStatus
+from .identity import resolve_member_identity
 from .images import build_card
 from .leaderboards import LeaderboardService
 from .logs import logger
@@ -31,10 +32,11 @@ from .models import SeasonRating
 from .models import User
 from .roles import ACTIVE_LOBBY_ROLE
 from .roles import create_roles
-from .roles import give_battlevive_role
 from .roles import give_rank_roles
 from .roles import reconcile_member_roles
 from .roles import WEBSITE_MODERATOR_ROLE
+from .refresh import RefreshCoordinator
+from .refresh import RefreshResult
 from .settings import ASSETS_DIR
 from .settings import BATTLEVIVE_BOOTSTRAP_JWT
 from .settings import BATTLEVIVE_BOOTSTRAP_REFRESH_TOKEN
@@ -61,11 +63,23 @@ battlevive_client = BattleviveClient(
 battlevive_users: list[User] = []
 lobbies: list[Lobby] = []
 season_ratings: list[SeasonRating] = []
-_manual_refresh_lock = asyncio.Lock()
 _debug_export_running = False
 
 SAFE_COMMAND_ERROR = "The command failed. Please try again later."
 MAX_DEBUG_ATTACHMENT_BYTES = 8 * 1024 * 1024
+
+
+def _publish_refresh(result: RefreshResult) -> None:
+    global battlevive_users, lobbies, season_ratings
+    if result.users is not None:
+        battlevive_users = result.users
+    if result.lobbies is not None:
+        lobbies = result.lobbies
+    if result.ratings is not None:
+        season_ratings = result.ratings
+
+
+refresh_coordinator = RefreshCoordinator(battlevive_client, _publish_refresh)
 
 
 # Data refresh and background loops
@@ -88,27 +102,16 @@ async def revalidate_tokens_error(error: Exception) -> None:
 
 @tasks.loop(hours=1)
 async def refresh_infrequently_changing_data() -> None:
-    global battlevive_users
-
     try:
-        fetched_users = await battlevive_client.get_users()
-    except Exception:
-        logger.exception("Failed to refresh Battlevive users, skipping this cycle.")
-        return
-
-    try:
-        await sync_battlevive_data_to_db(users=fetched_users)
+        await refresh_coordinator.hourly_users_refresh()
     except Exception:
         logger.exception("Failed to sync Battlevive users, skipping role sync.")
         return
-
-    battlevive_users = fetched_users
     logger.debug("Refreshed %d users.", len(battlevive_users))
-
     try:
-        await give_battlevive_role(bot)
+        await give_rank_roles(bot)
     except Exception:
-        logger.exception("Failed to sync Battlevive player roles this cycle.")
+        logger.exception("Failed to sync rank roles this cycle.")
 
 
 @refresh_infrequently_changing_data.error
@@ -121,50 +124,11 @@ async def refresh_infrequently_changing_data_error(error: Exception) -> None:
 
 @tasks.loop(seconds=30)
 async def refresh_frequently_changing_data() -> None:
-    global battlevive_users
-    global lobbies
-    global season_ratings
-
     try:
-        fetched_lobbies, fetched_season_ratings = await asyncio.gather(
-            battlevive_client.get_lobbies(),
-            battlevive_client.get_season_ratings(),
-        )
-    except Exception:
-        logger.exception(
-            "Failed to refresh Battlevive lobbies and ratings, skipping this cycle."
-        )
-        return
-
-    try:
-        await sync_battlevive_data_to_db(
-            lobbies=fetched_lobbies,
-            season_ratings=fetched_season_ratings,
-        )
-    except MissingUsersError:
-        logger.warning("Fetched data contains new users; refreshing users and retrying.")
-        try:
-            fetched_users = await battlevive_client.get_users()
-            await sync_battlevive_data_to_db(
-                users=fetched_users,
-                lobbies=fetched_lobbies,
-                season_ratings=fetched_season_ratings,
-            )
-        except Exception:
-            logger.exception("Failed to refresh missing users, skipping this cycle.")
-            return
-
-        battlevive_users = fetched_users
-        try:
-            await give_battlevive_role(bot)
-        except Exception:
-            logger.exception("Failed to sync Battlevive player roles.")
+        await refresh_coordinator.frequent_lobbies_ratings_refresh()
     except Exception:
         logger.exception("Failed to sync Battlevive lobbies and ratings.")
         return
-
-    lobbies = fetched_lobbies
-    season_ratings = fetched_season_ratings
 
     if bot.active_lobby_service is not None:
         bot.active_lobby_service.request_reconciliation()
@@ -190,6 +154,8 @@ intents.members = True
 class BattleviveBot(commands.Bot):
     leaderboard_service: LeaderboardService | None = None
     active_lobby_service: ActiveLobbyService | None = None
+    command_access_service: CommandAccessService | None = None
+    refresh_coordinator: RefreshCoordinator = refresh_coordinator
 
     async def close(self) -> None:
         if revalidate_tokens.is_running():
@@ -209,13 +175,16 @@ class BattleviveBot(commands.Bot):
         await super().close()
 
 
-bot = BattleviveBot(command_prefix=(), intents=intents)
+bot = BattleviveBot(
+    command_prefix=(), intents=intents, tree_cls=BattleviveCommandTree
+)
 
 
 # Events
 @bot.event
 async def setup_hook() -> None:
     await init_pool(DATABASE_URL)
+    bot.command_access_service = CommandAccessService()
     bot.leaderboard_service = LeaderboardService(bot, DATABASE_URL)
     bot.leaderboard_service.start()
     bot.active_lobby_service = ActiveLobbyService(
@@ -258,7 +227,10 @@ async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent) -> None:
 @bot.event
 async def on_member_join(member: discord.Member) -> None:
     try:
-        await reconcile_member_roles(member)
+        await reconcile_member_roles(
+            member,
+            lambda: _refresh_membership_for_member(member),
+        )
     except (discord.Forbidden, discord.HTTPException):
         logger.exception(
             "Could not reconcile roles for joining member %s in guild %s.",
@@ -275,6 +247,43 @@ async def on_member_remove(member: discord.Member) -> None:
     service = bot.leaderboard_service
     if service is not None:
         service.request_reconciliation()
+
+
+async def _refresh_membership_for_member(member: discord.Member) -> bool:
+    async def local_membership_exists() -> bool:
+        if await db.get_active_user_by_discord_id(member.id) is not None:
+            return True
+        candidates = await db.find_active_users_by_names(
+            {
+                value
+                for value in (
+                    getattr(member, "name", None),
+                    getattr(member, "display_name", None),
+                    getattr(member, "global_name", None),
+                    getattr(member, "nick", None),
+                )
+                if value
+            }
+        )
+        return bool(candidates)
+
+    try:
+        await bot.refresh_coordinator.users_and_ratings_refresh(
+            local_membership_exists
+        )
+        await give_rank_roles(bot, guild=member.guild)
+        return True
+    except Exception:
+        logger.exception("Membership refresh failed for joining member %s.", member.id)
+        return False
+
+
+@bot.event
+async def on_guild_channel_delete(channel: discord.abc.GuildChannel) -> None:
+    try:
+        await db.remove_command_channel_rule(channel.guild.id, channel.id)
+    except Exception:
+        logger.exception("Failed to remove command rule for deleted channel %s.", channel.id)
 
 
 # Commands
@@ -298,6 +307,12 @@ config_reset_group = app_commands.Group(
     name="reset",
     description="Reset Battlevive bot settings",
     parent=config_group,
+)
+config_rank_group = app_commands.Group(
+    name="rank", description="Configure the public rank command", parent=config_group
+)
+config_commands_group = app_commands.Group(
+    name="commands", description="Configure public command channels", parent=config_group
 )
 
 
@@ -585,6 +600,8 @@ async def config_active_lobbies_role(
         return
 
     try:
+        previous = await db.get_guild_config(interaction.guild.id)
+        tracked = await db.get_created_role(interaction.guild.id, "active_lobby")
         await db.set_active_lobby_role(
             interaction.guild.id,
             selected.id,
@@ -592,8 +609,17 @@ async def config_active_lobbies_role(
         )
         if bot.active_lobby_service is not None:
             bot.active_lobby_service.request_reconciliation()
+        cleanup_issue = None
+        previous_id = previous.get("active_lobby_role_id") if previous else None
+        if tracked and tracked["role_id"] == previous_id and previous_id != selected.id:
+            cleanup_issue = await _delete_owned_role(
+                interaction.guild, "active_lobby", previous_id
+            )
+        message = f"Active-lobby notifications will mention {selected.mention}."
+        if cleanup_issue:
+            message += " Configuration changed, but generated-role cleanup remains pending."
         await interaction.response.send_message(
-            f"Active-lobby notifications will mention {selected.mention}.",
+            message,
             ephemeral=True,
         )
     except Exception:
@@ -634,6 +660,8 @@ async def config_active_lobbies_moderator_role(
         return
 
     try:
+        previous = await db.get_guild_config(interaction.guild.id)
+        tracked = await db.get_created_role(interaction.guild.id, "website_moderator")
         await db.set_website_moderator_role(
             interaction.guild.id,
             selected.id,
@@ -641,8 +669,17 @@ async def config_active_lobbies_moderator_role(
         )
         if bot.active_lobby_service is not None:
             bot.active_lobby_service.request_reconciliation()
+        cleanup_issue = None
+        previous_id = previous.get("website_moderator_role_id") if previous else None
+        if tracked and tracked["role_id"] == previous_id and previous_id != selected.id:
+            cleanup_issue = await _delete_owned_role(
+                interaction.guild, "website_moderator", previous_id
+            )
+        message = f"Disputed-game notifications will mention {selected.mention}."
+        if cleanup_issue:
+            message += " Configuration changed, but generated-role cleanup remains pending."
         await interaction.response.send_message(
-            f"Disputed-game notifications will mention {selected.mention}.",
+            message,
             ephemeral=True,
         )
     except Exception:
@@ -690,8 +727,20 @@ async def config_reset_active_lobbies(interaction: discord.Interaction) -> None:
         )
         if bot.active_lobby_service is not None:
             bot.active_lobby_service.request_reconciliation()
+        cleanup_issues = []
+        for purpose in _NOTIFICATION_PURPOSES:
+            tracked = await db.get_created_role(interaction.guild.id, purpose)
+            if tracked:
+                issue = await _delete_owned_role(
+                    interaction.guild, purpose, tracked["role_id"]
+                )
+                if issue:
+                    cleanup_issues.append(issue)
+        message = "Active-lobby configuration reset. Stored notification history is retained while posts are cleaned up."
+        if cleanup_issues:
+            message += " Configuration reset, but role cleanup remains pending: " + "; ".join(cleanup_issues)
         await interaction.response.send_message(
-            "Active-lobby configuration reset. Stored notification history is retained while posts are cleaned up.",
+            message,
             ephemeral=True,
         )
     except Exception:
@@ -726,6 +775,93 @@ async def config_debug(
         await _send_config_failure(interaction, "config debug failed")
 
 
+@config_rank_group.command(name="cooldown", description="Set the /rank cooldown")
+@app_commands.describe(seconds="Cooldown in seconds; 0 disables it")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def config_rank_cooldown(
+    interaction: discord.Interaction,
+    seconds: int,
+) -> None:
+    if not await _check_config_access(interaction):
+        return
+    if not 0 <= seconds <= 3600:
+        await interaction.response.send_message(
+            "Cooldown must be between 0 and 3600 seconds.", ephemeral=True
+        )
+        return
+    try:
+        await db.set_rank_cooldown_seconds(
+            interaction.guild.id, seconds, interaction.user.id
+        )
+        message = (
+            "The /rank cooldown is disabled."
+            if seconds == 0
+            else f"The /rank cooldown is now {seconds} seconds."
+        )
+        await interaction.response.send_message(message, ephemeral=True)
+    except Exception:
+        await _send_config_failure(interaction, "config rank cooldown failed")
+
+
+async def _set_command_channel(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+    rule: str,
+) -> None:
+    if not await _check_config_access(interaction):
+        return
+    try:
+        await db.set_command_channel_rule(
+            interaction.guild.id, channel.id, rule, interaction.user.id
+        )
+        classification = "whitelisted" if rule == "allow" else "blacklisted"
+        await interaction.response.send_message(
+            f"{channel.mention} is now {classification} for public commands.",
+            ephemeral=True,
+        )
+    except Exception:
+        await _send_config_failure(interaction, f"config commands {rule} failed")
+
+
+@config_commands_group.command(name="whitelist", description="Allow public commands in a channel")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def config_commands_whitelist(
+    interaction: discord.Interaction, channel: discord.TextChannel
+) -> None:
+    await _set_command_channel(interaction, channel, "allow")
+
+
+@config_commands_group.command(name="blacklist", description="Block public commands in a channel")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def config_commands_blacklist(
+    interaction: discord.Interaction, channel: discord.TextChannel
+) -> None:
+    await _set_command_channel(interaction, channel, "block")
+
+
+@config_commands_group.command(name="remove", description="Remove a public-command channel rule")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def config_commands_remove(
+    interaction: discord.Interaction, channel: discord.TextChannel
+) -> None:
+    if not await _check_config_access(interaction):
+        return
+    try:
+        removed = await db.remove_command_channel_rule(interaction.guild.id, channel.id)
+        message = (
+            f"Removed the public-command rule for {channel.mention}."
+            if removed
+            else f"{channel.mention} had no public-command rule."
+        )
+        await interaction.response.send_message(message, ephemeral=True)
+    except Exception:
+        await _send_config_failure(interaction, "config commands remove failed")
+
+
 @config_group.command(name="show", description="Show this server's bot configuration")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
@@ -754,6 +890,21 @@ async def config_show(interaction: discord.Interaction) -> None:
             if debug_enabled
             else "Debug exports: disabled."
         )
+        cooldown = config.get("rank_cooldown_seconds", 20) if config else 20
+        cooldown_message = (
+            "Rank cooldown: disabled."
+            if cooldown == 0
+            else f"Rank cooldown: {cooldown} seconds."
+        )
+        rules = await db.get_command_channel_rules(interaction.guild.id)
+        allow_ids = [rule["channel_id"] for rule in rules if rule["rule"] == "allow"]
+        block_ids = [rule["channel_id"] for rule in rules if rule["rule"] == "block"]
+        allow_message = "Whitelisted channels: " + (
+            ", ".join(f"<#{channel_id}>" for channel_id in allow_ids) or "none"
+        ) + "."
+        block_message = "Blacklisted channels: " + (
+            ", ".join(f"<#{channel_id}>" for channel_id in block_ids) or "none"
+        ) + "."
         active_channel_id = config.get("active_lobby_channel_id") if config else None
         active_role_id = config.get("active_lobby_role_id") if config else None
         moderator_role_id = (
@@ -776,14 +927,121 @@ async def config_show(interaction: discord.Interaction) -> None:
         )
         message = (
             f"{channel_message}\n{limit_message}\n{active_channel_message}\n"
-            f"{active_role_message}\n{moderator_role_message}\n{debug_message}"
+            f"{active_role_message}\n{moderator_role_message}\n{cooldown_message}\n"
+            f"{allow_message}\n{block_message}\n{debug_message}"
         )
-        await interaction.response.send_message(message, ephemeral=True)
+        chunks: list[str] = []
+        while message:
+            split_at = min(len(message), 1900)
+            if split_at < len(message):
+                split_at = message.rfind("\n", 0, split_at) or split_at
+            chunks.append(message[:split_at])
+            message = message[split_at:].lstrip("\n")
+        await interaction.response.send_message(chunks[0], ephemeral=True)
+        for chunk in chunks[1:]:
+            await interaction.followup.send(chunk, ephemeral=True)
     except Exception:
         await _send_config_failure(interaction, "config show failed")
 
 
 bot.tree.add_command(config_group)
+
+
+_NOTIFICATION_PURPOSES = {
+    "active_lobby": (ACTIVE_LOBBY_ROLE, "active_lobby_role_id", "set_active_lobby_role"),
+    "website_moderator": (
+        WEBSITE_MODERATOR_ROLE,
+        "website_moderator_role_id",
+        "set_website_moderator_role",
+    ),
+}
+
+
+async def _delete_owned_role(
+    guild: discord.Guild,
+    purpose: str,
+    role_id: int,
+) -> str | None:
+    role = guild.get_role(role_id)
+    if role is None:
+        await db.forget_created_role(guild.id, purpose, role_id)
+        return None
+    try:
+        await role.delete(reason="Battlevive generated-role cleanup")
+    except discord.NotFound:
+        pass
+    except (discord.Forbidden, discord.HTTPException):
+        logger.exception("Generated role %s cleanup remains pending.", role_id)
+        return f"{role.name}: cleanup remains pending"
+    await db.forget_created_role(guild.id, purpose, role_id)
+    return None
+
+
+async def _ensure_notification_roles(
+    interaction: discord.Interaction,
+) -> tuple[list[str], list[str]]:
+    guild = interaction.guild
+    config = await db.get_guild_config(guild.id) or {}
+    outcomes: list[str] = []
+    issues: list[str] = []
+    for purpose, (name, config_key, setter_name) in _NOTIFICATION_PURPOSES.items():
+        configured_id = config.get(config_key)
+        get_role = getattr(guild, "get_role", None)
+        configured_role = (
+            get_role(configured_id)
+            if configured_id and callable(get_role)
+            else discord.utils.get(guild.roles, id=configured_id)
+        )
+        tracked = await db.get_created_role(guild.id, purpose)
+        if configured_role is not None:
+            outcomes.append(f"{name}: configured/skipped")
+            if tracked and tracked["role_id"] != configured_id:
+                issue = await _delete_owned_role(guild, purpose, tracked["role_id"])
+                if issue:
+                    issues.append(issue)
+            continue
+
+        role = (
+            get_role(tracked["role_id"])
+            if tracked and callable(get_role)
+            else discord.utils.get(guild.roles, id=tracked["role_id"])
+            if tracked
+            else None
+        )
+        if tracked and role is None:
+            await db.forget_created_role(guild.id, purpose, tracked["role_id"])
+            tracked = None
+        if role is None:
+            legacy = discord.utils.get(guild.roles, name=name)
+            role = legacy if legacy is not None and _safe_notification_role(guild, legacy) else None
+        if role is None:
+            role = await guild.create_role(
+                name=name,
+                permissions=discord.Permissions.none(),
+                mentionable=False,
+                reason="Battlevive notification-role setup",
+            )
+            try:
+                await db.record_created_role(guild.id, purpose, role.id, interaction.user.id)
+            except Exception as error:
+                try:
+                    await role.delete(reason="Rollback untracked Battlevive role")
+                except discord.NotFound:
+                    pass
+                except (discord.Forbidden, discord.HTTPException) as rollback_error:
+                    raise RuntimeError(
+                        f"ownership recording failed ({error}); rollback failed ({rollback_error})"
+                    ) from error
+                raise
+            outcomes.append(f"{name}: created")
+        else:
+            outcomes.append(f"{name}: configured")
+        if getattr(role, "mentionable", False):
+            role = await role.edit(
+                mentionable=False, reason="Battlevive notification-role safety"
+            )
+        await getattr(db, setter_name)(guild.id, role.id, interaction.user.id)
+    return outcomes, issues
 
 
 @bot.tree.command(name="create_roles", description="Create required roles")
@@ -815,51 +1073,10 @@ async def create_roles_slash(interaction: discord.Interaction) -> None:
         interaction.guild.id,
     )
     try:
+        await db.ensure_guild_config(interaction.guild.id, interaction.user.id)
         result = await create_roles(interaction.guild)
-        config = await db.get_guild_config(interaction.guild.id)
-        role_defaults = (
-            (
-                ACTIVE_LOBBY_ROLE,
-                config.get("active_lobby_role_id") if config is not None else None,
-                db.set_active_lobby_role,
-            ),
-            (
-                WEBSITE_MODERATOR_ROLE,
-                config.get("website_moderator_role_id") if config is not None else None,
-                db.set_website_moderator_role,
-            ),
-        )
-        config_changed = False
-        for role_name, configured_role_id, setter in role_defaults:
-            default_notification_role = result.safe_roles.get(role_name)
-            if (
-                default_notification_role is None
-                and role_name in result.existing
-                and role_name not in result.rejected
-                and role_name not in result.failed
-            ):
-                default_notification_role = discord.utils.get(
-                    interaction.guild.roles,
-                    name=role_name,
-                )
-            if (
-                configured_role_id is None
-                and default_notification_role is not None
-                and role_name not in result.rejected
-                and role_name not in result.failed
-                and not getattr(default_notification_role, "mentionable", False)
-                and _safe_notification_role(
-                    interaction.guild,
-                    default_notification_role,
-                )
-            ):
-                await setter(
-                    interaction.guild.id,
-                    default_notification_role.id,
-                    interaction.user.id,
-                )
-                config_changed = True
-        if config_changed and bot.active_lobby_service is not None:
+        notification_outcomes, cleanup_issues = await _ensure_notification_roles(interaction)
+        if bot.active_lobby_service is not None:
             bot.active_lobby_service.request_reconciliation()
         message = (
             f"Role setup complete: {len(result.created)} created, "
@@ -867,15 +1084,18 @@ async def create_roles_slash(interaction: discord.Interaction) -> None:
             f"{len(result.rejected)} unsafe existing roles rejected, "
             f"{len(result.failed)} failed."
         )
+        message += "\n" + "; ".join(notification_outcomes)
         issues = {**result.rejected, **result.failed}
         if issues:
             issue_summary = "; ".join(
                 f"{name}: {reason}" for name, reason in issues.items()
             )
             message = f"{message}\nIssues: {issue_summary}"
+        if cleanup_issues:
+            message += "\nPending cleanup: " + "; ".join(cleanup_issues)
         await interaction.response.send_message(
             message,
-            ephemeral=bool(result.rejected or result.failed),
+            ephemeral=True,
         )
     except Exception:
         logger.exception(
@@ -1035,35 +1255,66 @@ async def debug_get_battlevive_data(interaction: discord.Interaction) -> None:
 @bot.tree.command(
     name="rank",
     description="Display your rank",
+    extras={"public": True, "cooldown_setting": "rank"},
 )
+@app_commands.guild_only()
 async def rank_command(interaction: discord.Interaction) -> None:
     logger.info("rank called by %s (%s)", interaction.user, interaction.user.id)
     try:
-        pool = get_pool()
-
-        user = await pool.fetchrow(
-            """
-            SELECT
-                users.discord_id,
-                users.discord_username,
-                users.member_number,
-                season_ratings.mmr,
-                season_ratings.wins,
-                season_ratings.losses
-            FROM users
-            INNER JOIN season_ratings ON users.id = season_ratings.user_id
-            WHERE users.discord_id = $1
-            """,
-            interaction.user.id,
+        identity = await resolve_member_identity(
+            interaction.user,
+            lambda: _refresh_membership_for_member(interaction.user),
         )
-
-        if user is None:
-            logger.debug("rank: no DB record for discord_id=%s", interaction.user.id)
+        if identity.status is IdentityStatus.ABSENT:
             await interaction.response.send_message(
                 "You are not registered.",
                 ephemeral=True,
             )
             return
+        if identity.status is IdentityStatus.AMBIGUOUS:
+            await interaction.response.send_message(
+                "Your Battlevive identity is ambiguous. Ask a server administrator for help.",
+                ephemeral=True,
+            )
+            return
+        if identity.status in {
+            IdentityStatus.REFRESH_FAILED,
+            IdentityStatus.DATABASE_FAILED,
+        } or identity.user is None:
+            await interaction.response.send_message(
+                "Registration verification is temporarily unavailable. Please try again later.",
+                ephemeral=True,
+            )
+            return
+
+        user = await db.get_current_rank_profile(identity.user["id"])
+        if user is None or user["mmr"] is None:
+            try:
+                await bot.refresh_coordinator.users_and_ratings_refresh()
+                user = await db.get_current_rank_profile(identity.user["id"])
+            except Exception:
+                await interaction.response.send_message(
+                    "Registration verification is temporarily unavailable. Please try again later.",
+                    ephemeral=True,
+                )
+                return
+        if user is None:
+            await interaction.response.send_message(
+                "You are not registered.",
+                ephemeral=True,
+            )
+            return
+        if user["mmr"] is None:
+            await interaction.response.send_message(
+                "You are registered, but you do not have a rating in the current season.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            await reconcile_member_roles(interaction.user)
+        except (discord.Forbidden, discord.HTTPException):
+            logger.exception("Could not reconcile the invoking member's MMR role.")
 
         mmr = user["mmr"]
         rank_current = SeasonRating.rank(mmr)
@@ -1125,9 +1376,6 @@ async def rank_command(interaction: discord.Interaction) -> None:
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 async def refresh(interaction: discord.Interaction) -> None:
-    global battlevive_users
-    global season_ratings
-    global lobbies
     if not await _check_guild_permission(
         interaction,
         permission="manage_guild",
@@ -1135,7 +1383,7 @@ async def refresh(interaction: discord.Interaction) -> None:
         action="refresh Battlevive data",
     ):
         return
-    if _manual_refresh_lock.locked():
+    if bot.refresh_coordinator.lock.locked():
         await interaction.response.send_message(
             "A manual refresh is already running. Try again shortly.",
             ephemeral=True,
@@ -1144,25 +1392,8 @@ async def refresh(interaction: discord.Interaction) -> None:
 
     await interaction.response.defer(ephemeral=True)
     try:
-        async with _manual_refresh_lock:
-            fetched_users, fetched_lobbies, fetched_season_ratings = (
-                await asyncio.gather(
-                    battlevive_client.get_users(),
-                    battlevive_client.get_lobbies(),
-                    battlevive_client.get_season_ratings(),
-                )
-            )
-            await sync_battlevive_data_to_db(
-                fetched_users,
-                fetched_lobbies,
-                fetched_season_ratings,
-            )
-            await give_battlevive_role(bot, guild=interaction.guild)
-            await give_rank_roles(bot, guild=interaction.guild)
-
-            battlevive_users = fetched_users
-            lobbies = fetched_lobbies
-            season_ratings = fetched_season_ratings
+        await bot.refresh_coordinator.full_manual_refresh()
+        await give_rank_roles(bot, guild=interaction.guild)
     except Exception:
         logger.exception("Manual refresh failed.")
         await interaction.followup.send(

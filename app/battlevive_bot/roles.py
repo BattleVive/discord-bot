@@ -5,12 +5,15 @@ from dataclasses import dataclass, field
 import discord
 
 from . import db
-from .db import get_pool
+from .identity import IdentityStatus
+from .identity import matching_member as _matching_member
+from .identity import normalize_name as _normalized_username
+from .identity import resolve_member_identity
+from .identity import resolve_user_in_guild
 from .logs import logger
 from .models import SeasonRating
 
 
-BATTLEVIVE_PLAYER_ROLE = "Battlevive Player"
 ACTIVE_LOBBY_ROLE = "Active Lobby"
 WEBSITE_MODERATOR_ROLE = "Website Moderator"
 NOTIFICATION_ROLE_NAMES = frozenset(
@@ -20,9 +23,6 @@ RANK_ROLE_NAMES_ORDERED = tuple(name for _, name in SeasonRating.RANKS)
 RANK_ROLE_NAMES = frozenset(RANK_ROLE_NAMES_ORDERED)
 REQUIRED_ROLE_NAMES = (
     *RANK_ROLE_NAMES_ORDERED,
-    BATTLEVIVE_PLAYER_ROLE,
-    ACTIVE_LOBBY_ROLE,
-    WEBSITE_MODERATOR_ROLE,
 )
 
 
@@ -33,42 +33,6 @@ class RoleCreationResult:
     rejected: dict[str, str] = field(default_factory=dict)
     failed: dict[str, str] = field(default_factory=dict)
     safe_roles: dict[str, discord.Role] = field(default_factory=dict)
-
-
-def _normalized_username(value: str | None) -> str:
-    return value.strip().casefold() if value else ""
-
-
-def _matching_member(
-    members: list[discord.Member],
-    discord_username: str,
-) -> discord.Member | None:
-    """Prefer a Discord account name, then an unambiguous display name."""
-    expected = _normalized_username(discord_username)
-    if not expected:
-        return None
-
-    account_matches = {
-        member.id: member
-        for member in members
-        if _normalized_username(getattr(member, "name", None)) == expected
-    }
-    if len(account_matches) == 1:
-        return next(iter(account_matches.values()))
-    if len(account_matches) > 1:
-        return None
-
-    display_matches = {
-        member.id: member
-        for member in members
-        if any(
-            _normalized_username(getattr(member, attribute, None)) == expected
-            for attribute in ("display_name", "global_name", "nick")
-        )
-    }
-    if len(display_matches) == 1:
-        return next(iter(display_matches.values()))
-    return None
 
 
 async def _resolve_member(
@@ -302,63 +266,11 @@ async def create_roles(guild: discord.Guild) -> RoleCreationResult:
     return result
 
 
-async def give_battlevive_role(
-    bot: discord.Client,
-    guild: discord.Guild | None = None,
-) -> None:
-    users = await db.get_users()
-
-    guilds = [guild] if guild is not None else bot.guilds
-    for target_guild in guilds:
-        role = _safe_assignable_role(
-            target_guild,
-            BATTLEVIVE_PLAYER_ROLE,
-        )
-        if role is None:
-            continue
-
-        for user in users:
-            member = await _resolve_and_link_member(
-                target_guild,
-                user.id,
-                user.discord_id,
-                user.discord_username,
-            )
-
-            if member is None:
-                logger.debug(
-                    "No member found for %s in guild '%s'",
-                    user.discord_username,
-                    target_guild.name,
-                )
-                continue
-
-            if role not in member.roles:
-                try:
-                    await member.add_roles(role)
-                    logger.debug(
-                        "Gave role '%s' to %s in guild '%s' (%s).",
-                        role.name,
-                        member,
-                        target_guild.name,
-                        target_guild.id,
-                    )
-                except (discord.Forbidden, discord.HTTPException):
-                    logger.exception(
-                        "Failed to give role '%s' to %s in guild '%s' (%s).",
-                        role.name,
-                        member,
-                        target_guild.name,
-                        target_guild.id,
-                    )
-
-
 async def give_rank_roles(
     bot: discord.Client,
     guild: discord.Guild | None = None,
 ) -> None:
-    pool = get_pool()
-    users = await pool.fetch(
+    users = await db.get_pool().fetch(
         """
         WITH current_season AS (
             SELECT season_year, season_number
@@ -368,26 +280,25 @@ async def give_rank_roles(
         )
         SELECT
             users.id,
-            users.discord_id,
+            COALESCE(links.discord_id, users.discord_id) AS discord_id,
             users.discord_username,
             season_ratings.mmr
         FROM users
-        INNER JOIN season_ratings ON season_ratings.user_id = users.id
-        INNER JOIN current_season
-            ON current_season.season_year = season_ratings.season_year
-           AND current_season.season_number = season_ratings.season_number
+        LEFT JOIN season_ratings ON season_ratings.user_id = users.id
+         AND (season_ratings.season_year, season_ratings.season_number) = (
+             SELECT season_year, season_number FROM current_season
+         )
+        LEFT JOIN user_discord_links AS links ON links.user_id = users.id
         """
     )
 
     guilds = [guild] if guild is not None else bot.guilds
     for target_guild in guilds:
+        matched_member_ids: set[int] = set()
+        resolution_complete = True
         for user in users:
-            member = await _resolve_and_link_member(
-                target_guild,
-                str(user["id"]),
-                user["discord_id"],
-                user["discord_username"],
-            )
+            member, complete = await resolve_user_in_guild(target_guild, dict(user))
+            resolution_complete = resolution_complete and complete
 
             if member is None:
                 logger.debug(
@@ -395,6 +306,10 @@ async def give_rank_roles(
                     user["discord_username"],
                     target_guild.name,
                 )
+                continue
+            matched_member_ids.add(member.id)
+
+            if user["mmr"] is None:
                 continue
 
             logger.debug("id: %s username: %s", member.id, member.name)
@@ -415,8 +330,7 @@ async def give_rank_roles(
             old_rank_roles = [
                 role_item
                 for role_item in member.roles
-                if role_item.name in RANK_ROLE_NAMES
-                and role_item != role
+                if role_item.name in RANK_ROLE_NAMES and role_item != role
             ]
             try:
                 if old_rank_roles:
@@ -437,98 +351,32 @@ async def give_rank_roles(
                     target_guild.name,
                     target_guild.id,
                 )
-                continue
 
-
-async def reconcile_member_roles(member: discord.Member) -> None:
-    """Reconcile one joining member from local data without upstream requests."""
-    pool = get_pool()
-    user = await pool.fetchrow(
-        """
-        WITH current_season AS (
-            SELECT season_year, season_number
-            FROM season_ratings
-            ORDER BY updated_at DESC
-            LIMIT 1
-        )
-        SELECT users.id, users.discord_id, users.discord_username,
-               season_ratings.mmr
-        FROM users
-        LEFT JOIN season_ratings
-          ON season_ratings.user_id = users.id
-         AND (season_ratings.season_year, season_ratings.season_number) = (
-             SELECT season_year, season_number FROM current_season
-         )
-        WHERE users.discord_id = $1
-        """,
-        member.id,
-    )
-    if user is None:
-        candidate_names = {
-            value.strip().lower()
-            for value in (
-                getattr(member, "name", None),
-                getattr(member, "display_name", None),
-                getattr(member, "global_name", None),
-                getattr(member, "nick", None),
-            )
-            if value and value.strip()
-        }
-        if not candidate_names:
-            return
-        rows = await pool.fetch(
-            """
-            WITH current_season AS (
-                SELECT season_year, season_number
-                FROM season_ratings
-                ORDER BY updated_at DESC
-                LIMIT 1
-            )
-            SELECT users.id, users.discord_id, users.discord_username,
-                   season_ratings.mmr
-            FROM users
-            LEFT JOIN season_ratings
-              ON season_ratings.user_id = users.id
-             AND (season_ratings.season_year, season_ratings.season_number) = (
-                 SELECT season_year, season_number FROM current_season
-             )
-            WHERE users.discord_id IS NULL
-              AND lower(btrim(users.discord_username)) = ANY($1::text[])
-            """,
-            sorted(candidate_names),
-        )
-        user = next(
-            (
-                row
-                for row in rows
-                if _matching_member([member], row["discord_username"]) is member
-            ),
-            None,
-        )
-        if user is not None and not await db.set_user_discord_id(
-            str(user["id"]),
-            member.id,
-        ):
+        if not resolution_complete:
             logger.warning(
-                "Could not safely link joining member %s (%s).",
-                member,
-                member.id,
+                "Skipping stale MMR-role removal in guild '%s' (%s) because member resolution was incomplete.",
+                target_guild.name,
+                target_guild.id,
             )
-            return
-    if user is None:
+            continue
+        for member in target_guild.members:
+            if member.id in matched_member_ids:
+                continue
+            stale_roles = [role for role in member.roles if role.name in RANK_ROLE_NAMES]
+            if not stale_roles:
+                continue
+            try:
+                await member.remove_roles(*stale_roles, reason="Battlevive membership reconciliation")
+            except (discord.Forbidden, discord.HTTPException):
+                logger.exception("Failed to remove stale MMR roles from member %s.", member.id)
+
+async def reconcile_member_roles(member: discord.Member, refresh_on_miss=None) -> None:
+    """Resolve an active member and apply its current MMR tier."""
+    identity = await resolve_member_identity(member, refresh_on_miss)
+    if identity.status is not IdentityStatus.LINKED or identity.user is None:
         return
-
-    player_role = _safe_assignable_role(
-        member.guild,
-        BATTLEVIVE_PLAYER_ROLE,
-    )
-    if player_role is not None and player_role not in member.roles:
-        await member.add_roles(
-            player_role,
-            reason="Battlevive member join reconciliation",
-        )
-
-    mmr = user["mmr"]
+    profile = await db.get_current_rank_profile(identity.user["id"])
+    mmr = profile["mmr"] if profile is not None else None
     if mmr is None:
         return
     rank_role = _safe_assignable_role(

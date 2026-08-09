@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime
 from datetime import timezone
 import uuid
@@ -61,6 +62,7 @@ async def get_guild_config(
                debug_commands_enabled, active_lobby_channel_id,
                active_lobby_role_id, website_moderator_role_id,
                active_lobby_baseline_pending,
+               rank_cooldown_seconds,
                updated_by
         FROM guild_config
         WHERE guild_id = $1
@@ -87,6 +89,14 @@ async def upsert_guild_config(
         """,
         guild_id,
         leaderboard_channel_id,
+        updated_by,
+    )
+
+
+async def ensure_guild_config(guild_id: int, updated_by: int) -> None:
+    await get_pool().execute(
+        "INSERT INTO guild_config (guild_id, updated_by) VALUES ($1, $2) ON CONFLICT (guild_id) DO NOTHING",
+        guild_id,
         updated_by,
     )
 
@@ -445,25 +455,222 @@ async def get_users() -> list[User]:
 
 
 async def set_user_discord_id(user_id: str | uuid.UUID, discord_id: int) -> bool:
-    """Persist a Discord link unless that account belongs to another user."""
-    linked = await get_pool().fetchval(
+    """Atomically dual-write a safe active-user Discord link."""
+    target_id = uuid.UUID(str(user_id))
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock($1)", discord_id)
+            if not await conn.fetchval("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)", target_id):
+                return False
+            active_owner = await conn.fetchval(
+                """
+                SELECT links.user_id
+                FROM user_discord_links AS links
+                INNER JOIN users ON users.id = links.user_id
+                WHERE links.discord_id = $1 AND links.user_id <> $2
+                """,
+                discord_id,
+                target_id,
+            )
+            if active_owner is not None:
+                return False
+            await conn.execute(
+                "DELETE FROM user_discord_links WHERE discord_id = $1 AND user_id <> $2",
+                discord_id,
+                target_id,
+            )
+            await conn.execute(
+                """
+                INSERT INTO user_discord_links (user_id, discord_id)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id) DO UPDATE
+                SET discord_id = EXCLUDED.discord_id, updated_at = now()
+                """,
+                target_id,
+                discord_id,
+            )
+            await conn.execute(
+                "UPDATE users SET discord_id = NULL WHERE discord_id = $1 AND id <> $2",
+                discord_id,
+                target_id,
+            )
+            linked = await conn.fetchval(
+                "UPDATE users SET discord_id = $2 WHERE id = $1 RETURNING TRUE",
+                target_id,
+                discord_id,
+            )
+            return bool(linked)
+
+
+async def get_active_user_by_discord_id(discord_id: int) -> dict[str, Any] | None:
+    row = await get_pool().fetchrow(
         """
-        UPDATE users
-        SET discord_id = $2
-        WHERE id = $1
-          AND (discord_id IS NULL OR discord_id = $2)
-          AND NOT EXISTS (
-              SELECT 1
-              FROM users AS linked_user
-              WHERE linked_user.discord_id = $2
-                AND linked_user.id <> $1
-          )
-        RETURNING TRUE
+        SELECT users.*
+        FROM users
+        LEFT JOIN user_discord_links AS links ON links.user_id = users.id
+        WHERE links.discord_id = $1
+           OR (
+               users.discord_id = $1
+               AND NOT EXISTS (
+                   SELECT 1 FROM user_discord_links
+                   WHERE user_discord_links.discord_id = $1
+               )
+           )
+        ORDER BY (links.discord_id = $1) DESC
+        LIMIT 1
         """,
-        uuid.UUID(str(user_id)),
         discord_id,
     )
-    return bool(linked)
+    return dict(row) if row is not None else None
+
+
+async def find_unlinked_active_users(candidate_names: Sequence[str]) -> list[dict[str, Any]]:
+    normalized = sorted({name.strip().casefold() for name in candidate_names if name.strip()})
+    if not normalized:
+        return []
+    rows = await get_pool().fetch(
+        """
+        SELECT users.*
+        FROM users
+        LEFT JOIN user_discord_links AS links ON links.user_id = users.id
+        WHERE links.user_id IS NULL
+          AND lower(btrim(users.discord_username)) = ANY($1::TEXT[])
+        ORDER BY users.id
+        """,
+        normalized,
+    )
+    return [dict(row) for row in rows]
+
+
+async def find_active_users_by_names(candidate_names: Sequence[str]) -> list[dict[str, Any]]:
+    normalized = sorted({name.strip().casefold() for name in candidate_names if name.strip()})
+    if not normalized:
+        return []
+    rows = await get_pool().fetch(
+        """
+        SELECT users.*, links.discord_id AS linked_discord_id
+        FROM users
+        LEFT JOIN user_discord_links AS links ON links.user_id = users.id
+        WHERE lower(btrim(users.discord_username)) = ANY($1::TEXT[])
+        ORDER BY users.id
+        """,
+        normalized,
+    )
+    return [dict(row) for row in rows]
+
+
+async def get_current_rank_profile(user_id: str | uuid.UUID) -> dict[str, Any] | None:
+    row = await get_pool().fetchrow(
+        """
+        WITH current_season AS (
+            SELECT season_year, season_number
+            FROM season_ratings
+            ORDER BY updated_at DESC
+            LIMIT 1
+        )
+        SELECT users.id, users.discord_id, users.discord_username,
+               users.member_number, ratings.mmr, ratings.wins, ratings.losses,
+               ratings.matches_played, ratings.season_year, ratings.season_number
+        FROM users
+        LEFT JOIN season_ratings AS ratings
+          ON ratings.user_id = users.id
+         AND (ratings.season_year, ratings.season_number) = (
+             SELECT season_year, season_number FROM current_season
+         )
+        WHERE users.id = $1
+        """,
+        uuid.UUID(str(user_id)),
+    )
+    return dict(row) if row is not None else None
+
+
+async def set_rank_cooldown_seconds(guild_id: int, seconds: int, updated_by: int) -> None:
+    if not 0 <= seconds <= 3600:
+        raise ValueError("rank cooldown must be between 0 and 3600 seconds")
+    await get_pool().execute(
+        """
+        INSERT INTO guild_config (guild_id, rank_cooldown_seconds, updated_by)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET rank_cooldown_seconds = EXCLUDED.rank_cooldown_seconds,
+            updated_at = now(), updated_by = EXCLUDED.updated_by
+        """,
+        guild_id, seconds, updated_by,
+    )
+
+
+async def get_rank_cooldown_seconds(guild_id: int) -> int:
+    seconds = await get_pool().fetchval(
+        "SELECT rank_cooldown_seconds FROM guild_config WHERE guild_id = $1",
+        guild_id,
+    )
+    return 20 if seconds is None else seconds
+
+
+async def set_command_channel_rule(guild_id: int, channel_id: int, rule: str, updated_by: int) -> None:
+    if rule not in {"allow", "block"}:
+        raise ValueError("command channel rule must be allow or block")
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "INSERT INTO guild_config (guild_id, updated_by) VALUES ($1, $2) ON CONFLICT (guild_id) DO NOTHING",
+                guild_id, updated_by,
+            )
+            await conn.execute(
+                """
+                INSERT INTO guild_command_channels (guild_id, channel_id, rule, updated_by)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (guild_id, channel_id) DO UPDATE
+                SET rule = EXCLUDED.rule, updated_by = EXCLUDED.updated_by, updated_at = now()
+                """,
+                guild_id, channel_id, rule, updated_by,
+            )
+
+
+async def remove_command_channel_rule(guild_id: int, channel_id: int) -> bool:
+    result = await get_pool().execute(
+        "DELETE FROM guild_command_channels WHERE guild_id = $1 AND channel_id = $2",
+        guild_id, channel_id,
+    )
+    return result != "DELETE 0"
+
+
+async def get_command_channel_rules(guild_id: int) -> list[dict[str, Any]]:
+    rows = await get_pool().fetch(
+        "SELECT guild_id, channel_id, rule, updated_by, updated_at FROM guild_command_channels WHERE guild_id = $1 ORDER BY rule, channel_id",
+        guild_id,
+    )
+    return [dict(row) for row in rows]
+
+
+async def record_created_role(guild_id: int, purpose: str, role_id: int, created_by: int) -> None:
+    await get_pool().execute(
+        """
+        INSERT INTO guild_created_roles (guild_id, purpose, role_id, created_by)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (guild_id, purpose) DO UPDATE
+        SET role_id = EXCLUDED.role_id, created_by = EXCLUDED.created_by, created_at = now()
+        """,
+        guild_id, purpose, role_id, created_by,
+    )
+
+
+async def get_created_role(guild_id: int, purpose: str) -> dict[str, Any] | None:
+    row = await get_pool().fetchrow(
+        "SELECT guild_id, purpose, role_id, created_by, created_at FROM guild_created_roles WHERE guild_id = $1 AND purpose = $2",
+        guild_id, purpose,
+    )
+    return dict(row) if row is not None else None
+
+
+async def forget_created_role(guild_id: int, purpose: str, role_id: int | None = None) -> bool:
+    result = await get_pool().execute(
+        "DELETE FROM guild_created_roles WHERE guild_id = $1 AND purpose = $2 AND ($3::BIGINT IS NULL OR role_id = $3)",
+        guild_id, purpose, role_id,
+    )
+    return result != "DELETE 0"
 
 
 async def get_lobbies() -> list[Lobby]:
@@ -987,7 +1194,7 @@ async def sync_battlevive_data_to_db(
     users: list[User] | None = None,
     lobbies: list[Lobby] | None = None,
     season_ratings: list[SeasonRating] | None = None,
-) -> None:
+) -> list[uuid.UUID]:
     """
     Writes fetched data to Postgres. All arguments are optional; only
     datasets that are provided get synced.
@@ -999,8 +1206,46 @@ async def sync_battlevive_data_to_db(
     """
     logger.info("Syncing local db with upstream")
 
+    deleted_user_ids: list[uuid.UUID] = []
     if users is not None:
-        await sync_users_to_db(users)
+        authoritative_ids = _validated_user_ids(users)
+        deleted_user_ids = await sync_users_to_db(users)
+        if lobbies is not None and all(isinstance(lobby, Lobby) for lobby in lobbies):
+            lobbies = sanitize_lobbies(lobbies, authoritative_ids)
+        if season_ratings is not None and all(
+            isinstance(rating, SeasonRating) for rating in season_ratings
+        ):
+            season_ratings = sanitize_season_ratings(
+                season_ratings,
+                authoritative_ids,
+            )
+
+    if users is None and (lobbies is not None or season_ratings is not None):
+        referenced_ids: set[uuid.UUID] = set()
+        if lobbies is not None and all(isinstance(lobby, Lobby) for lobby in lobbies):
+            for lobby in lobbies:
+                if lobby.creator_id:
+                    referenced_ids.add(uuid.UUID(str(lobby.creator_id)))
+                referenced_ids.update(uuid.UUID(str(item)) for item in lobby.team_one_roster)
+                referenced_ids.update(uuid.UUID(str(item)) for item in lobby.team_two_roster)
+        if season_ratings is not None and all(
+            isinstance(rating, SeasonRating) for rating in season_ratings
+        ):
+            referenced_ids.update(uuid.UUID(str(rating.user_id)) for rating in season_ratings)
+        if referenced_ids:
+            missing = await get_pool().fetchval(
+                """
+                SELECT requested.user_id
+                FROM unnest($1::UUID[]) AS requested(user_id)
+                LEFT JOIN users ON users.id = requested.user_id
+                WHERE users.id IS NULL LIMIT 1
+                """,
+                list(referenced_ids),
+            )
+            if missing is not None:
+                raise MissingUsersError(
+                    "Fetched data references users that are missing locally"
+                )
 
     tasks = []
     if lobbies is not None:
@@ -1009,7 +1254,7 @@ async def sync_battlevive_data_to_db(
         tasks.append(sync_season_ratings_to_db(season_ratings))
 
     if not tasks:
-        return
+        return deleted_user_ids
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for result in results:
@@ -1020,44 +1265,148 @@ async def sync_battlevive_data_to_db(
     for result in results:
         if isinstance(result, BaseException):
             raise result
+    return deleted_user_ids
 
 
-async def sync_users_to_db(users: list[User]) -> None:
-    if not users:
-        return
+def _validated_user_ids(users: Sequence[User]) -> set[uuid.UUID]:
+    ids = [uuid.UUID(str(user.id)) for user in users]
+    if len(ids) != len(set(ids)):
+        raise ValueError("users response contains duplicate UUIDs")
+    return set(ids)
+
+
+def sanitize_season_ratings(
+    ratings: Sequence[SeasonRating],
+    authoritative_ids: set[uuid.UUID],
+) -> list[SeasonRating]:
+    sanitized = []
+    for rating in ratings:
+        try:
+            user_id = uuid.UUID(str(rating.user_id))
+        except (TypeError, ValueError, AttributeError):
+            logger.warning("Dropping rating %s with an invalid user UUID.", rating.id)
+            continue
+        if user_id not in authoritative_ids:
+            logger.warning("Dropping rating %s for absent user %s.", rating.id, user_id)
+            continue
+        sanitized.append(rating)
+    return sanitized
+
+
+def sanitize_lobbies(
+    lobbies: Sequence[Lobby],
+    authoritative_ids: set[uuid.UUID],
+) -> list[Lobby]:
+    sanitized = []
+    for lobby in lobbies:
+        def retained(values: Sequence[str]) -> list[str]:
+            result = []
+            for value in values:
+                try:
+                    parsed = uuid.UUID(str(value))
+                except (TypeError, ValueError, AttributeError):
+                    continue
+                if parsed in authoritative_ids:
+                    result.append(str(parsed))
+            return result
+
+        creator_id = lobby.creator_id
+        if creator_id is not None:
+            try:
+                if uuid.UUID(str(creator_id)) not in authoritative_ids:
+                    creator_id = None
+            except (TypeError, ValueError, AttributeError):
+                creator_id = None
+        sanitized.append(
+            replace(
+                lobby,
+                creator_id=creator_id,
+                team_one_roster=retained(lobby.team_one_roster),
+                team_two_roster=retained(lobby.team_two_roster),
+            )
+        )
+    return sanitized
+
+
+async def sync_users_to_db(users: list[User]) -> list[uuid.UUID]:
+    authoritative_ids = _validated_user_ids(users)
 
     pool = get_pool()
-    await pool.executemany(
-        """
-        INSERT INTO users (
-            id, discord_username, member_number,
-            tournaments_joined, bio, favorite_champion,
-            profile_title, username_changed_at
+    records = [
+        (
+            uuid.UUID(str(user.id)),
+            user.discord_username,
+            user.member_number,
+            user.tournaments_joined,
+            user.bio,
+            user.favorite_champion,
+            user.profile_title,
+            user.username_changed_at,
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        ON CONFLICT (id) DO UPDATE
-        SET discord_username    = EXCLUDED.discord_username,
-            member_number       = EXCLUDED.member_number,
-            tournaments_joined  = EXCLUDED.tournaments_joined,
-            bio                 = EXCLUDED.bio,
-            favorite_champion   = EXCLUDED.favorite_champion,
-            profile_title       = EXCLUDED.profile_title,
-            username_changed_at = EXCLUDED.username_changed_at
-        """,
-        [
-            (
-                uuid.UUID(user.id),
-                user.discord_username,
-                user.member_number,
-                user.tournaments_joined,
-                user.bio,
-                user.favorite_champion,
-                user.profile_title,
-                user.username_changed_at,
+        for user in users
+    ]
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            if records:
+                await conn.executemany(
+                    """
+                    INSERT INTO users (
+                        id, discord_username, member_number,
+                        tournaments_joined, bio, favorite_champion,
+                        profile_title, username_changed_at
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    ON CONFLICT (id) DO UPDATE
+                    SET discord_username    = EXCLUDED.discord_username,
+                        member_number       = EXCLUDED.member_number,
+                        tournaments_joined  = EXCLUDED.tournaments_joined,
+                        bio                 = EXCLUDED.bio,
+                        favorite_champion   = EXCLUDED.favorite_champion,
+                        profile_title       = EXCLUDED.profile_title,
+                        username_changed_at = EXCLUDED.username_changed_at
+                    """,
+                    records,
+                )
+            await conn.execute(
+                """
+                UPDATE users
+                SET discord_id = links.discord_id
+                FROM user_discord_links AS links
+                WHERE users.id = links.user_id
+                  AND users.id = ANY($1::UUID[])
+                """,
+                list(authoritative_ids),
             )
-            for user in users
-        ],
-    )
+            await conn.execute(
+                """
+                INSERT INTO user_discord_links (user_id, discord_id)
+                SELECT id, discord_id FROM users WHERE discord_id IS NOT NULL
+                ON CONFLICT DO NOTHING
+                """
+            )
+            deleted = await conn.fetch(
+                "SELECT id FROM users WHERE NOT (id = ANY($1::UUID[]))",
+                list(authoritative_ids),
+            )
+            if deleted:
+                deleted_ids = [row["id"] for row in deleted]
+                await conn.execute(
+                    """
+                    UPDATE lobby_rosters
+                    SET roster = ARRAY(
+                        SELECT member_id FROM unnest(roster) AS member_id
+                        WHERE NOT (member_id = ANY($1::UUID[]))
+                    ),
+                    captain_id = CASE
+                        WHEN captain_id = ANY($1::UUID[]) THEN NULL
+                        ELSE captain_id
+                    END
+                    WHERE roster && $1::UUID[] OR captain_id = ANY($1::UUID[])
+                    """,
+                    deleted_ids,
+                )
+                await conn.execute("DELETE FROM users WHERE id = ANY($1::UUID[])", deleted_ids)
+            return [row["id"] for row in deleted]
 
 
 async def sync_lobbies_to_db(lobbies: list[Lobby]) -> None:

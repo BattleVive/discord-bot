@@ -8,15 +8,14 @@ This project is under active development.
 
 ## Documentation
 
-Full documentation lives in the GitHub Wiki:
+Full documentation is published at [battlevive-bot.voxix.workers.dev/docs](https://battlevive-bot.voxix.workers.dev/docs):
 
-- [Wiki home](https://github.com/voxix-dev/battlevive-bot/wiki)
-- [User Guide](https://github.com/voxix-dev/battlevive-bot/wiki/User-Guide)
-- [Server Admin Guide](https://github.com/voxix-dev/battlevive-bot/wiki/Server-Admin-Guide)
-- [Deployment](https://github.com/voxix-dev/battlevive-bot/wiki/Deployment)
-- [Developer Guide](https://github.com/voxix-dev/battlevive-bot/wiki/Developer-Guide)
-- [Database Schema](https://github.com/voxix-dev/battlevive-bot/wiki/Database-Schema)
-- [Troubleshooting](https://github.com/voxix-dev/battlevive-bot/wiki/Troubleshooting)
+- [Commands](https://battlevive-bot.voxix.workers.dev/docs/commands)
+- [Configuration](https://battlevive-bot.voxix.workers.dev/docs/configuration)
+- [Deployment](https://battlevive-bot.voxix.workers.dev/docs/deployment)
+- [Development](https://battlevive-bot.voxix.workers.dev/docs/development)
+- [Database](https://battlevive-bot.voxix.workers.dev/docs/database)
+- [Troubleshooting](https://battlevive-bot.voxix.workers.dev/docs/troubleshooting)
 
 
 ## Requirements
