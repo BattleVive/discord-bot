@@ -173,8 +173,10 @@ async def publish_health() -> None:
             revalidate_tokens.is_running(),
             refresh_infrequently_changing_data.is_running(),
             refresh_frequently_changing_data.is_running(),
-            bot.leaderboard_service is not None,
-            bot.active_lobby_service is not None,
+            bot.leaderboard_service is not None
+            and bot.leaderboard_service.is_running(),
+            bot.active_lobby_service is not None
+            and bot.active_lobby_service.is_running(),
         )
     )
     health_state.write(

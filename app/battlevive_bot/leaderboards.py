@@ -208,6 +208,13 @@ class LeaderboardService:
     def request_reconciliation(self, *_args: object) -> None:
         self._requested.set()
 
+    def is_running(self) -> bool:
+        return (
+            bool(self._tasks)
+            and not self._closed.is_set()
+            and all(not task.done() for task in self._tasks)
+        )
+
     async def reconcile_all(self) -> None:
         async with self._reconcile_lock:
             configs = await db.get_configured_leaderboards()

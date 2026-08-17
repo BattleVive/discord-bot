@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 import uuid
@@ -472,3 +473,28 @@ async def test_attachment_size_limit_prevents_upload_and_metadata_replacement(
 
     assert slots == {}
     assert channel.messages == {}
+
+
+@pytest.mark.asyncio
+async def test_service_liveness_fails_when_an_internal_task_terminates(
+    tmp_path: Path,
+) -> None:
+    service = leaderboards.LeaderboardService(
+        FakeBot(FakeGuild(FakeChannel(), set())),
+        None,
+        cache_root=tmp_path,
+    )
+    pending = asyncio.create_task(asyncio.sleep(60))
+
+    async def terminate() -> None:
+        return None
+
+    terminated = asyncio.create_task(terminate())
+    service._tasks = [pending, terminated]
+    assert service.is_running() is True
+    await terminated
+    try:
+        assert service.is_running() is False
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)

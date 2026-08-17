@@ -15,9 +15,8 @@ def _configure_stdout_logger(name: str, level_name: str) -> logging.Logger:
     configured_logger.propagate = False
 
     for handler in tuple(configured_logger.handlers):
-        if getattr(handler, "_battlevive_stdout_handler", False):
-            configured_logger.removeHandler(handler)
-            handler.close()
+        configured_logger.removeHandler(handler)
+        handler.close()
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)

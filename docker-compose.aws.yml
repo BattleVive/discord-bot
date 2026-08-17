@@ -2,7 +2,7 @@ x-aws-logging: &aws-logging
   driver: awslogs
   options:
     awslogs-region: ${AWS_REGION:-eu-north-1}
-    awslogs-group: ${BATTLEVIVE_LOG_GROUP:-/battlevive/production/containers}
+    awslogs-group: ${BATTLEVIVE_LOG_GROUP:-/battlevive/production/application}
     awslogs-create-group: "false"
     tag: "{{.Name}}"
 
@@ -12,6 +12,7 @@ services:
       POSTGRES_PASSWORD: null
       POSTGRES_PASSWORD_FILE: /run/battlevive/postgres-password
     volumes:
+      - ${BATTLEVIVE_POSTGRES_DATA_PATH:-/var/lib/battlevive/postgresql}:/var/lib/postgresql:Z
       - /run/battlevive:/run/battlevive:ro
     logging: *aws-logging
 
@@ -39,5 +40,6 @@ services:
       BATTLEVIVE_TOKEN_SSM_PARAMETER: ${BATTLEVIVE_TOKEN_SSM_PARAMETER:-/battlevive/production/tokens}
       AWS_REGION: ${AWS_REGION:-eu-north-1}
     volumes:
+      - ${BATTLEVIVE_BOT_DATA_PATH:-/var/lib/battlevive/bot}:/app/data:Z
       - /run/battlevive:/run/battlevive:ro
     logging: *aws-logging

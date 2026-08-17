@@ -39,8 +39,6 @@ services:
   migration:
     image: ${BATTLEVIVE_IMAGE:-voxix/battlevive-bot:latest}
     command: ["python3", "-m", "battlevive_bot.migrations"]
-    env_file:
-      - ${BATTLEVIVE_ENV_FILE:-.env}
     <<: *runtime-security
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
@@ -56,8 +54,6 @@ services:
     image: ${BATTLEVIVE_IMAGE:-voxix/battlevive-bot:latest}
     container_name: battlevive-bot
     restart: unless-stopped
-    env_file:
-      - ${BATTLEVIVE_ENV_FILE:-.env}
     volumes:
       - ${BATTLEVIVE_BOT_DATA_PATH:-./app/data/bot}:/app/data:Z
     <<: *runtime-security

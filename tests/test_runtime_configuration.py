@@ -62,3 +62,18 @@ def test_logging_uses_one_stdout_handler_per_logger_after_reload() -> None:
         assert len(owned) == 1
         assert type(owned[0]) is logging.StreamHandler
         assert not isinstance(owned[0], logging.FileHandler)
+
+
+def test_logging_removes_and_closes_preinstalled_file_handler(
+    tmp_path: Path,
+) -> None:
+    dedicated_logger = logging.getLogger("bot")
+    file_handler = logging.FileHandler(tmp_path / "unexpected.log")
+    dedicated_logger.addHandler(file_handler)
+
+    importlib.reload(logs)
+
+    assert file_handler not in logs.logger.handlers
+    assert file_handler.stream is None
+    assert len(logs.logger.handlers) == 1
+    assert type(logs.logger.handlers[0]) is logging.StreamHandler

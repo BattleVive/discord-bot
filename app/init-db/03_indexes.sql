@@ -28,5 +28,17 @@ CREATE INDEX IF NOT EXISTS idx_lobbies_season
     ON lobbies (season_year, season_number);
 
 -- All lobbies a user played in.
-CREATE INDEX IF NOT EXISTS idx_lobby_rosters_user_id
-    ON lobby_rosters (user_id);
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'lobby_rosters'
+          AND column_name = 'user_id'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS idx_lobby_rosters_user_id
+            ON lobby_rosters (user_id);
+    END IF;
+END
+$$;

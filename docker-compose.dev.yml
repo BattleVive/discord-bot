@@ -3,10 +3,16 @@ services:
     image: battlevive-bot:local
     build:
       context: .
+    env_file:
+      - path: ${BATTLEVIVE_ENV_FILE:-.env}
+        required: false
   migration:
     image: battlevive-bot:local
     build:
       context: .
+    env_file:
+      - path: ${BATTLEVIVE_ENV_FILE:-.env}
+        required: false
   db:
     ports:
       - "127.0.0.1:5432:5432"
