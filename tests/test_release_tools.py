@@ -86,6 +86,7 @@ def test_existing_immutable_tags_are_reusable_only_for_same_revision():
         "tag": "v1.2.3",
         "sha": "c" * 40,
         "releases": [],
+        "production_version": None,
         "existing_tags": {"1.2.3": "c" * 40, "sha-" + "c" * 40: "c" * 40},
     }
     result = run_planner(same)
@@ -104,3 +105,15 @@ def test_sha_must_be_full_lowercase_commit_id():
     result = run_planner({"tag": "v1.2.3", "sha": "ABC", "releases": []})
     assert result.returncode == 2
     assert "full lowercase commit SHA" in result.stderr
+
+
+def test_production_version_must_be_explicitly_absent_or_valid():
+    base = {"tag": "v1.2.3", "sha": "a" * 40, "releases": []}
+    for payload in (base, base | {"production_version": "garbage"}):
+        result = run_planner(payload)
+        assert result.returncode == 2
+        assert "production version" in result.stderr
+
+    result = run_planner(base | {"production_version": None})
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["deploy"] is True

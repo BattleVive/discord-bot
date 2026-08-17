@@ -19,3 +19,6 @@ the GitHub API on 2026-08-17. Review updates against these upstream sources:
 - <https://github.com/docker/login-action>
 - <https://github.com/aws-actions/configure-aws-credentials>
 - <https://github.com/github/codeql-action>
+- <https://github.com/hashicorp/setup-terraform>
+- <https://github.com/terraform-linters/setup-tflint>
+- <https://github.com/aquasecurity/trivy-action>

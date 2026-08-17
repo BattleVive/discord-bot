@@ -10,7 +10,9 @@ VERIFY = ROOT / "scripts" / "release" / "verify_manifest.py"
 
 def run_manifest(manifest, revision="a" * 40):
     return subprocess.run(
-        [sys.executable, str(VERIFY), "--revision", revision],
+        [sys.executable, str(VERIFY), "--revision", revision,
+         "--source", "https://github.com/voxix-dev/battlevive-bot",
+         "--version", "1.2.3"],
         input=json.dumps(manifest),
         text=True,
         capture_output=True,
@@ -20,11 +22,18 @@ def run_manifest(manifest, revision="a" * 40):
 def valid_manifest():
     return {
         "schemaVersion": 2,
-        "annotations": {"org.opencontainers.image.revision": "a" * 40},
+        "annotations": {
+            "org.opencontainers.image.revision": "a" * 40,
+            "org.opencontainers.image.source": "https://github.com/voxix-dev/battlevive-bot",
+            "org.opencontainers.image.version": "1.2.3",
+        },
         "manifests": [
             {"platform": {"os": "linux", "architecture": "amd64"}},
             {"platform": {"os": "linux", "architecture": "arm64"}},
-            {"platform": {"os": "unknown", "architecture": "unknown"}},
+            {"platform": {"os": "unknown", "architecture": "unknown"},
+             "annotations": {"vnd.docker.reference.type": "attestation-manifest"}},
+            {"platform": {"os": "unknown", "architecture": "unknown"},
+             "annotations": {"vnd.docker.reference.type": "attestation-manifest"}},
         ],
     }
 
@@ -48,3 +57,17 @@ def test_rejects_missing_runtime_platform():
     result = run_manifest(manifest)
     assert result.returncode != 0
     assert "linux/amd64" in result.stderr
+
+
+def test_rejects_missing_oci_identity_or_attestations():
+    manifest = valid_manifest()
+    del manifest["annotations"]["org.opencontainers.image.version"]
+    result = run_manifest(manifest)
+    assert result.returncode != 0
+    assert "version" in result.stderr
+
+    manifest = valid_manifest()
+    manifest["manifests"] = manifest["manifests"][:2]
+    result = run_manifest(manifest)
+    assert result.returncode != 0
+    assert "attestation" in result.stderr

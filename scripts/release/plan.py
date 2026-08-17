@@ -62,7 +62,12 @@ def main() -> None:
     if globally_newest:
         tags.append("latest")
 
-    production = parse_version(payload.get("production_version", ""))
+    if "production_version" not in payload:
+        fail("production version must be explicitly provided or null")
+    production_value = payload["production_version"]
+    production = None if production_value is None else parse_version(production_value)
+    if production_value is not None and production is None:
+        fail("production version must be canonical MAJOR.MINOR.PATCH")
     deploy = production is None or version_tuple > production
     if not globally_newest:
         deploy = False

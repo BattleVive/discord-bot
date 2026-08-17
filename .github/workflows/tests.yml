@@ -89,7 +89,7 @@ jobs:
 
   compose-migrations:
     name: Compose and migrations
-    needs: test
+    needs: [test, repository-static]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -129,7 +129,30 @@ jobs:
         run: docker compose -f docker-compose.yml -f docker-compose.aws.yml config --quiet
 
       - name: Exercise migration integration suite
-        run: pytest -q tests/test_migrations.py
+        run: pytest -q tests/test_migrations.py tests/test_migrations_postgres.py
+
+  repository-static:
+    name: Workflow and shell validation
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+          persist-credentials: false
+
+      - name: Install Actionlint
+        env:
+          GOBIN: /tmp/actionlint-bin
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+
+      - name: Validate workflows
+        run: /tmp/actionlint-bin/actionlint -color
+
+      - name: Validate shell scripts
+        run: find scripts infra -type f -name '*.sh' -print0 | xargs -0 shellcheck
 
   image-smoke:
     name: AMD64 and ARM64 image smoke

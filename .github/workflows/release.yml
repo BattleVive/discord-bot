@@ -63,6 +63,7 @@ jobs:
   plan:
     name: Plan tags and promotion
     needs: [validate, quality]
+    environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -107,22 +108,32 @@ jobs:
           release_tags="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
             --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' \
             | jq -Rsc 'split("\n") | map(select(length > 0))')"
-          production_version="$(aws ssm get-parameter \
-            --name /battlevive/production/deployment/version \
-            --query Parameter.Value --output text 2>/dev/null || true)"
+          state_error="$(mktemp)"
+          if production_state="$(aws ssm get-parameter \
+            --name /battlevive/production/deployment/state \
+            --query Parameter.Value --output text 2>"$state_error")"; then
+            production_version="$(jq -er '
+              if type == "object" and
+                 (.version | type == "string" and test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"))
+              then .version else error("malformed production deployment state") end
+            ' <<<"$production_state")"
+            production_json="$(jq -cn --arg version "$production_version" '$version')"
+          elif grep -q ParameterNotFound "$state_error"; then
+            production_json=null
+          else
+            cat "$state_error" >&2
+            echo "Unable to read authorized production deployment state" >&2
+            exit 1
+          fi
+          rm -f "$state_error"
           inspect_revision() {
-            error_file="$(mktemp)"
-            if manifest="$(docker buildx imagetools inspect --raw \
-              "voxix/battlevive-bot:$1" 2>"$error_file")"; then
-              jq -r '.annotations["org.opencontainers.image.revision"] // empty' <<<"$manifest"
-            elif grep -Eqi 'manifest unknown|not found' "$error_file"; then
+            if revision="$(scripts/release/inspect-tag.sh "voxix/battlevive-bot:$1")"; then
+              printf '%s\n' "$revision"
+            elif [[ $? -eq 4 ]]; then
               printf '\n'
             else
-              cat "$error_file" >&2
-              rm -f "$error_file"
               return 1
             fi
-            rm -f "$error_file"
           }
           exact_revision="$(inspect_revision "$version")"
           sha_revision="$(inspect_revision "$sha_tag")"
@@ -133,7 +144,7 @@ jobs:
              (if $sha_revision != "" then {($sha_tag): $sha_revision} else {} end)')"
           payload="$(jq -cn \
             --arg tag "$RELEASE_TAG" --arg sha "$RELEASE_SHA" \
-            --arg production_version "$production_version" \
+            --argjson production_version "$production_json" \
             --argjson releases "$release_tags" --argjson existing_tags "$existing" \
             '{tag: $tag, sha: $sha, releases: $releases,
               production_version: $production_version, existing_tags: $existing_tags}')"
@@ -157,6 +168,7 @@ jobs:
   publish:
     name: Publish immutable multi-platform image
     needs: [validate, plan]
+    environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
@@ -225,8 +237,16 @@ jobs:
           TAGS_JSON: ${{ needs.plan.outputs.tags_json }}
         run: |
           while IFS= read -r tag; do
-            docker buildx imagetools inspect --raw "voxix/battlevive-bot:$tag" \
-              | python scripts/release/verify_manifest.py --revision "$RELEASE_SHA"
+            reference="voxix/battlevive-bot:$tag"
+            docker buildx imagetools inspect --raw "$reference" \
+              | python scripts/release/verify_manifest.py \
+                  --revision "$RELEASE_SHA" \
+                  --source "${{ github.server_url }}/${{ github.repository }}" \
+                  --version "${{ needs.validate.outputs.version }}"
+            docker buildx imagetools inspect "$reference" --format '{{json .SBOM}}' \
+              | jq -e 'type == "object" and length > 0' >/dev/null
+            docker buildx imagetools inspect "$reference" --format '{{json .Provenance}}' \
+              | jq -e 'type == "object" and length > 0' >/dev/null
           done < <(jq -r '.[]' <<<"$TAGS_JSON")
 
       - name: Record manifest digest

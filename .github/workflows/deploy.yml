@@ -45,11 +45,15 @@ jobs:
           BUNDLE_KEY: ${{ inputs.bundle_key }}
           BUNDLE_CHECKSUM: ${{ inputs.bundle_checksum }}
           TARGET_SELECTOR: ${{ inputs.target_selector }}
+          OPERATIONS_BUCKET: ${{ vars.AWS_OPERATIONS_BUCKET }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
         run: |
           [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$BUNDLE_CHECKSUM" =~ ^[0-9a-f]{64}$ ]]
           [[ -n "$BUNDLE_KEY" && "$BUNDLE_KEY" != /* && "$BUNDLE_KEY" != *..* ]]
+          [[ "$OPERATIONS_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]]
+          [[ "$AWS_REGION" =~ ^[a-z]{2}-[a-z]+-[0-9]+$ ]]
           jq -e 'type == "array" and length == 2 and all(
             .[]; (.Key | startswith("tag:")) and
             (.Values | type == "array" and length == 1 and all(.[]; type == "string" and length > 0))
@@ -69,23 +73,23 @@ jobs:
           BUNDLE_KEY: ${{ inputs.bundle_key }}
           BUNDLE_CHECKSUM: ${{ inputs.bundle_checksum }}
           TARGET_SELECTOR: ${{ inputs.target_selector }}
+          OPERATIONS_BUCKET: ${{ vars.AWS_OPERATIONS_BUCKET }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
         run: |
-          command="$(jq -cn \
+          parameters="$(jq -cn \
+            --arg environment "${{ inputs.environment }}" \
             --arg version "$VERSION" \
             --arg digest "$IMAGE_DIGEST" \
             --arg key "$BUNDLE_KEY" \
             --arg checksum "$BUNDLE_CHECKSUM" \
-            --arg selector "$TARGET_SELECTOR" \
-            '["timeout 295 /usr/local/sbin/battlevive-deploy" +
-              " --version " + ($version | @sh) +
-              " --image-digest " + ($digest | @sh) +
-              " --bundle-key " + ($key | @sh) +
-              " --bundle-checksum " + ($checksum | @sh) +
-              " --target-selector " + ($selector | @sh)]')"
-          parameters="$(jq -cn --argjson commands "$command" \
-            '{commands: $commands, executionTimeout: ["300"]}')"
+            --arg operations_bucket "$OPERATIONS_BUCKET" \
+            --arg aws_region "$AWS_REGION" \
+            '{environment: [$environment], version: [$version], image_digest: [$digest],
+              bundle_key: [$key], bundle_checksum: [$checksum],
+              target_selector: ["Project=battlevive-bot,Environment=production"],
+              operations_bucket: [$operations_bucket], aws_region: [$aws_region]}')"
           command_id="$(aws ssm send-command \
-            --document-name AWS-RunShellScript \
+            --document-name battlevive-production-deploy \
             --targets "$TARGET_SELECTOR" \
             --parameters "$parameters" \
             --timeout-seconds 300 \
