@@ -334,6 +334,30 @@ async def test_persistence_failure_keeps_rotated_credentials_in_memory(
     await client.get_users()
 
     assert transport.get_calls == [("users", "rotated-access")]
+    assert client.persistence_degraded is True
+
+
+@pytest.mark.asyncio
+async def test_successful_persistence_recovers_degraded_state(tmp_path: Path) -> None:
+    transport = FakeTransport(
+        payloads={"users": [user_payload()]},
+        refreshed_tokens=TokenPair("rotated-access", "rotated-refresh"),
+    )
+    client = make_client(tmp_path, transport)
+    saves = 0
+
+    def save(tokens: TokenPair) -> None:
+        nonlocal saves
+        saves += 1
+        if saves == 1:
+            raise OSError("temporarily unavailable")
+
+    client._token_store.save = save
+
+    await client.refresh_credentials()
+    assert client.persistence_degraded is True
+    await client.refresh_credentials()
+    assert client.persistence_degraded is False
 
 
 class RetryTransport(FakeTransport):

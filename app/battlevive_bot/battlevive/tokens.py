@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import stat
 import tempfile
+from typing import Any
+from typing import Protocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +29,12 @@ class TokenPair:
         ):
             return None
         return cls(access_token=access_token, refresh_token=refresh_token)
+
+
+class TokenStoreProtocol(Protocol):
+    def load(self) -> TokenPair | None: ...
+
+    def save(self, tokens: TokenPair) -> None: ...
 
 
 class TokenStore:
@@ -105,3 +113,93 @@ class TokenStore:
             except FileNotFoundError:
                 pass
             raise
+
+
+class SSMTokenStore:
+    """Persist a token pair as one encrypted Parameter Store value."""
+
+    def __init__(
+        self,
+        parameter_name: str,
+        *,
+        region_name: str | None = None,
+        client: Any | None = None,
+    ) -> None:
+        self.parameter_name = parameter_name
+        if client is None:
+            import boto3
+
+            client = boto3.client("ssm", region_name=region_name)
+        self._client = client
+
+    def load(self) -> TokenPair:
+        try:
+            response = self._client.get_parameter(
+                Name=self.parameter_name,
+                WithDecryption=True,
+            )
+        except Exception as error:
+            raise RuntimeError(
+                "Unable to load Battlevive tokens from Parameter Store."
+            ) from error
+        try:
+            parameter = response["Parameter"]
+            if parameter.get("Type") != "SecureString":
+                raise ValueError
+            record = json.loads(parameter["Value"])
+            if not isinstance(record, dict):
+                raise ValueError
+            tokens = TokenPair.from_values(
+                record.get("access_token"), record.get("refresh_token")
+            )
+            if tokens is None:
+                raise ValueError
+            return tokens
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "Parameter Store contains invalid Battlevive token state."
+            ) from error
+
+    def save(self, tokens: TokenPair) -> None:
+        value = json.dumps(
+            {
+                "access_token": tokens.access_token,
+                "refresh_token": tokens.refresh_token,
+            },
+            separators=(",", ":"),
+        )
+        for attempt in range(3):
+            try:
+                self._client.put_parameter(
+                    Name=self.parameter_name,
+                    Value=value,
+                    Type="SecureString",
+                    Overwrite=True,
+                )
+                return
+            except Exception as error:
+                if attempt == 2:
+                    raise OSError(
+                        "Unable to persist Battlevive tokens after three attempts."
+                    ) from error
+
+
+def build_token_store(
+    *,
+    kind: str,
+    path: Path | str,
+    parameter_name: str = "",
+    region_name: str = "",
+    ssm_client: Any | None = None,
+) -> TokenStoreProtocol:
+    if kind == "file":
+        return TokenStore(path)
+    if kind == "ssm":
+        if not parameter_name or not region_name:
+            raise ValueError("SSM token storage requires a parameter name and region.")
+        return SSMTokenStore(
+            parameter_name,
+            region_name=region_name,
+            client=ssm_client,
+        )
+    raise ValueError("Unknown Battlevive token store type.")

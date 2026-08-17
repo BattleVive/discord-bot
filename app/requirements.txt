@@ -2,4 +2,5 @@ discord.py
 python-dotenv
 aiohttp
 asyncpg
+boto3
 pillow

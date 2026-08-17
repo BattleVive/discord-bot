@@ -8,11 +8,32 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+class SettingsError(ValueError):
+    """Raised when runtime configuration is missing or unsafe."""
+
+
+def read_env_or_file(
+    name: str,
+    environ: os._Environ[str] | dict[str, str] = os.environ,
+) -> str:
+    """Read a setting directly or from NAME_FILE without exposing its value."""
+    file_name = f"{name}_FILE"
+    direct_is_set = name in environ
+    file_is_set = file_name in environ
+    if direct_is_set and file_is_set:
+        raise SettingsError(f"{name} and {file_name} cannot both be configured.")
+    if file_is_set:
+        try:
+            return Path(environ[file_name]).read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError) as error:
+            raise SettingsError(f"Unable to read {file_name}.") from error
+    return environ.get(name, "").strip()
+
+
 # Paths
 APP_DIR = Path(__file__).resolve().parents[1]
 ASSETS_DIR = APP_DIR / "assets"
 DATA_DIR = APP_DIR / "data"
-LOG_DIR = APP_DIR / "logs"
 BATTLEVIVE_TOKEN_PATH = Path(
     os.getenv(
         "BATTLEVIVE_TOKEN_PATH",
@@ -22,21 +43,24 @@ BATTLEVIVE_TOKEN_PATH = Path(
 
 
 # Environment
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
+DATABASE_URL = read_env_or_file("DATABASE_URL")
+DISCORD_BOT_TOKEN = read_env_or_file("DISCORD_TOKEN")
 BATTLEVIVE_URL = os.getenv("BATTLEVIVE_URL", "").strip()
-BATTLEVIVE_BOOTSTRAP_JWT = os.getenv("BOOTSTRAP_JWT")
-BATTLEVIVE_BOOTSTRAP_REFRESH_TOKEN = os.getenv("BOOTSTRAP_REFRESH_TOKEN")
-SUPABASE_API_KEY = os.getenv("SUPABASE_API_KEY", "").strip()
+BATTLEVIVE_BOOTSTRAP_JWT = read_env_or_file("BOOTSTRAP_JWT") or None
+BATTLEVIVE_BOOTSTRAP_REFRESH_TOKEN = (
+    read_env_or_file("BOOTSTRAP_REFRESH_TOKEN") or None
+)
+SUPABASE_API_KEY = read_env_or_file("SUPABASE_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+BATTLEVIVE_TOKEN_STORE = os.getenv("BATTLEVIVE_TOKEN_STORE", "file").strip().lower()
+BATTLEVIVE_TOKEN_SSM_PARAMETER = os.getenv(
+    "BATTLEVIVE_TOKEN_SSM_PARAMETER", ""
+).strip()
+AWS_REGION = os.getenv("AWS_REGION", "").strip()
 
 
 # Discord
 LEADERBOARD_MAX_ENTRIES = 50
-
-
-class SettingsError(ValueError):
-    """Raised when runtime configuration is missing or unsafe."""
 
 
 def parse_command_guild_id(value: str | None) -> int | None:
@@ -94,3 +118,20 @@ def validate_runtime_settings() -> None:
         )
     if not _is_https_url(SUPABASE_URL):
         raise SettingsError("SUPABASE_URL must be an HTTPS URL without credentials.")
+    if BATTLEVIVE_TOKEN_STORE not in {"file", "ssm"}:
+        raise SettingsError("BATTLEVIVE_TOKEN_STORE must be file or ssm.")
+    if BATTLEVIVE_TOKEN_STORE == "ssm":
+        missing_ssm = [
+            name
+            for name, value in (
+                ("BATTLEVIVE_TOKEN_SSM_PARAMETER", BATTLEVIVE_TOKEN_SSM_PARAMETER),
+                ("AWS_REGION", AWS_REGION),
+            )
+            if not value
+        ]
+        if missing_ssm:
+            raise SettingsError(
+                "Missing required setting(s) for SSM token storage: "
+                + ", ".join(missing_ssm)
+                + "."
+            )

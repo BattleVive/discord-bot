@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from io import BytesIO
+import logging
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -162,6 +163,7 @@ async def test_setup_syncs_globally_by_default(
         "start",
         lambda: None,
     )
+    monkeypatch.setattr(bot_module.publish_health, "start", lambda: None)
     monkeypatch.setattr(bot_module.bot, "leaderboard_service", None)
     monkeypatch.setattr(bot_module.bot, "active_lobby_service", None)
 
@@ -215,6 +217,7 @@ async def test_setup_can_sync_to_a_development_guild(
         "start",
         lambda: None,
     )
+    monkeypatch.setattr(bot_module.publish_health, "start", lambda: None)
     monkeypatch.setattr(bot_module.bot, "leaderboard_service", None)
     monkeypatch.setattr(bot_module.bot, "active_lobby_service", None)
 
@@ -450,12 +453,13 @@ def test_message_content_intent_and_prefix_processing_are_disabled() -> None:
     assert bot_module.bot.command_prefix == ()
 
 
-def test_logs_are_bounded_and_private() -> None:
-    for handler in (logs.bot_handler, logs.discord_handler):
-        assert handler.maxBytes == 5 * 1024 * 1024
-        assert handler.backupCount == 3
-        assert Path(handler.baseFilename).stat().st_mode & 0o777 == 0o600
-    assert logs.LOG_DIR.stat().st_mode & 0o777 == 0o700
+def test_application_logs_only_to_stdout() -> None:
+    for logger in (logs.logger, logs.discord_logger):
+        assert logger.propagate is False
+        assert all(
+            not isinstance(handler, logging.FileHandler)
+            for handler in logger.handlers
+        )
 
 
 @pytest.mark.parametrize(
