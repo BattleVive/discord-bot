@@ -25,10 +25,7 @@ def make_bundle(tmp_path: Path):
     executable(
         content / "scripts" / "backup.sh",
         '''test "${FAIL_STAGE:-}" != backup
-if flock -n "${OPERATIONS_LOCK_PATH:?}" true; then
-  echo "operations lock was not held" >&2
-  exit 9
-fi
+test "${BATTLEVIVE_OPERATIONS_LOCK_HELD:-}" = 1
 printf "backup verified\\n"
 ''',
     )
@@ -73,8 +70,10 @@ fi
         '''printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
 case "$*" in
   *"run --rm migration"*)
+    if flock -n "${OPERATIONS_LOCK_PATH:?}" true; then echo 'operations lock was not held' >&2; exit 8; fi
     if [ "${FAIL_STAGE:-}" = migration ] && printf '%s' "${BATTLEVIVE_IMAGE:-}" | grep -q 'aaaa'; then exit 1; fi ;;
   *"up -d bot"*)
+    if flock -n "${OPERATIONS_LOCK_PATH:?}" true; then echo 'operations lock was not held' >&2; exit 8; fi
     if [ "${FAIL_STAGE:-}" = startup ] && printf '%s' "${BATTLEVIVE_IMAGE:-}" | grep -q 'aaaa'; then exit 1; fi
     printf '%s\\n' "$BATTLEVIVE_IMAGE" > "$RUNNING_IMAGE_FILE" ;;
   *"inspect --format {{.Config.Image}}"*) cat "$RUNNING_IMAGE_FILE" ;;

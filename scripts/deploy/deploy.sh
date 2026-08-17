@@ -208,7 +208,9 @@ fi
 (cd "$stage" && sha256sum -c SHA256SUMS >/dev/null)
 [[ -x "$stage/scripts/backup.sh" ]] || { echo "bundle backup helper is missing" >&2; exit 1; }
 
-flock -w 60 "$operations_lock" env \
+exec 8>"$operations_lock"
+flock -w 60 8
+env BATTLEVIVE_OPERATIONS_LOCK_HELD=1 \
   COMPOSE_FILE="$stage/compose.yaml" AWS_REGION_NAME="$aws_region" \
   OPERATIONS_BUCKET="$operations_bucket" HOST_ENV_FILE="$host_env" \
   "$stage/scripts/backup.sh" --type pre-deploy --verify
