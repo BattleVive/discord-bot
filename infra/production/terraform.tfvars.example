@@ -1,0 +1,23 @@
+alert_email             = "operator@example.invalid"
+operations_bucket_suffix = "replace1234"
+state_bucket_name       = "replace-with-bootstrap-output"
+
+# Copy only sanitized values from infra/tools/inventory.sh. Never put secret
+# values, user data, Parameter Store contents, or credentials in this file.
+instance = {
+  id                    = "i-replace"
+  ami_id                = "ami-replace"
+  instance_type         = "t4g.micro"
+  availability_zone     = "eu-north-1a"
+  vpc_id                = "vpc-replace"
+  subnet_id             = "subnet-replace"
+  security_group_id          = "sg-replace"
+  security_group_name        = "replace-existing-security-group-name"
+  security_group_description = "replace with the exact existing description"
+  iam_role_name         = "replace-existing-role"
+  instance_profile_name = "replace-existing-profile"
+  root_device_name      = "/dev/xvda"
+  root_volume_size      = 16
+  root_volume_type      = "gp3"
+  root_volume_encrypted = true
+}
