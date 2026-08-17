@@ -88,18 +88,16 @@ resource "aws_s3_bucket_policy" "operations" {
   })
 }
 
-# Values are non-secret deployment state and intentionally drift after deploys.
-resource "aws_ssm_parameter" "deployed_version" {
-  name  = "${local.parameter_root}/deployment/version"
-  type  = "String"
-  value = "unmanaged"
-  lifecycle { ignore_changes = [value] }
-}
-
-resource "aws_ssm_parameter" "deployed_digest" {
-  name  = "${local.parameter_root}/deployment/image-digest"
-  type  = "String"
-  value = "unmanaged"
+# Atomic, non-secret deployment state intentionally drifts after deploys.
+resource "aws_ssm_parameter" "deployment_state" {
+  name = "${local.parameter_root}/deployment/state"
+  type = "String"
+  value = jsonencode({
+    version         = "0.0.0"
+    image_digest    = ""
+    bundle_key      = ""
+    bundle_checksum = ""
+  })
   lifecycle { ignore_changes = [value] }
 }
 

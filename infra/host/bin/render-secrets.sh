@@ -5,6 +5,8 @@ AWS_CLI=${AWS_CLI:-aws}
 AWS_REGION_NAME=${AWS_REGION_NAME:-eu-north-1}
 BATTLEVIVE_SECRET_DIR=${BATTLEVIVE_SECRET_DIR:-/run/battlevive}
 PARAMETER_PREFIX=${PARAMETER_PREFIX:-/battlevive/production/secrets}
+RUNTIME_UID=${RUNTIME_UID:-10001}
+RUNTIME_GID=${RUNTIME_GID:-10001}
 
 if [[ $EUID -ne 0 && ${ALLOW_NON_ROOT_FOR_TESTS:-0} != 1 ]]; then
   echo "render-secrets must run as root." >&2
@@ -20,8 +22,12 @@ secret_names=(
   postgres-password
 )
 
-umask 077
-install -d -m 0700 "$BATTLEVIVE_SECRET_DIR"
+if [[ ${ALLOW_NON_ROOT_FOR_TESTS:-0} == 1 && -z ${RUNTIME_GID_TEST_OVERRIDE:-} ]]; then
+  RUNTIME_UID=$EUID
+fi
+
+umask 027
+install -d -m 0750 -o "$EUID" -g "$RUNTIME_GID" "$BATTLEVIVE_SECRET_DIR"
 staging=$(mktemp -d "$BATTLEVIVE_SECRET_DIR/.render.XXXXXX")
 cleanup() {
   rm -rf -- "$staging"
@@ -45,8 +51,12 @@ for name in "${secret_names[@]}"; do
     echo "Parameter $PARAMETER_PREFIX/$name is empty; previous secret set was preserved." >&2
     exit 1
   fi
-  chmod 0600 "$staging/$name"
+  chown "$EUID:$RUNTIME_GID" "$staging/$name"
+  chmod 0640 "$staging/$name"
 done
+
+chown "$EUID:$RUNTIME_GID" "$BATTLEVIVE_SECRET_DIR"
+chmod 0750 "$BATTLEVIVE_SECRET_DIR"
 
 for name in "${secret_names[@]}"; do
   mv -f -- "$staging/$name" "$BATTLEVIVE_SECRET_DIR/$name"

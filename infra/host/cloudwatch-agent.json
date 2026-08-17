@@ -8,10 +8,9 @@
       "files": {
         "collect_list": [
           {
-            "file_path": "/var/log/messages",
+            "file_path": "/var/log/battlevive-system.log",
             "log_group_name": "/battlevive/production/system",
-            "log_stream_name": "{instance_id}/messages",
-            "retention_in_days": 90
+            "log_stream_name": "{instance_id}/messages"
           }
         ]
       }
@@ -25,6 +24,7 @@
     "metrics_collected": {
       "disk": {
         "measurement": ["used_percent", "inodes_free", "inodes_used", "inodes_total"],
+        "drop_original_metrics": ["used_percent", "inodes_free", "inodes_used", "inodes_total"],
         "metrics_collection_interval": 60,
         "resources": ["/"]
       },

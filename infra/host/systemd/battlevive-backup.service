@@ -5,7 +5,7 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/flock --exclusive --nonblock /run/lock/battlevive-operations.lock /usr/local/libexec/battlevive/backup weekly
+ExecStart=/usr/local/libexec/battlevive/backup weekly
 User=root
 Group=root
 UMask=0077

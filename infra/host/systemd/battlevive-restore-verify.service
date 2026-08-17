@@ -5,7 +5,7 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/flock --exclusive --nonblock /run/lock/battlevive-operations.lock /usr/local/libexec/battlevive/restore-verify
+ExecStart=/usr/local/libexec/battlevive/restore-verify
 User=root
 Group=root
 UMask=0077

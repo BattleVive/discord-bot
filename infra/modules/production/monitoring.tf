@@ -9,8 +9,9 @@ resource "aws_cloudwatch_log_group" "production" {
 }
 
 resource "aws_sns_topic" "alerts" {
-  name = "${local.name}-alerts"
-  tags = local.common_tags
+  name              = "${local.name}-alerts"
+  kms_master_key_id = "alias/aws/sns"
+  tags              = local.common_tags
 }
 
 resource "aws_sns_topic_subscription" "email" {
@@ -75,7 +76,7 @@ locals {
       threshold           = 80
       comparison_operator = "GreaterThanThreshold"
       treat_missing_data  = "breaching"
-      dimensions          = { InstanceId = aws_instance.bot.id, path = "/", fstype = "xfs" }
+      dimensions          = { InstanceId = aws_instance.bot.id }
     }
     swap = {
       namespace           = "CWAgent"
@@ -113,6 +114,17 @@ locals {
     bot_health = {
       namespace           = "Battlevive/Production"
       metric_name         = "BotHealthy"
+      statistic           = "Minimum"
+      period              = 60
+      evaluation_periods  = 3
+      threshold           = 1
+      comparison_operator = "LessThanThreshold"
+      treat_missing_data  = "breaching"
+      dimensions          = {}
+    }
+    host_telemetry = {
+      namespace           = "Battlevive/Production"
+      metric_name         = "HostTelemetryHealthy"
       statistic           = "Minimum"
       period              = 60
       evaluation_periods  = 3
@@ -173,6 +185,17 @@ locals {
       evaluation_periods  = 1
       threshold           = 1
       comparison_operator = "LessThanThreshold"
+      treat_missing_data  = "notBreaching"
+      dimensions          = {}
+    }
+    deployment_failure = {
+      namespace           = "Battlevive/Production"
+      metric_name         = "DeploymentFailure"
+      statistic           = "Sum"
+      period              = 300
+      evaluation_periods  = 1
+      threshold           = 0
+      comparison_operator = "GreaterThanThreshold"
       treat_missing_data  = "notBreaching"
       dimensions          = {}
     }

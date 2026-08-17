@@ -6,11 +6,20 @@ if [[ $EUID -ne 0 && ${ALLOW_NON_ROOT_FOR_TESTS:-0} != 1 ]]; then
   exit 1
 fi
 
+BATTLEVIVE_OPERATIONS_LOCK=${BATTLEVIVE_OPERATIONS_LOCK:-/run/lock/battlevive-operations.lock}
+if [[ ${BATTLEVIVE_OPERATIONS_LOCK_HELD:-0} != 1 ]]; then
+  exec 8>"$BATTLEVIVE_OPERATIONS_LOCK"
+  flock --exclusive --nonblock 8 || {
+    echo "Another Battlevive operation is active." >&2
+    exit 1
+  }
+fi
+
 AWS_CLI=${AWS_CLI:-aws}
 DOCKER_CLI=${DOCKER_CLI:-docker}
 JQ_CLI=${JQ_CLI:-jq}
 AWS_REGION_NAME=${AWS_REGION_NAME:-eu-north-1}
-COMPOSE_FILE=${COMPOSE_FILE:-/opt/battlevive/current/docker-compose.yml}
+COMPOSE_FILE=${COMPOSE_FILE:-/opt/battlevive/current/compose.yaml}
 RESTORE_TMP_ROOT=${RESTORE_TMP_ROOT:-/var/lib/battlevive/restore-verification}
 POSTGRES_USER=${POSTGRES_USER:-battlevive}
 POSTGRES_DB=${POSTGRES_DB:-battlevive}

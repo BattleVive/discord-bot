@@ -35,11 +35,20 @@ if [[ $EUID -ne 0 && ${ALLOW_NON_ROOT_FOR_TESTS:-0} != 1 ]]; then
   exit 1
 fi
 
+BATTLEVIVE_OPERATIONS_LOCK=${BATTLEVIVE_OPERATIONS_LOCK:-${BACKUP_TMP_ROOT:-/run/lock}/battlevive-operations.lock}
+if [[ ${BATTLEVIVE_OPERATIONS_LOCK_HELD:-0} != 1 ]]; then
+  exec 8>"$BATTLEVIVE_OPERATIONS_LOCK"
+  flock --exclusive --nonblock 8 || {
+    echo "Another Battlevive operation is active." >&2
+    exit 1
+  }
+fi
+
 AWS_CLI=${AWS_CLI:-aws}
 DOCKER_CLI=${DOCKER_CLI:-docker}
 JQ_CLI=${JQ_CLI:-jq}
 AWS_REGION_NAME=${AWS_REGION_NAME:-eu-north-1}
-COMPOSE_FILE=${COMPOSE_FILE:-/opt/battlevive/current/docker-compose.yml}
+COMPOSE_FILE=${COMPOSE_FILE:-/opt/battlevive/current/compose.yaml}
 BACKUP_TMP_ROOT=${BACKUP_TMP_ROOT:-/var/lib/battlevive/backups}
 HOST_ENV_FILE=${HOST_ENV_FILE:-/run/battlevive/host.env}
 
@@ -112,13 +121,15 @@ row_counts=$(
     psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align \
     --command "SELECT json_build_object('schema_migrations', (SELECT count(*) FROM schema_migrations), 'guild_config', (SELECT count(*) FROM guild_config));"
 )
-application_version=$(
+deployment_state=$(
   "$AWS_CLI" ssm get-parameter \
     --region "$AWS_REGION_NAME" \
-    --name /battlevive/production/deployment/version \
+    --name /battlevive/production/deployment/state \
     --query Parameter.Value \
     --output text
 )
+application_version=$(printf '%s' "$deployment_state" | "$JQ_CLI" -er \
+  '.version | select(test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"))')
 
 (
   cd "$workdir"

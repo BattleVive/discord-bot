@@ -36,11 +36,6 @@ resource "aws_iam_instance_profile" "bot" {
   tags = local.common_tags
 }
 
-resource "aws_iam_role_policy_attachment" "ssm_core" {
-  role       = aws_iam_role.instance.name
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
 data "aws_iam_policy_document" "instance" {
   statement {
     sid = "ReadRuntimeParameters"
@@ -55,11 +50,21 @@ data "aws_iam_policy_document" "instance" {
   }
 
   statement {
+    sid     = "ReadRuntimeConfiguration"
+    actions = ["ssm:GetParameter", "ssm:GetParameters"]
+    resources = [
+      aws_ssm_parameter.cloudwatch_agent_config.arn,
+      aws_ssm_parameter.operations_bucket.arn,
+      aws_ssm_parameter.deployment_state.arn,
+    ]
+  }
+
+  statement {
     sid     = "WriteOnlyRotatingAndDeploymentState"
     actions = ["ssm:PutParameter"]
     resources = [
       "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter${local.secret_parameter_names.rotating_tokens}",
-      "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter${local.parameter_root}/deployment/*",
+      aws_ssm_parameter.deployment_state.arn,
     ]
   }
 
@@ -72,6 +77,44 @@ data "aws_iam_policy_document" "instance" {
       variable = "s3:prefix"
       values   = ["backups/*", "releases/*"]
     }
+  }
+
+
+  statement {
+    sid = "SSMAgentControlPlane"
+    actions = [
+      "ssm:DescribeAssociation",
+      "ssm:DescribeDocument",
+      "ssm:GetDeployablePatchSnapshotForInstance",
+      "ssm:GetDocument",
+      "ssm:GetManifest",
+      "ssm:ListAssociations",
+      "ssm:ListInstanceAssociations",
+      "ssm:PutComplianceItems",
+      "ssm:PutConfigurePackageResult",
+      "ssm:PutInventory",
+      "ssm:UpdateAssociationStatus",
+      "ssm:UpdateInstanceAssociationStatus",
+      "ssm:UpdateInstanceInformation",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "SSMMessageChannels"
+    actions = [
+      "ssmmessages:CreateControlChannel",
+      "ssmmessages:CreateDataChannel",
+      "ssmmessages:OpenControlChannel",
+      "ssmmessages:OpenDataChannel",
+      "ec2messages:AcknowledgeMessage",
+      "ec2messages:DeleteMessage",
+      "ec2messages:FailMessage",
+      "ec2messages:GetEndpoint",
+      "ec2messages:GetMessages",
+      "ec2messages:SendReply",
+    ]
+    resources = ["*"]
   }
 
   statement {
@@ -107,6 +150,12 @@ data "aws_iam_policy_document" "instance" {
       "logs:PutLogEvents",
     ]
     resources = [for group in aws_cloudwatch_log_group.production : "${group.arn}:*"]
+  }
+
+  statement {
+    sid       = "DiscoverProjectLogGroups"
+    actions   = ["logs:DescribeLogGroups"]
+    resources = ["*"]
   }
 }
 
@@ -194,7 +243,7 @@ resource "aws_iam_role" "github_deploy" {
   tags               = local.common_tags
 }
 
-data "aws_iam_policy_document" "state_access" {
+data "aws_iam_policy_document" "state_lock_access" {
   statement {
     actions   = ["s3:ListBucket"]
     resources = ["arn:${data.aws_partition.current.partition}:s3:::${var.state_bucket_name}"]
@@ -205,16 +254,26 @@ data "aws_iam_policy_document" "state_access" {
     }
   }
   statement {
-    actions = ["s3:GetObject", "s3:PutObject"]
-    resources = [
-      "arn:${data.aws_partition.current.partition}:s3:::${var.state_bucket_name}/battlevive-bot/production.tfstate",
-    ]
-  }
-  statement {
     actions = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
     resources = [
       "arn:${data.aws_partition.current.partition}:s3:::${var.state_bucket_name}/battlevive-bot/production.tfstate.tflock",
     ]
+  }
+}
+
+data "aws_iam_policy_document" "state_plan_access" {
+  source_policy_documents = [data.aws_iam_policy_document.state_lock_access.json]
+  statement {
+    actions   = ["s3:GetObject"]
+    resources = ["arn:${data.aws_partition.current.partition}:s3:::${var.state_bucket_name}/battlevive-bot/production.tfstate"]
+  }
+}
+
+data "aws_iam_policy_document" "state_apply_access" {
+  source_policy_documents = [data.aws_iam_policy_document.state_lock_access.json]
+  statement {
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = ["arn:${data.aws_partition.current.partition}:s3:::${var.state_bucket_name}/battlevive-bot/production.tfstate"]
   }
 }
 
@@ -253,7 +312,7 @@ data "aws_iam_policy_document" "plan" {
 data "aws_iam_policy_document" "plan_with_state" {
   source_policy_documents = [
     data.aws_iam_policy_document.plan.json,
-    data.aws_iam_policy_document.state_access.json,
+    data.aws_iam_policy_document.state_plan_access.json,
   ]
 }
 
@@ -265,59 +324,172 @@ resource "aws_iam_role_policy" "github_plan" {
 
 data "aws_iam_policy_document" "apply" {
   statement {
-    sid = "ManageProjectResources"
+    sid = "ReadForApply"
     actions = [
-      "cloudwatch:DeleteAlarms", "cloudwatch:PutDashboard", "cloudwatch:PutMetricAlarm",
-      "ec2:CreateTags", "ec2:ModifyInstanceAttribute", "ec2:ModifyVolume", "ec2:RevokeSecurityGroupIngress",
-      "events:*", "iam:CreatePolicyVersion", "iam:DeletePolicyVersion", "iam:PassRole",
-      "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:UpdateAssumeRolePolicy",
-      "logs:*", "s3:PutBucket*", "s3:PutLifecycleConfiguration", "sns:*", "ssm:*",
+      "cloudwatch:Describe*", "cloudwatch:Get*", "cloudwatch:List*",
+      "ec2:Describe*", "iam:Get*", "iam:List*", "logs:Describe*",
+      "sns:Get*", "sns:List*", "ssm:Describe*", "ssm:List*", "sts:GetCallerIdentity",
     ]
     resources = ["*"]
-    condition {
-      test     = "StringEqualsIfExists"
-      variable = "aws:ResourceTag/Project"
-      values   = ["battlevive-bot"]
-    }
   }
 
   statement {
-    sid = "CreateWithProjectTags"
+    sid = "ManageNamedIAMResources"
     actions = [
-      "cloudwatch:PutMetricAlarm", "iam:CreateRole", "iam:CreatePolicy",
-      "logs:CreateLogGroup", "s3:CreateBucket", "sns:CreateTopic",
-      "ssm:CreateAssociation", "ssm:CreateDocument", "ssm:PutParameter",
+      "iam:CreateRole", "iam:DeleteRole", "iam:TagRole", "iam:UntagRole",
+      "iam:UpdateAssumeRolePolicy", "iam:PutRolePolicy", "iam:DeleteRolePolicy",
+      "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:AddRoleToInstanceProfile",
+      "iam:RemoveRoleFromInstanceProfile", "iam:TagInstanceProfile", "iam:UntagInstanceProfile",
+      "iam:PassRole",
     ]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:iam::${var.account_id}:role/${local.name}-*",
+      "arn:${data.aws_partition.current.partition}:iam::${var.account_id}:role/${var.instance_role_name}",
+      "arn:${data.aws_partition.current.partition}:iam::${var.account_id}:instance-profile/${var.instance_profile_name}",
+    ]
+  }
+
+  statement {
+    sid       = "CreateTaggedGitHubOIDCProvider"
+    actions   = ["iam:CreateOpenIDConnectProvider"]
     resources = ["*"]
     condition {
-      test     = "StringEqualsIfExists"
+      test     = "StringEquals"
       variable = "aws:RequestTag/Project"
       values   = ["battlevive-bot"]
     }
   }
 
   statement {
-    sid       = "ReadForApply"
-    actions   = ["cloudwatch:Describe*", "ec2:Describe*", "iam:Get*", "iam:List*", "logs:Describe*", "sns:Get*", "sns:List*", "ssm:Describe*", "ssm:List*", "sts:GetCallerIdentity"]
-    resources = ["*"]
+    sid = "ManageGitHubOIDCProvider"
+    actions = [
+      "iam:DeleteOpenIDConnectProvider",
+      "iam:UpdateOpenIDConnectProviderThumbprint", "iam:AddClientIDToOpenIDConnectProvider",
+      "iam:RemoveClientIDFromOpenIDConnectProvider", "iam:TagOpenIDConnectProvider",
+      "iam:UntagOpenIDConnectProvider",
+    ]
+    resources = ["arn:${data.aws_partition.current.partition}:iam::${var.account_id}:oidc-provider/token.actions.githubusercontent.com"]
   }
 
-
   statement {
-    actions = ["s3:GetBucket*", "s3:ListBucket", "s3:GetObject"]
+    sid = "ManageOperationsBucket"
+    actions = [
+      "s3:CreateBucket", "s3:DeleteBucket", "s3:GetBucket*", "s3:ListBucket",
+      "s3:PutBucketPolicy", "s3:DeleteBucketPolicy", "s3:PutBucketPublicAccessBlock",
+      "s3:PutBucketOwnershipControls", "s3:PutBucketVersioning", "s3:PutEncryptionConfiguration",
+      "s3:PutLifecycleConfiguration", "s3:PutBucketTagging", "s3:DeletePublicAccessBlock",
+      "s3:DeleteBucketOwnershipControls", "s3:DeleteBucketEncryption",
+      "s3:DeleteBucketLifecycle", "s3:DeleteBucketTagging",
+    ]
     resources = [
       aws_s3_bucket.operations.arn,
-      "${aws_s3_bucket.operations.arn}/*",
     ]
   }
 
   statement {
-    actions = ["ssm:GetDocument", "ssm:GetParameter", "ssm:GetParameters"]
+    sid = "ManageProjectLogs"
+    actions = [
+      "logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:PutRetentionPolicy",
+      "logs:DeleteRetentionPolicy", "logs:TagResource", "logs:UntagResource",
+      "logs:PutMetricFilter", "logs:DeleteMetricFilter",
+    ]
+    resources = ["arn:${data.aws_partition.current.partition}:logs:${var.aws_region}:${var.account_id}:log-group:/battlevive/production/*"]
+  }
+
+  statement {
+    sid = "ManageProjectSSMNamedResources"
+    actions = [
+      "ssm:CreateDocument", "ssm:UpdateDocument", "ssm:UpdateDocumentDefaultVersion",
+      "ssm:DeleteDocument", "ssm:AddTagsToResource", "ssm:RemoveTagsFromResource",
+      "ssm:PutParameter", "ssm:DeleteParameter", "ssm:GetParameter", "ssm:GetParameters",
+    ]
     resources = [
       "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:document/${local.name}-*",
       "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:document/battlevive-production-shell",
       "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter${local.parameter_root}/config/*",
       "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter${local.parameter_root}/deployment/*",
+    ]
+  }
+
+  statement {
+    sid       = "CreateTaggedSSMOperations"
+    actions   = ["ssm:CreateAssociation", "ssm:CreateMaintenanceWindow"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = ["battlevive-bot"]
+    }
+  }
+
+  statement {
+    sid = "ManageTaggedSSMOperations"
+    actions = [
+      "ssm:UpdateAssociation", "ssm:DeleteAssociation",
+      "ssm:RegisterTargetWithMaintenanceWindow", "ssm:DeregisterTargetFromMaintenanceWindow",
+      "ssm:RegisterTaskWithMaintenanceWindow", "ssm:DeregisterTaskFromMaintenanceWindow",
+      "ssm:UpdateMaintenanceWindow", "ssm:DeleteMaintenanceWindow",
+    ]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = ["battlevive-bot"]
+    }
+  }
+
+  statement {
+    sid       = "CreateTaggedAlarms"
+    actions   = ["cloudwatch:PutMetricAlarm"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = ["battlevive-bot"]
+    }
+  }
+
+  statement {
+    sid       = "ManageTaggedAlarms"
+    actions   = ["cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = ["battlevive-bot"]
+    }
+  }
+
+  statement {
+    sid = "ManageNamedDashboard"
+    actions = [
+      "cloudwatch:PutDashboard", "cloudwatch:DeleteDashboards",
+    ]
+    resources = ["arn:${data.aws_partition.current.partition}:cloudwatch::${var.account_id}:dashboard/${local.name}"]
+  }
+
+  statement {
+    sid = "ManageProjectSNS"
+    actions = [
+      "sns:CreateTopic", "sns:DeleteTopic", "sns:SetTopicAttributes", "sns:TagResource",
+      "sns:UntagResource", "sns:Subscribe", "sns:Unsubscribe",
+    ]
+    resources = [aws_sns_topic.alerts.arn]
+  }
+
+  statement {
+    sid = "ManageAdoptedCompute"
+    actions = [
+      "ec2:CreateTags", "ec2:DeleteTags", "ec2:ModifyInstanceAttribute",
+      "ec2:AssociateIamInstanceProfile", "ec2:DisassociateIamInstanceProfile",
+      "ec2:ReplaceIamInstanceProfileAssociation", "ec2:StartInstances", "ec2:StopInstances",
+      "ec2:ModifyVolume", "ec2:RevokeSecurityGroupIngress", "ec2:AuthorizeSecurityGroupEgress",
+      "ec2:RevokeSecurityGroupEgress", "ec2:ModifySecurityGroupRules",
+    ]
+    resources = [
+      aws_instance.bot.arn,
+      aws_security_group.bot.arn,
+      "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${var.account_id}:volume/${aws_instance.bot.root_block_device[0].volume_id}",
     ]
   }
 }
@@ -331,11 +503,15 @@ resource "aws_iam_role_policy" "github_apply" {
 data "aws_iam_policy_document" "apply_with_state" {
   source_policy_documents = [
     data.aws_iam_policy_document.apply.json,
-    data.aws_iam_policy_document.state_access.json,
+    data.aws_iam_policy_document.state_apply_access.json,
   ]
 }
 
 data "aws_iam_policy_document" "deploy" {
+  statement {
+    actions   = ["ssm:GetParameter"]
+    resources = [aws_ssm_parameter.deployment_state.arn]
+  }
   statement {
     actions   = ["s3:PutObject", "s3:GetObject"]
     resources = ["${aws_s3_bucket.operations.arn}/releases/*"]

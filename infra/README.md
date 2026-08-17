@@ -11,7 +11,7 @@ Before any live action:
 3. Choose the operations alert email. Terraform creates an SNS subscription; immediately confirm the AWS email: [SNS email confirmation](https://docs.aws.amazon.com/sns/latest/dg/sns-email-notifications.html).
 4. Plan to configure GitHub variables, secrets, and protected environments after Terraform outputs the role ARNs: [GitHub Actions secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets).
 
-Run `infra/tools/bootstrap-toolbox.sh` to create the `aws` Toolbox and install AWS CLI v2, the Session Manager plugin, Terraform, `jq`, ShellCheck, and pytest. Authenticate explicitly with `aws sso login --profile battlevive-prod`; helpers never inspect or print `~/.aws`.
+Run `infra/tools/bootstrap-toolbox.sh` to create the `aws` Toolbox and install AWS CLI v2, the Session Manager plugin, Terraform, `jq`, ShellCheck, pytest, TFLint, and Trivy. Authenticate explicitly with `aws sso login --profile battlevive-prod`; helpers never inspect or print `~/.aws`.
 
 ## State bootstrap
 
@@ -29,7 +29,13 @@ toolbox run --container aws terraform -chdir=infra/production init \
   -backend-config="bucket=<state-bucket>"
 ```
 
-The plan/apply roles can list only the state prefix, read/write the state object, and read/write/delete only the `.tflock` object. They cannot delete the state object.
+The plan role can read only the state object. Plan and apply can acquire/release the exact `.tflock` object; only apply can update state. Neither role can delete the state object.
+
+## Terraform CI contract
+
+`infra/tools/validate.sh` is the single CI-safe static gate: Terraform format and validation, recursive TFLint, Trivy HIGH/CRITICAL configuration scanning, ShellCheck, JSON validation, and Bash parsing. A pull request assumes the plan role through the protected `infrastructure-plan` environment and runs validation followed by `TF_STATE_BUCKET=<bucket> infra/tools/terraform-ci.sh plan`. The plan role is read-only apart from the lockfile. A protected main-branch apply job assumes the apply role through `infrastructure-apply`, regenerates the reviewed plan with the same command, obtains approval, and runs `terraform-ci.sh apply` against that exact saved plan. Never pass secret values as Terraform variables.
+
+The first manual adoption precedes CI activation. Until an authenticated replacement-free plan and empty post-apply plan exist, the Terraform configuration is validated code—not evidence that production has been adopted.
 
 ## Sanitized inventory and import
 
@@ -63,13 +69,15 @@ Session Manager needs no inbound port or SSH keys. Never remove ingress or stop 
 
 ## Secrets and host installation
 
-Terraform records Parameter names only; it never creates secret values. Run `infra/tools/migrate-secrets.sh` interactively. The helper uses hidden input and root-private temporary JSON sent via `--cli-input-json`; values do not appear in process arguments or output. On EC2, `render-secrets` atomically writes mode `0600` files below root-owned `/run/battlevive`, including `postgres-password` for PostgreSQL's supported password-file input. `host.env` is root-owned mode `0600` and contains only `POSTGRES_USER` and `POSTGRES_DB`.
+Terraform records Parameter names only; it never creates secret values. Run `infra/tools/migrate-secrets.sh` interactively. The helper uses hidden input and root-private temporary JSON sent via `--cli-input-json`; values do not appear in process arguments or output. On EC2, `render-secrets` atomically writes root-owned, runtime-group `0640` files below root:10001 mode `0750` `/run/battlevive`, including `postgres-password` for PostgreSQL's supported password-file input. The bot runs as UID/GID 10001 and can read but not replace those files. Root-only mode `0600` `host.env` contains non-secret AWS region, operations bucket, log group, absolute data/deployment paths, and PostgreSQL names; production does not use `.env`.
 
-The release bundle carries `infra/host`. Run its root-only `install.sh` through the bootstrap document after placement. It installs secret rendering, weekly backups, monthly restore verification, daily freshness checks, minute health publishing, and systemd timers. Application logs remain Docker stdout/stderr; the AWS Compose override sends them to the 90-day application log group.
+The release bundle root is `/opt/battlevive/current`, with `compose.yaml`, `compose.aws.yaml`, `install.sh`, and `scripts/`. Its root-only installer copies the sole deploy executable to `/usr/local/libexec/battlevive/deploy`, creates UID/GID 10001 bot data and isolated PostgreSQL data directories, and establishes the CloudWatch system source with rsyslog at `/var/log/battlevive-system.log`. It also installs secret rendering, weekly backups, monthly restore verification, daily freshness checks, minute health publishing, and systemd timers. Application logs remain Docker stdout/stderr; `BATTLEVIVE_LOG_GROUP=/battlevive/production/application` selects the provisioned and authorized 90-day group.
+
+The deploy transport is only the `battlevive-production-deploy` SSM document. It injects the Terraform-provisioned operations bucket/region and invokes the canonical executable. GitHub AWS jobs use the protected `production` environment; the deploy role can read only atomic `/battlevive/production/deployment/state`, upload release objects, and send that one document to the tagged instance.
 
 ## Backups and recovery
 
-`infra/host/scripts/backup.sh weekly` and synchronous `backup.sh predeploy` create PostgreSQL custom-format archives. Each run verifies `pg_restore --list`, writes a SHA-256 sidecar and JSON manifest (UTC time, application version, schema version, key-table counts), uploads a unique key, and publishes success/failure metrics. Weekly objects expire after 84 days; predeploy objects expire after 30 days. Incomplete multipart uploads abort after seven days.
+`infra/host/scripts/backup.sh weekly` and synchronous `backup.sh --type pre-deploy --verify` create PostgreSQL custom-format archives. Each run verifies `pg_restore --list`, writes a SHA-256 sidecar and JSON manifest (UTC time, application version, schema version, key-table counts), uploads a unique key, and publishes success/failure metrics. Weekly objects expire after 84 days; predeploy objects expire after 30 days. Incomplete multipart uploads abort after seven days. Scheduled backup, restore drill, and deployment use `/run/lock/battlevive-operations.lock`; deployment holds it across backup, migration, and health transition.
 
 Monthly `restore-verify.sh` takes the shared operations lock, downloads the newest weekly archive and sidecars, verifies SHA-256, restores into a uniquely named temporary database, compares key-table counts, records a drill marker, and always drops the temporary database. Alarms cover failed and stale backups/drills.
 
@@ -84,8 +92,8 @@ Recovery target is seven-day RPO and two-hour RTO:
 
 ## Monitoring and resize gate
 
-CloudWatch collects memory, swap, disk/inodes, processes, EC2 status/CPU credits, bot heartbeat, backup/restore/deployment metrics, system logs, application critical logs, and OOM events. SNS alarms cover the plan’s health, capacity, freshness, and failure conditions.
+After live installation, CloudWatch is expected to collect memory, swap, instance-aggregated disk/inodes, processes, EC2 status/CPU credits, bot/telemetry heartbeats, backup/restore/deployment metrics, rsyslog system logs, application critical logs, and OOM events. Terraform provisions corresponding SNS alarms, including explicit deployment failure. Confirm streams and alarm delivery during live acceptance; configuration validation alone does not prove telemetry delivery.
 
-Run an image-render/database workload, then collect 168 continuous hours after monitoring installation. `infra/tools/resize-gate.sh` fails closed on missing data and requires working memory at most 300 MiB, average swap zero/no spike above 64 MiB, filesystem below 70%, adequate credits/no surplus charge, no status failures, and continuous bot health. Also inspect OOM and deployment alarms. If any criterion fails, retain `t4g.micro`.
+Run an image-render/database workload, then collect 168 continuous hours after monitoring installation. `infra/tools/resize-gate.sh` requires at least 98% of expected datapoints with no gap or edge gap above two periods for every required series. It fails closed unless working memory is at most 300 MiB, average swap is zero/no spike exceeds 64 MiB, disk and inode use stay below 70%, credits are adequate with no surplus charge, status/OOM failures remain zero, and bot plus host-telemetry health remain continuous. If any criterion fails, retain `t4g.micro`.
 
 For an eligible resize, first require a Terraform plan containing only `t4g.micro -> t4g.nano`, take a fresh backup and EBS snapshot, apply during a maintenance window, and validate SSM, database, bot health, logs, memory, swap, and Discord behavior for 15 minutes. A non-Elastic public IPv4 can change on stop/start. Immediately restore `t4g.micro` through Terraform if a gate fails.
