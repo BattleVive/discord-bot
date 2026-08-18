@@ -86,7 +86,6 @@ resource "aws_ssm_document" "deploy" {
         runCommand = [
           "set -eu",
           "export OPERATIONS_BUCKET=\"$SSM_operationsBucket\" AWS_REGION=\"$SSM_awsRegion\" BATTLEVIVE_OPERATIONS_LOCK=/run/lock/battlevive-operations.lock",
-          "if ! test -x /usr/local/libexec/battlevive/deploy; then",
           "  bootstrap_dir=$(mktemp -d /tmp/battlevive-bootstrap.XXXXXX)",
           "  bootstrap_archive=\"$bootstrap_dir/bundle.tar.gz\"",
           "  trap 'rm -rf -- \"$bootstrap_dir\"' EXIT",
@@ -102,7 +101,6 @@ resource "aws_ssm_document" "deploy" {
           "  BATTLEVIVE_BUNDLE_ROOT=\"$bootstrap_dir\" \"$bootstrap_dir/install.sh\"",
           "  trap - EXIT",
           "  rm -rf -- \"$bootstrap_dir\"",
-          "fi",
           "timeout 295 /usr/local/libexec/battlevive/deploy --environment \"$SSM_environment\" --version \"$SSM_version\" --image-digest \"$SSM_imageDigest\" --bundle-key \"$SSM_bundleKey\" --bundle-checksum \"$SSM_bundleChecksum\" --target-selector \"$SSM_targetSelector\" --operations-bucket \"$SSM_operationsBucket\" --aws-region \"$SSM_awsRegion\"",
         ]
       }

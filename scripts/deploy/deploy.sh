@@ -102,10 +102,20 @@ read_state() {
   error_file="$(mktemp "$work_dir/state-error.XXXXXX")"
   if previous_state="$(aws ssm get-parameter --name "$state_parameter" \
     --region "$aws_region" --query Parameter.Value --output text 2>"$error_file")"; then
+    if jq -e 'type == "object" and . == {
+      version: "0.0.0",
+      image_digest: "",
+      bundle_key: "",
+      bundle_checksum: ""
+    }' <<<"$previous_state" >/dev/null; then
+      previous_state=""
+      return
+    fi
     jq -e 'type == "object" and
       (.version | type == "string" and test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")) and
       (.image_digest | type == "string" and test("^sha256:[0-9a-f]{64}$")) and
-      (.bundle_key | type == "string") and (.bundle_checksum | type == "string")' \
+      (.bundle_key | type == "string" and length > 0) and
+      (.bundle_checksum | type == "string" and test("^[a-f0-9]{64}$"))' \
       <<<"$previous_state" >/dev/null || {
         echo "production deployment state is malformed" >&2
         return 1
