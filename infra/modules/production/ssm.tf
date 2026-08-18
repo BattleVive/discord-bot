@@ -98,7 +98,7 @@ resource "aws_ssm_document" "deploy" {
           "    exit 1",
           "  fi",
           "  test -x \"$bootstrap_dir/install.sh\"",
-          "  BATTLEVIVE_BUNDLE_ROOT=\"$bootstrap_dir\" \"$bootstrap_dir/install.sh\"",
+          "  if ! BATTLEVIVE_BUNDLE_ROOT=\"$bootstrap_dir\" \"$bootstrap_dir/install.sh\"; then echo 'BATTLEVIVE_DEPLOY_FAILURE_STAGE=host-bootstrap' >&2; exit 1; fi",
           "  trap - EXIT",
           "  rm -rf -- \"$bootstrap_dir\"",
           "timeout 295 /usr/local/libexec/battlevive/deploy --environment \"$SSM_environment\" --version \"$SSM_version\" --image-digest \"$SSM_imageDigest\" --bundle-key \"$SSM_bundleKey\" --bundle-checksum \"$SSM_bundleChecksum\" --target-selector \"$SSM_targetSelector\" --operations-bucket \"$SSM_operationsBucket\" --aws-region \"$SSM_awsRegion\"",

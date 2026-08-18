@@ -36,6 +36,7 @@ done
 
 battlevive_root="${BATTLEVIVE_ROOT:-/opt/battlevive}"
 host_env="${BATTLEVIVE_HOST_ENV:-/run/battlevive/host.env}"
+secret_dir="${BATTLEVIVE_SECRET_DIR:-/run/battlevive}"
 compose_cli="${BATTLEVIVE_COMPOSE_CLI:-/usr/local/libexec/battlevive/compose}"
 operations_lock="${OPERATIONS_LOCK_PATH:-/run/lock/battlevive-operations.lock}"
 health_timeout="${HEALTH_TIMEOUT_SECONDS:-120}"
@@ -66,6 +67,20 @@ for host_setting in "${required_host_settings[@]}"; do
     exit 1
   }
 done
+required_secret_files=(
+  database-url
+  discord-token
+  supabase-api-key
+  bootstrap-jwt
+  bootstrap-refresh-token
+  postgres-password
+)
+for secret_file in "${required_secret_files[@]}"; do
+  [[ -s "$secret_dir/$secret_file" ]] || {
+    echo "runtime secret file is missing or empty: $secret_file" >&2
+    exit 1
+  }
+done
 
 exec 9>"$battlevive_root/deploy.lock"
 flock -n 9 || { echo "another deployment is active" >&2; exit 1; }
@@ -77,6 +92,7 @@ digest_prefix="${image_digest#sha256:}"
 release_dir="$battlevive_root/releases/$version-${digest_prefix:0:12}"
 previous_dir="" previous_image="" previous_state=""
 transition_started=false complete=false active_dir=""
+deployment_stage="state-read"
 
 compose() {
   local directory="$1"
@@ -173,6 +189,7 @@ on_exit() {
   local status=$?
   trap - EXIT
   if [[ "$complete" != true ]]; then
+    echo "BATTLEVIVE_DEPLOY_FAILURE_STAGE=$deployment_stage" >&2
     if ! rollback; then
       echo "CRITICAL: rollback failed health or digest verification" >&2
     fi
@@ -205,7 +222,9 @@ if [[ -L "$battlevive_root/current" ]]; then
   [[ -f "$previous_dir/.image" ]] && previous_image="$(<"$previous_dir/.image")"
 fi
 
+deployment_stage="bundle-download"
 aws s3 cp "s3://$operations_bucket/$bundle_key" "$archive" --region "$aws_region"
+deployment_stage="bundle-verification"
 printf '%s  %s\n' "$bundle_checksum" "$archive" | sha256sum -c - >/dev/null
 mkdir "$stage"
 if tar -tzf "$archive" | awk '$0 ~ /^\// || $0 ~ /(^|\/)\.\.($|\/)/ { exit 1 }'; then
@@ -222,22 +241,29 @@ fi
 
 exec 8>"$operations_lock"
 flock -w 60 8
+deployment_stage="predeploy-backup"
 env BATTLEVIVE_OPERATIONS_LOCK_HELD=1 \
   COMPOSE_FILE="$stage/compose.yaml" AWS_REGION_NAME="$aws_region" \
   OPERATIONS_BUCKET="$operations_bucket" HOST_ENV_FILE="$host_env" \
   "$stage/scripts/backup.sh" --type pre-deploy --verify
 transition_started=true
 if [[ -n "$previous_dir" ]]; then
+  deployment_stage="stop-previous-bot"
   image="${previous_image:-$image}"
   compose "$previous_dir" stop bot
 fi
 
 image="voxix/battlevive-bot@${image_digest}"
 active_dir="$stage"
+deployment_stage="image-pull"
 docker pull "$image"
+deployment_stage="database-start"
 compose "$stage" up -d db
+deployment_stage="migration"
 compose "$stage" run --rm migration
+deployment_stage="bot-start"
 compose "$stage" up -d bot
+deployment_stage="health"
 wait_healthy "$image" "$health_timeout" || {
   echo "deployment failed digest or health verification" >&2
   exit 1
@@ -247,6 +273,7 @@ if [[ -e "$release_dir" && "$(readlink -f "$battlevive_root/current" 2>/dev/null
   echo "refusing to replace the active release directory" >&2
   exit 1
 fi
+deployment_stage="release-promotion"
 rm -rf -- "$release_dir"
 mv "$stage" "$release_dir"
 active_dir="$release_dir"
@@ -257,6 +284,7 @@ new_state="$(jq -cn --arg version "$version" --arg image_digest "$image_digest" 
     bundle_key: $bundle_key, bundle_checksum: $bundle_checksum}')"
 printf '%s\n' "$new_state" >"$release_dir/.deployment.json"
 ln -sfn "$release_dir" "$battlevive_root/current"
+deployment_stage="state-write"
 aws ssm put-parameter --name "$state_parameter" --type String --overwrite \
   --value "$new_state" --region "$aws_region" >/dev/null
 

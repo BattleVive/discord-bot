@@ -111,15 +111,37 @@ archive="battlevive-${timestamp}.dump"
 "$COMPOSE_CLI" -f "$COMPOSE_FILE" exec -T db \
   pg_restore --list <"$workdir/$archive" >/dev/null
 
-schema_version=$(
+ledger_present=$(
   "$COMPOSE_CLI" -f "$COMPOSE_FILE" exec -T db \
     psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align \
-    --command 'SELECT COALESCE(MAX(version), 0) FROM schema_migrations;'
+    --command "SELECT to_regclass('public.schema_migrations') IS NOT NULL;"
 )
+case "$ledger_present" in
+  t)
+    schema_version=$(
+      "$COMPOSE_CLI" -f "$COMPOSE_FILE" exec -T db \
+        psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align \
+        --command 'SELECT COALESCE(MAX(version), 0) FROM schema_migrations;'
+    )
+    ledger_count=$(
+      "$COMPOSE_CLI" -f "$COMPOSE_FILE" exec -T db \
+        psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align \
+        --command 'SELECT count(*) FROM schema_migrations;'
+    )
+    ;;
+  f)
+    schema_version=0
+    ledger_count=0
+    ;;
+  *)
+    echo "unable to determine migration-ledger presence for backup" >&2
+    exit 1
+    ;;
+esac
 row_counts=$(
   "$COMPOSE_CLI" -f "$COMPOSE_FILE" exec -T db \
     psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align \
-    --command "SELECT json_build_object('schema_migrations', (SELECT count(*) FROM schema_migrations), 'guild_config', (SELECT count(*) FROM guild_config));"
+    --command "SELECT json_build_object('schema_migrations', $ledger_count, 'guild_config', (SELECT count(*) FROM guild_config));"
 )
 deployment_state=$(
   "$AWS_CLI" ssm get-parameter \

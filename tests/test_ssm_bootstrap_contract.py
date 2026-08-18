@@ -16,6 +16,7 @@ def test_deploy_document_installs_verified_host_assets_before_every_deployment()
     install_command = r'BATTLEVIVE_BUNDLE_ROOT=\"$bootstrap_dir\" \"$bootstrap_dir/install.sh\"'
     assert install_command in document
     assert document.index(install_command) < document.index('timeout 295 /usr/local/libexec/battlevive/deploy')
+    assert "BATTLEVIVE_DEPLOY_FAILURE_STAGE=host-bootstrap" in document
 
 
 def test_deploy_document_passes_the_host_deploy_contract() -> None:
