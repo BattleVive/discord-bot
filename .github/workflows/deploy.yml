@@ -84,10 +84,10 @@ jobs:
             --arg checksum "$BUNDLE_CHECKSUM" \
             --arg operations_bucket "$OPERATIONS_BUCKET" \
             --arg aws_region "$AWS_REGION" \
-            '{environment: [$environment], version: [$version], image_digest: [$digest],
-              bundle_key: [$key], bundle_checksum: [$checksum],
-              target_selector: ["Project=battlevive-bot,Environment=production"],
-              operations_bucket: [$operations_bucket], aws_region: [$aws_region]}')"
+            '{environment: [$environment], version: [$version], imageDigest: [$digest],
+              bundleKey: [$key], bundleChecksum: [$checksum],
+              targetSelector: ["Project=battlevive-bot,Environment=production"],
+              operationsBucket: [$operations_bucket], awsRegion: [$aws_region]}')"
           command_id="$(aws ssm send-command \
             --document-name battlevive-production-deploy \
             --targets "$TARGET_SELECTOR" \

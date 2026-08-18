@@ -30,6 +30,7 @@ module "production" {
   security_group_description = var.instance.security_group_description
   state_bucket_name          = var.state_bucket_name
   subnet_id                  = data.aws_subnet.production.id
+  temporary_ssh_ingress_cidr = var.temporary_ssh_ingress_cidr
   vpc_id                     = data.aws_vpc.production.id
 }
 

@@ -2,6 +2,10 @@ alert_email             = "operator@example.invalid"
 operations_bucket_suffix = "replace1234"
 state_bucket_name       = "replace-with-bootstrap-output"
 
+# Adoption only: preserve the exact current SSH CIDR until a fresh SSM session
+# succeeds, then remove this setting and require a zero-ingress plan.
+# temporary_ssh_ingress_cidr = "198.51.100.10/32"
+
 # Copy only sanitized values from infra/tools/inventory.sh. Never put secret
 # values, user data, Parameter Store contents, or credentials in this file.
 instance = {

@@ -14,8 +14,8 @@ parameter_names=(
   /battlevive/production/secrets/bootstrap-jwt
   /battlevive/production/secrets/bootstrap-refresh-token
   /battlevive/production/secrets/postgres-password
-  /battlevive/production/tokens
 )
+token_parameter_name=/battlevive/production/tokens
 
 echo "This helper sends values directly to SSM and never prints them."
 echo "Do not paste values into shell arguments, Terraform variables, or chat."
@@ -30,24 +30,12 @@ trap cleanup EXIT INT TERM
 
 for parameter_name in "${parameter_names[@]}"; do
   prompt=${parameter_name##*/}
-  if [[ $parameter_name == /battlevive/production/tokens ]]; then
-    prompt="tokens JSON (access_token and refresh_token)"
-  fi
   read -r -s -p "Enter $prompt: " secret_value
   echo
   if [[ -z $secret_value ]]; then
     echo "Refusing empty value for $parameter_name." >&2
     exit 1
   fi
-  if [[ $parameter_name == /battlevive/production/tokens ]]; then
-    if ! printf '%s' "$secret_value" | "$JQ_CLI" -e \
-      'type == "object" and (.access_token | type == "string" and length > 0) and (.refresh_token | type == "string" and length > 0)' \
-      >/dev/null; then
-      echo "Token JSON must contain non-empty access_token and refresh_token strings." >&2
-      exit 1
-    fi
-  fi
-
   request="$workdir/request.json"
   printf '%s' "$secret_value" | "$JQ_CLI" -Rn \
     --arg name "$parameter_name" \
@@ -61,5 +49,30 @@ for parameter_name in "${parameter_names[@]}"; do
   : >"$request"
   echo "Stored $parameter_name."
 done
+
+existing_token_parameter=$("$AWS_CLI" ssm describe-parameters \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION_NAME" \
+  --parameter-filters "Key=Name,Option=Equals,Values=$token_parameter_name" \
+  --query 'Parameters[0].Name' \
+  --output text)
+case $existing_token_parameter in
+  "$token_parameter_name")
+    echo "Retained existing runtime token state."
+    ;;
+  None)
+    "$AWS_CLI" ssm put-parameter \
+      --profile "$AWS_PROFILE_NAME" \
+      --region "$AWS_REGION_NAME" \
+      --name "$token_parameter_name" \
+      --type SecureString \
+      --value '{}' >/dev/null
+    echo "Initialized empty runtime token state."
+    ;;
+  *)
+    echo "Unable to determine runtime token parameter state." >&2
+    exit 1
+    ;;
+esac
 
 echo "All runtime parameters were stored. Run render-secrets on the host before deployment."

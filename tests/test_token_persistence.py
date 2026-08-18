@@ -167,11 +167,16 @@ def test_ssm_token_store_loads_valid_secure_string() -> None:
     )
 
 
+def test_ssm_token_store_treats_empty_json_object_as_uninitialized() -> None:
+    store = SSMTokenStore("/tokens", client=FakeSSMClient(value="{}"))
+
+    assert store.load() is None
+
+
 @pytest.mark.parametrize(
     "value",
     [
         "not-json",
-        "{}",
         '[]',
         '{"access_token":"access","refresh_token":""}',
     ],

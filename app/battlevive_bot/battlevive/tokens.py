@@ -132,7 +132,7 @@ class SSMTokenStore:
             client = boto3.client("ssm", region_name=region_name)
         self._client = client
 
-    def load(self) -> TokenPair:
+    def load(self) -> TokenPair | None:
         try:
             response = self._client.get_parameter(
                 Name=self.parameter_name,
@@ -149,6 +149,8 @@ class SSMTokenStore:
             record = json.loads(parameter["Value"])
             if not isinstance(record, dict):
                 raise ValueError
+            if record == {}:
+                return None
             tokens = TokenPair.from_values(
                 record.get("access_token"), record.get("refresh_token")
             )

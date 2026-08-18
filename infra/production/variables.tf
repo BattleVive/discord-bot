@@ -70,3 +70,14 @@ variable "create_imports" {
   type        = bool
   default     = false
 }
+
+variable "temporary_ssh_ingress_cidr" {
+  description = "Temporary adoption-only SSH CIDR. Set back to null immediately after proving a new SSM session."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.temporary_ssh_ingress_cidr == null || can(cidrnetmask(var.temporary_ssh_ingress_cidr))
+    error_message = "temporary_ssh_ingress_cidr must be null or a valid IPv4 CIDR."
+  }
+}

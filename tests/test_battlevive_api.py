@@ -13,6 +13,7 @@ import pytest
 from battlevive_bot.battlevive.client import BattleviveClient
 from battlevive_bot.battlevive.supabase import SupabaseTransport
 from battlevive_bot.battlevive.tokens import TokenPair
+from battlevive_bot.battlevive.tokens import SSMTokenStore
 from battlevive_bot.battlevive.tokens import TokenStore
 from tests.factories import lobby_payload
 from tests.factories import lobby_captain_payload
@@ -269,6 +270,31 @@ async def test_missing_or_invalid_state_falls_back_to_bootstrap(
         token_path.write_text(contents, encoding="utf-8")
     transport = FakeTransport(payloads={"users": [user_payload()]})
     client = make_client(tmp_path, transport, token_path=token_path)
+
+    await client.get_users()
+
+    assert transport.get_calls == [("users", "bootstrap-access")]
+
+
+@pytest.mark.asyncio
+async def test_uninitialized_ssm_state_falls_back_to_bootstrap(
+    tmp_path: Path,
+) -> None:
+    class EmptySSMClient:
+        def get_parameter(self, **kwargs: object) -> dict[str, object]:
+            assert kwargs == {"Name": "/tokens", "WithDecryption": True}
+            return {"Parameter": {"Type": "SecureString", "Value": "{}"}}
+
+    transport = FakeTransport(payloads={"users": [user_payload()]})
+    client = BattleviveClient(
+        bootstrap_access_token="bootstrap-access",
+        bootstrap_refresh_token="bootstrap-refresh",
+        token_path=tmp_path / "unused.json",
+        supabase_url="https://supabase.test",
+        supabase_api_key="api-key",
+        transport=transport,
+        token_store=SSMTokenStore("/tokens", client=EmptySSMClient()),
+    )
 
     await client.get_users()
 

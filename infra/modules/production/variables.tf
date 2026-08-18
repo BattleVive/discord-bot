@@ -20,4 +20,14 @@ variable "security_group_name" { type = string }
 variable "security_group_description" { type = string }
 variable "state_bucket_name" { type = string }
 variable "subnet_id" { type = string }
+variable "temporary_ssh_ingress_cidr" {
+  description = "Temporary existing SSH CIDR retained only until a fresh SSM session succeeds; null is the required steady state."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.temporary_ssh_ingress_cidr == null || can(cidrnetmask(var.temporary_ssh_ingress_cidr))
+    error_message = "temporary_ssh_ingress_cidr must be null or a valid IPv4 CIDR."
+  }
+}
 variable "vpc_id" { type = string }

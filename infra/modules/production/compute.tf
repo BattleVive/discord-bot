@@ -3,7 +3,18 @@ resource "aws_security_group" "bot" {
   description = var.security_group_description
   vpc_id      = var.vpc_id
 
-  # Intentionally no ingress blocks.
+  ingress = var.temporary_ssh_ingress_cidr == null ? [] : [{
+    cidr_blocks      = [var.temporary_ssh_ingress_cidr]
+    description      = "TEMPORARY: preserve recovery access until a fresh SSM session succeeds"
+    from_port        = 22
+    ipv6_cidr_blocks = []
+    prefix_list_ids  = []
+    protocol         = "tcp"
+    security_groups  = []
+    self             = false
+    to_port          = 22
+  }]
+
   egress {
     description = "HTTPS, image registry, Discord, Supabase and AWS APIs"
     from_port   = 0
@@ -34,7 +45,7 @@ resource "aws_instance" "bot" {
   metadata_options {
     http_endpoint               = "enabled"
     http_protocol_ipv6          = "disabled"
-    http_put_response_hop_limit = 1
+    http_put_response_hop_limit = 2
     http_tokens                 = "required"
     instance_metadata_tags      = "disabled"
   }

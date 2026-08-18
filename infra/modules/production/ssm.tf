@@ -66,14 +66,14 @@ resource "aws_ssm_document" "deploy" {
     schemaVersion = "2.2"
     description   = "Deploy an immutable Battlevive release bundle"
     parameters = {
-      environment       = { type = "String", allowedValues = ["production"], interpolationType = "ENV_VAR" }
-      version           = { type = "String", allowedPattern = "^[0-9]+\\.[0-9]+\\.[0-9]+$", interpolationType = "ENV_VAR" }
-      image_digest      = { type = "String", allowedPattern = "^sha256:[a-f0-9]{64}$", interpolationType = "ENV_VAR" }
-      bundle_key        = { type = "String", allowedPattern = "^releases/[A-Za-z0-9._/-]+$", interpolationType = "ENV_VAR" }
-      bundle_checksum   = { type = "String", allowedPattern = "^[a-f0-9]{64}$", interpolationType = "ENV_VAR" }
-      target_selector   = { type = "String", interpolationType = "ENV_VAR" }
-      operations_bucket = { type = "String", default = aws_s3_bucket.operations.id, allowedPattern = "^[a-z0-9.-]+$", interpolationType = "ENV_VAR" }
-      aws_region        = { type = "String", default = var.aws_region, allowedValues = ["eu-north-1"], interpolationType = "ENV_VAR" }
+      environment      = { type = "String", allowedValues = ["production"], interpolationType = "ENV_VAR" }
+      version          = { type = "String", allowedPattern = "^[0-9]+\\.[0-9]+\\.[0-9]+$", interpolationType = "ENV_VAR" }
+      imageDigest      = { type = "String", allowedPattern = "^sha256:[a-f0-9]{64}$", interpolationType = "ENV_VAR" }
+      bundleKey        = { type = "String", allowedPattern = "^releases/[A-Za-z0-9._/-]+$", interpolationType = "ENV_VAR" }
+      bundleChecksum   = { type = "String", allowedPattern = "^[a-f0-9]{64}$", interpolationType = "ENV_VAR" }
+      targetSelector   = { type = "String", interpolationType = "ENV_VAR" }
+      operationsBucket = { type = "String", default = aws_s3_bucket.operations.id, allowedPattern = "^[a-z0-9.-]+$", interpolationType = "ENV_VAR" }
+      awsRegion        = { type = "String", default = var.aws_region, allowedValues = ["eu-north-1"], interpolationType = "ENV_VAR" }
     }
     mainSteps = [{
       action = "aws:runShellScript"
@@ -85,8 +85,8 @@ resource "aws_ssm_document" "deploy" {
         timeoutSeconds = "330"
         runCommand = [
           "set -eu",
-          "export OPERATIONS_BUCKET=\"$SSM_operations_bucket\" AWS_REGION=\"$SSM_aws_region\" BATTLEVIVE_OPERATIONS_LOCK=/run/lock/battlevive-operations.lock",
-          "timeout 295 /usr/local/libexec/battlevive/deploy --environment \"$SSM_environment\" --version \"$SSM_version\" --image-digest \"$SSM_image_digest\" --bundle-key \"$SSM_bundle_key\" --bundle-checksum \"$SSM_bundle_checksum\" --target-selector \"$SSM_target_selector\"",
+          "export OPERATIONS_BUCKET=\"$SSM_operationsBucket\" AWS_REGION=\"$SSM_awsRegion\" BATTLEVIVE_OPERATIONS_LOCK=/run/lock/battlevive-operations.lock",
+          "timeout 295 /usr/local/libexec/battlevive/deploy --environment \"$SSM_environment\" --version \"$SSM_version\" --image-digest \"$SSM_imageDigest\" --bundle-key \"$SSM_bundleKey\" --bundle-checksum \"$SSM_bundleChecksum\" --target-selector \"$SSM_targetSelector\"",
         ]
       }
     }]
