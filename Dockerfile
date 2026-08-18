@@ -15,7 +15,7 @@ FROM scratch AS python-dependencies
 COPY app/requirements.lock /requirements.lock
 
 
-FROM python:3.14.6-alpine3.24@sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92 AS builder
+FROM python:3.14.7-alpine3.24@sha256:05b2b8b732ecd268fee8727a369f936f022d1321b59befd13c30ede22769dcdc AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_COMPILE=1
@@ -32,7 +32,7 @@ RUN --mount=type=bind,from=python-dependencies,source=/requirements.lock,target=
         -r /tmp/requirements.lock
 
 
-FROM python:3.14.6-alpine3.24@sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92
+FROM python:3.14.7-alpine3.24@sha256:05b2b8b732ecd268fee8727a369f936f022d1321b59befd13c30ede22769dcdc
 
 RUN --mount=type=bind,from=runtime-apk-dependencies,source=/apk-runtime-deps.txt,target=/tmp/apk-runtime-deps.txt,ro \
     xargs apk add --no-cache < /tmp/apk-runtime-deps.txt \
