@@ -264,7 +264,9 @@ def test_predeploy_backup_validates_and_uploads_archive_sidecars(tmp_path: Path)
 case "$*" in
   *'pg_dump'*) printf 'PGDMP-test-archive' ;;
   *'pg_restore --list'*) cat >/dev/null ;;
+  *'to_regclass('*) printf 't\\n' ;;
   *'MAX(version)'*) printf '9\\n' ;;
+  *'count(*) FROM schema_migrations'*) printf '9\\n' ;;
   *'json_build_object'*) printf '{"schema_migrations":9,"guild_config":4}\\n' ;;
   *) exit 12 ;;
 esac
@@ -303,6 +305,62 @@ esac
     assert "backups/predeploy/" in calls
     assert calls.count("s3 cp") == 3
     assert "--metric-name BackupSuccess --value 1" in calls
+
+
+def test_predeploy_backup_supports_existing_database_without_migration_ledger(
+    tmp_path: Path,
+) -> None:
+    fake_compose = tmp_path / "compose"
+    executable(
+        fake_compose,
+        """#!/bin/sh
+case "$*" in
+  *'pg_dump'*) printf 'PGDMP-existing-schema' ;;
+  *'pg_restore --list'*) cat >/dev/null ;;
+  *'to_regclass('*) printf 'f\\n' ;;
+  *'MAX(version)'*|*'count(*) FROM schema_migrations'*)
+    echo 'schema_migrations is unavailable before first migration' >&2
+    exit 42 ;;
+  *'json_build_object'*) printf '{"schema_migrations":0,"guild_config":4}\\n' ;;
+  *) exit 12 ;;
+esac
+""",
+    )
+    manifest = tmp_path / "predeploy.manifest.json"
+    aws_log = tmp_path / "aws.log"
+    fake_aws = tmp_path / "aws"
+    executable(
+        fake_aws,
+        """#!/bin/sh
+printf '%s\\n' "$*" >>"$AWS_LOG"
+case "$*" in
+  *'/deployment/state'*) printf '{"version":"0.0.0"}\\n' ;;
+  *'s3 cp'*'.manifest.json'*) cp "$3" "$MANIFEST" ;;
+esac
+""",
+    )
+
+    result = run_script(
+        ROOT / "infra" / "host" / "scripts" / "backup.sh",
+        "--type",
+        "pre-deploy",
+        "--verify",
+        env={
+            "AWS_CLI": str(fake_aws),
+            "AWS_LOG": str(aws_log),
+            "BATTLEVIVE_COMPOSE_CLI": str(fake_compose),
+            "OPERATIONS_BUCKET": "test-operations-bucket",
+            "BACKUP_TMP_ROOT": str(tmp_path),
+            "MANIFEST": str(manifest),
+            "ALLOW_NON_ROOT_FOR_TESTS": "1",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    recorded = json.loads(manifest.read_text())
+    assert recorded["schema_version"] == 0
+    assert recorded["row_counts"] == {"schema_migrations": 0, "guild_config": 4}
+    assert "backups/predeploy/" in aws_log.read_text()
 
 
 def test_backup_failure_emits_failure_metric_and_returns_nonzero(tmp_path: Path) -> None:
