@@ -86,6 +86,23 @@ resource "aws_ssm_document" "deploy" {
         runCommand = [
           "set -eu",
           "export OPERATIONS_BUCKET=\"$SSM_operationsBucket\" AWS_REGION=\"$SSM_awsRegion\" BATTLEVIVE_OPERATIONS_LOCK=/run/lock/battlevive-operations.lock",
+          "if ! test -x /usr/local/libexec/battlevive/deploy; then",
+          "  bootstrap_dir=$(mktemp -d /tmp/battlevive-bootstrap.XXXXXX)",
+          "  bootstrap_archive=\"$bootstrap_dir/bundle.tar.gz\"",
+          "  trap 'rm -rf -- \"$bootstrap_dir\"' EXIT",
+          "  aws s3 cp \"s3://$SSM_operationsBucket/$SSM_bundleKey\" \"$bootstrap_archive\" --region \"$SSM_awsRegion\"",
+          "  printf '%s  %s\\n' \"$SSM_bundleChecksum\" \"$bootstrap_archive\" | sha256sum -c - >/dev/null",
+          "  if tar -tzf \"$bootstrap_archive\" | awk '$0 ~ /^\\// || $0 ~ /(^|\\/)\\.\\.($|\\/)/ { exit 1 }'; then",
+          "    tar -xzf \"$bootstrap_archive\" --no-same-owner -C \"$bootstrap_dir\"",
+          "  else",
+          "    echo 'bootstrap bundle contains an unsafe path' >&2",
+          "    exit 1",
+          "  fi",
+          "  test -x \"$bootstrap_dir/install.sh\"",
+          "  BATTLEVIVE_BUNDLE_ROOT=\"$bootstrap_dir\" \"$bootstrap_dir/install.sh\"",
+          "  trap - EXIT",
+          "  rm -rf -- \"$bootstrap_dir\"",
+          "fi",
           "timeout 295 /usr/local/libexec/battlevive/deploy --environment \"$SSM_environment\" --version \"$SSM_version\" --image-digest \"$SSM_imageDigest\" --bundle-key \"$SSM_bundleKey\" --bundle-checksum \"$SSM_bundleChecksum\" --target-selector \"$SSM_targetSelector\"",
         ]
       }
