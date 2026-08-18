@@ -92,7 +92,7 @@ jobs:
           {
             echo '### Terraform production plan'
             echo '```terraform'
-            sed -n '/^Terraform will perform/,/^Plan:/p' infra/production/plan.txt
+            sed -n '/^Terraform will perform/,/^Plan:/p' plan.txt
             echo '```'
           } >>"$GITHUB_STEP_SUMMARY"
 
