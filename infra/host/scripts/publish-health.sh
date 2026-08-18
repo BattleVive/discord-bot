@@ -3,7 +3,7 @@
 set -euo pipefail
 
 AWS_CLI=${AWS_CLI:-aws}
-DOCKER_CLI=${DOCKER_CLI:-docker}
+COMPOSE_CLI=${BATTLEVIVE_COMPOSE_CLI:-/usr/local/libexec/battlevive/compose}
 JQ_CLI=${JQ_CLI:-jq}
 AWS_REGION_NAME=${AWS_REGION_NAME:-eu-north-1}
 SYSTEMCTL_CLI=${SYSTEMCTL_CLI:-systemctl}
@@ -13,7 +13,7 @@ now=$(date -u +%s)
 healthy=0
 host_telemetry=0
 
-if payload=$("$DOCKER_CLI" compose -f "$COMPOSE_FILE" exec -T bot \
+if payload=$("$COMPOSE_CLI" -f "$COMPOSE_FILE" exec -T bot \
   cat /tmp/battlevive-health.json 2>/dev/null); then
   if printf '%s' "$payload" | "$JQ_CLI" -e \
     --argjson now "$now" \

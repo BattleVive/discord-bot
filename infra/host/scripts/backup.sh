@@ -45,7 +45,7 @@ if [[ ${BATTLEVIVE_OPERATIONS_LOCK_HELD:-0} != 1 ]]; then
 fi
 
 AWS_CLI=${AWS_CLI:-aws}
-DOCKER_CLI=${DOCKER_CLI:-docker}
+COMPOSE_CLI=${BATTLEVIVE_COMPOSE_CLI:-/usr/local/libexec/battlevive/compose}
 JQ_CLI=${JQ_CLI:-jq}
 AWS_REGION_NAME=${AWS_REGION_NAME:-eu-north-1}
 COMPOSE_FILE=${COMPOSE_FILE:-/opt/battlevive/current/compose.yaml}
@@ -104,20 +104,20 @@ workdir=$(mktemp -d "$BACKUP_TMP_ROOT/.backup.XXXXXX")
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 archive="battlevive-${timestamp}.dump"
 
-"$DOCKER_CLI" compose -f "$COMPOSE_FILE" exec -T db \
+"$COMPOSE_CLI" -f "$COMPOSE_FILE" exec -T db \
   pg_dump --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   --format=custom --compress=9 --no-owner --no-privileges >"$workdir/$archive"
 
-"$DOCKER_CLI" compose -f "$COMPOSE_FILE" exec -T db \
+"$COMPOSE_CLI" -f "$COMPOSE_FILE" exec -T db \
   pg_restore --list <"$workdir/$archive" >/dev/null
 
 schema_version=$(
-  "$DOCKER_CLI" compose -f "$COMPOSE_FILE" exec -T db \
+  "$COMPOSE_CLI" -f "$COMPOSE_FILE" exec -T db \
     psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align \
     --command 'SELECT COALESCE(MAX(version), 0) FROM schema_migrations;'
 )
 row_counts=$(
-  "$DOCKER_CLI" compose -f "$COMPOSE_FILE" exec -T db \
+  "$COMPOSE_CLI" -f "$COMPOSE_FILE" exec -T db \
     psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align \
     --command "SELECT json_build_object('schema_migrations', (SELECT count(*) FROM schema_migrations), 'guild_config', (SELECT count(*) FROM guild_config));"
 )

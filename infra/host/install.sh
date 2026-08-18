@@ -28,6 +28,7 @@ install -d -m 0750 -o "$RUNTIME_UID" -g "$RUNTIME_GID" "$(prefix /var/lib/battle
 install -d -m 0700 -o "$POSTGRES_UID" -g "$POSTGRES_GID" "$(prefix /var/lib/battlevive/postgresql)"
 install -d -m 0755 "$(prefix /opt/battlevive/releases)"
 install -m 0755 "$source_dir/bin/render-secrets.sh" "$(prefix /usr/local/libexec/battlevive/render-secrets)"
+install -m 0755 "$source_dir/bin/compose" "$(prefix /usr/local/libexec/battlevive/compose)"
 install -m 0755 "$source_dir/scripts/deploy.sh" "$(prefix /usr/local/libexec/battlevive/deploy)"
 install -m 0755 "$source_dir/scripts/backup.sh" "$(prefix /usr/local/libexec/battlevive/backup)"
 install -m 0755 "$source_dir/scripts/restore-verify.sh" "$(prefix /usr/local/libexec/battlevive/restore-verify)"

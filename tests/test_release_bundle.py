@@ -14,6 +14,7 @@ def create_source(root: Path):
         "docker-compose.yml": "services: {}\n",
         "docker-compose.aws.yml": "services: {}\n",
         "scripts/deploy/deploy.sh": "#!/bin/sh\n",
+        "infra/host/bin/compose": "#!/bin/sh\n",
         "infra/host/scripts/backup.sh": "#!/bin/sh\n",
         "infra/host/scripts/restore-verify.sh": "#!/bin/sh\n",
         "infra/host/systemd/battlevive.service": "[Unit]\n",
@@ -45,6 +46,7 @@ def test_bundle_normalizes_compose_and_includes_verified_host_assets(tmp_path):
             "compose.yaml",
             "compose.aws.yaml",
             "scripts/deploy.sh",
+            "bin/compose",
             "scripts/backup.sh",
             "scripts/restore-verify.sh",
             "systemd/battlevive.service",
@@ -67,3 +69,19 @@ def test_bundle_refuses_missing_required_operational_asset(tmp_path):
     )
     assert result.returncode != 0
     assert "infra/host/scripts/backup.sh" in result.stderr
+
+
+def test_bundle_refuses_missing_required_compose_launcher(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    create_source(source)
+    (source / "infra/host/bin/compose").unlink()
+
+    result = subprocess.run(
+        [sys.executable, str(PACKER), "--root", str(source), "--output", str(tmp_path / "x.tgz")],
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode != 0
+    assert "infra/host/bin/compose" in result.stderr
