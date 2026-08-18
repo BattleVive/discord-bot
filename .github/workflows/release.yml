@@ -3,12 +3,18 @@ name: Stable Release
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing stable release tag to resume
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event.release.tag_name }}
+  group: release-${{ github.event.release.tag_name || inputs.release_tag }}
   cancel-in-progress: false
 
 jobs:
@@ -24,14 +30,14 @@ jobs:
       - name: Check out release history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || inputs.release_tag }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Validate tag, target and main ancestry
         id: release
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
         run: |
           [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
             echo "Only stable vMAJOR.MINOR.PATCH releases are publishable" >&2
@@ -56,7 +62,7 @@ jobs:
     permissions:
       checks: write
       contents: read
-    uses: ./.github/workflows/tests.yml
+    uses: ./.github/workflows/quality.yml
     with:
       checkout_ref: ${{ needs.validate.outputs.sha }}
 
