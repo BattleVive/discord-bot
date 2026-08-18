@@ -13,6 +13,7 @@ import pytest
 from battlevive_bot.battlevive.client import BattleviveClient
 from battlevive_bot.battlevive.supabase import SupabaseTransport
 from battlevive_bot.battlevive.tokens import TokenPair
+from battlevive_bot.battlevive.tokens import SSMTokenStore
 from battlevive_bot.battlevive.tokens import TokenStore
 from tests.factories import lobby_payload
 from tests.factories import lobby_captain_payload
@@ -276,6 +277,31 @@ async def test_missing_or_invalid_state_falls_back_to_bootstrap(
 
 
 @pytest.mark.asyncio
+async def test_uninitialized_ssm_state_falls_back_to_bootstrap(
+    tmp_path: Path,
+) -> None:
+    class EmptySSMClient:
+        def get_parameter(self, **kwargs: object) -> dict[str, object]:
+            assert kwargs == {"Name": "/tokens", "WithDecryption": True}
+            return {"Parameter": {"Type": "SecureString", "Value": "{}"}}
+
+    transport = FakeTransport(payloads={"users": [user_payload()]})
+    client = BattleviveClient(
+        bootstrap_access_token="bootstrap-access",
+        bootstrap_refresh_token="bootstrap-refresh",
+        token_path=tmp_path / "unused.json",
+        supabase_url="https://supabase.test",
+        supabase_api_key="api-key",
+        transport=transport,
+        token_store=SSMTokenStore("/tokens", client=EmptySSMClient()),
+    )
+
+    await client.get_users()
+
+    assert transport.get_calls == [("users", "bootstrap-access")]
+
+
+@pytest.mark.asyncio
 async def test_successful_refresh_updates_memory_and_persists_immediately(
     tmp_path: Path,
 ) -> None:
@@ -334,6 +360,30 @@ async def test_persistence_failure_keeps_rotated_credentials_in_memory(
     await client.get_users()
 
     assert transport.get_calls == [("users", "rotated-access")]
+    assert client.persistence_degraded is True
+
+
+@pytest.mark.asyncio
+async def test_successful_persistence_recovers_degraded_state(tmp_path: Path) -> None:
+    transport = FakeTransport(
+        payloads={"users": [user_payload()]},
+        refreshed_tokens=TokenPair("rotated-access", "rotated-refresh"),
+    )
+    client = make_client(tmp_path, transport)
+    saves = 0
+
+    def save(tokens: TokenPair) -> None:
+        nonlocal saves
+        saves += 1
+        if saves == 1:
+            raise OSError("temporarily unavailable")
+
+    client._token_store.save = save
+
+    await client.refresh_credentials()
+    assert client.persistence_degraded is True
+    await client.refresh_credentials()
+    assert client.persistence_degraded is False
 
 
 class RetryTransport(FakeTransport):

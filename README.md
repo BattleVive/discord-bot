@@ -33,7 +33,7 @@ cp .env.example .env
 ./init.sh
 ```
 
-## Running in production
+## Running the published image
 
 From the repository root after `utils/init.sh` completes:
 
@@ -56,20 +56,28 @@ The default Compose file uses the public
 `latest` and immutable `sha-<full-commit-sha>` tags support Linux AMD64 and
 ARM64.
 
-## Local development
+## Local source build
 
-Build the source tree and start the local image with the development Compose
-file:
+`docker-compose.dev.yml` is an override, not a standalone Compose file. It
+keeps the database, volumes, networks, health checks, and migration service
+from `docker-compose.yml`, then builds the bot source once as
+`battlevive-bot:local` instead of pulling it from Docker Hub.
+
+After creating `utils/.env`, run both files together from the repository root
+with rootless Podman:
 
 ```bash
-docker compose -f docker-compose.dev.yml up -d --build
+podman compose --env-file utils/.env \
+  -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
-or:
-
-```bash
-podman compose -f docker-compose.dev.yml up -d --build
-```
+Do not run `docker-compose.dev.yml` by itself. The `--env-file` option supplies
+the database interpolation values; the override passes the same file into the
+bot and migration containers. Set `BATTLEVIVE_ENV_FILE` to use a different
+local env-file path. `utils/init.sh` writes the bootstrap pair to the local
+env-file; the running bot owns and rotates its persistent pair at
+`app/data/bot/battlevive_tokens.json`. The local override uses Podman's `:U`
+mount option to give that fixed non-root runtime identity ownership of its data.
 
 For a standalone local image build:
 

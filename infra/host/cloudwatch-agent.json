@@ -1,0 +1,45 @@
+{
+  "agent": {
+    "metrics_collection_interval": 60,
+    "run_as_user": "root"
+  },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/battlevive-system.log",
+            "log_group_name": "/battlevive/production/system",
+            "log_stream_name": "{instance_id}/messages"
+          }
+        ]
+      }
+    }
+  },
+  "metrics": {
+    "append_dimensions": {
+      "InstanceId": "${aws:InstanceId}"
+    },
+    "aggregation_dimensions": [["InstanceId"]],
+    "metrics_collected": {
+      "disk": {
+        "measurement": ["used_percent", "inodes_free", "inodes_used", "inodes_total"],
+        "drop_original_metrics": ["used_percent", "inodes_free", "inodes_used", "inodes_total"],
+        "metrics_collection_interval": 60,
+        "resources": ["/"]
+      },
+      "mem": {
+        "measurement": ["used_percent", "used"],
+        "metrics_collection_interval": 60
+      },
+      "processes": {
+        "measurement": ["running", "blocked", "dead"],
+        "metrics_collection_interval": 60
+      },
+      "swap": {
+        "measurement": ["used_percent", "used"],
+        "metrics_collection_interval": 60
+      }
+    }
+  }
+}

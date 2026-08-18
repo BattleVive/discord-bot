@@ -18,10 +18,15 @@ from PIL import Image
 from . import db
 from .active_lobbies import ActiveLobbyService
 from .battlevive import BattleviveClient
+from .battlevive.tokens import build_token_store
 from .command_access import BattleviveCommandTree
 from .command_access import CommandAccessService
 from .db import close_pool
 from .db import init_pool
+from .db import get_pool
+from .health import database_is_ready
+from .health import HealthState
+from .health import required_services_ready
 from .identity import IdentityStatus
 from .identity import resolve_member_identity
 from .images import build_card
@@ -41,6 +46,8 @@ from .settings import ASSETS_DIR
 from .settings import BATTLEVIVE_BOOTSTRAP_JWT
 from .settings import BATTLEVIVE_BOOTSTRAP_REFRESH_TOKEN
 from .settings import BATTLEVIVE_TOKEN_PATH
+from .settings import BATTLEVIVE_TOKEN_SSM_PARAMETER
+from .settings import BATTLEVIVE_TOKEN_STORE
 from .settings import BATTLEVIVE_URL
 from .settings import DATABASE_URL
 from .settings import DATA_DIR
@@ -49,6 +56,7 @@ from .settings import DISCORD_BOT_TOKEN
 from .settings import LEADERBOARD_MAX_ENTRIES
 from .settings import SUPABASE_API_KEY
 from .settings import SUPABASE_URL
+from .settings import AWS_REGION
 from .settings import validate_runtime_settings
 
 
@@ -58,7 +66,14 @@ battlevive_client = BattleviveClient(
     token_path=BATTLEVIVE_TOKEN_PATH,
     supabase_url=SUPABASE_URL,
     supabase_api_key=SUPABASE_API_KEY,
+    token_store=build_token_store(
+        kind=BATTLEVIVE_TOKEN_STORE,
+        path=BATTLEVIVE_TOKEN_PATH,
+        parameter_name=BATTLEVIVE_TOKEN_SSM_PARAMETER,
+        region_name=AWS_REGION,
+    ),
 )
+health_state = HealthState()
 
 battlevive_users: list[User] = []
 lobbies: list[Lobby] = []
@@ -146,6 +161,36 @@ async def refresh_frequently_changing_data_error(error: Exception) -> None:
         error,
     )
 
+
+@tasks.loop(seconds=30)
+async def publish_health() -> None:
+    try:
+        database_ready = await database_is_ready(get_pool())
+    except RuntimeError:
+        database_ready = False
+    services_ready = required_services_ready(
+        (
+            revalidate_tokens.is_running(),
+            refresh_infrequently_changing_data.is_running(),
+            refresh_frequently_changing_data.is_running(),
+            bot.leaderboard_service is not None
+            and bot.leaderboard_service.is_running(),
+            bot.active_lobby_service is not None
+            and bot.active_lobby_service.is_running(),
+        )
+    )
+    health_state.write(
+        discord_ready=bot.is_ready(),
+        database_ready=database_ready,
+        services_ready=services_ready,
+        token_persistence_ready=not battlevive_client.persistence_degraded,
+    )
+
+
+@publish_health.error
+async def publish_health_error(error: Exception) -> None:
+    logger.error("Health heartbeat task stopped due to an unhandled error: %s", error)
+
 # Bot setup
 intents = discord.Intents.default()
 intents.members = True
@@ -158,6 +203,8 @@ class BattleviveBot(commands.Bot):
     refresh_coordinator: RefreshCoordinator = refresh_coordinator
 
     async def close(self) -> None:
+        if publish_health.is_running():
+            publish_health.cancel()
         if revalidate_tokens.is_running():
             revalidate_tokens.cancel()
         if refresh_infrequently_changing_data.is_running():
@@ -212,6 +259,7 @@ async def setup_hook() -> None:
     revalidate_tokens.start()
     refresh_infrequently_changing_data.start()
     refresh_frequently_changing_data.start()
+    publish_health.start()
 
 
 @bot.event

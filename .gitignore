@@ -7,6 +7,8 @@ utils/playwright/.auth/*
 #logs cache and runtime data
 *.log
 app/data/*.json
+app/data/bot/
+app/data/postgresql/
 __pycache__
 .pytest_cache
 app/data/*.png

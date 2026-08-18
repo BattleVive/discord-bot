@@ -1,0 +1,298 @@
+name: Stable Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate stable release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.release.outputs.sha }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Check out release history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate tag, target and main ancestry
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo "Only stable vMAJOR.MINOR.PATCH releases are publishable" >&2
+            exit 1
+          }
+          git fetch --no-tags origin main
+          sha="$(git rev-list -n 1 "$RELEASE_TAG")"
+          test "$(git rev-parse HEAD)" = "$sha"
+          git merge-base --is-ancestor "$sha" origin/main || {
+            echo "Release commit is not an ancestor of main" >&2
+            exit 1
+          }
+          {
+            echo "sha=$sha"
+            echo "tag=$RELEASE_TAG"
+            echo "version=${RELEASE_TAG#v}"
+          } >>"$GITHUB_OUTPUT"
+
+  quality:
+    name: Exact release quality suite
+    needs: validate
+    permissions:
+      checks: write
+      contents: read
+    uses: ./.github/workflows/tests.yml
+    with:
+      checkout_ref: ${{ needs.validate.outputs.sha }}
+
+  plan:
+    name: Plan tags and promotion
+    needs: [validate, quality]
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      tags: ${{ steps.plan.outputs.tags }}
+      tags_json: ${{ steps.plan.outputs.tags_json }}
+      deploy: ${{ steps.plan.outputs.deploy }}
+      reuse_source: ${{ steps.plan.outputs.reuse_source }}
+    steps:
+      - name: Check out exact release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Calculate release plan
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          sha_tag="sha-$RELEASE_SHA"
+          release_tags="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' \
+            | jq -Rsc 'split("\n") | map(select(length > 0))')"
+          state_error="$(mktemp)"
+          if production_state="$(aws ssm get-parameter \
+            --name /battlevive/production/deployment/state \
+            --query Parameter.Value --output text 2>"$state_error")"; then
+            production_version="$(jq -er '
+              if type == "object" and
+                 (.version | type == "string" and test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"))
+              then .version else error("malformed production deployment state") end
+            ' <<<"$production_state")"
+            production_json="$(jq -cn --arg version "$production_version" '$version')"
+          elif grep -q ParameterNotFound "$state_error"; then
+            production_json=null
+          else
+            cat "$state_error" >&2
+            echo "Unable to read authorized production deployment state" >&2
+            exit 1
+          fi
+          rm -f "$state_error"
+          inspect_revision() {
+            if revision="$(scripts/release/inspect-tag.sh "voxix/battlevive-bot:$1")"; then
+              printf '%s\n' "$revision"
+            elif [[ $? -eq 4 ]]; then
+              printf '\n'
+            else
+              return 1
+            fi
+          }
+          exact_revision="$(inspect_revision "$version")"
+          sha_revision="$(inspect_revision "$sha_tag")"
+          existing="$(jq -cn \
+            --arg exact "$version" --arg exact_revision "$exact_revision" \
+            --arg sha_tag "$sha_tag" --arg sha_revision "$sha_revision" \
+            '{} + (if $exact_revision != "" then {($exact): $exact_revision} else {} end) +
+             (if $sha_revision != "" then {($sha_tag): $sha_revision} else {} end)')"
+          payload="$(jq -cn \
+            --arg tag "$RELEASE_TAG" --arg sha "$RELEASE_SHA" \
+            --argjson production_version "$production_json" \
+            --argjson releases "$release_tags" --argjson existing_tags "$existing" \
+            '{tag: $tag, sha: $sha, releases: $releases,
+              production_version: $production_version, existing_tags: $existing_tags}')"
+          plan="$(python scripts/release/plan.py <<<"$payload")"
+          tags_json="$(jq -c '.tags' <<<"$plan")"
+          {
+            echo 'tags<<EOF'
+            jq -r '.tags[] | "voxix/battlevive-bot:" + .' <<<"$plan"
+            echo EOF
+            echo "tags_json=$tags_json"
+            echo "deploy=$(jq -r '.deploy' <<<"$plan")"
+          } >>"$GITHUB_OUTPUT"
+          if [[ -n "$exact_revision" ]]; then
+            echo "reuse_source=voxix/battlevive-bot:$version" >>"$GITHUB_OUTPUT"
+          elif [[ -n "$sha_revision" ]]; then
+            echo "reuse_source=voxix/battlevive-bot:$sha_tag" >>"$GITHUB_OUTPUT"
+          else
+            echo "reuse_source=" >>"$GITHUB_OUTPUT"
+          fi
+
+  publish:
+    name: Publish immutable multi-platform image
+    needs: [validate, plan]
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image_digest: ${{ steps.result.outputs.image_digest }}
+      bundle_key: ${{ steps.bundle.outputs.bundle_key }}
+      bundle_checksum: ${{ steps.bundle.outputs.bundle_checksum }}
+    steps:
+      - name: Check out exact release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build once and publish
+        if: ${{ needs.plan.outputs.reuse_source == '' }}
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ needs.plan.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+            org.opencontainers.image.revision=${{ needs.validate.outputs.sha }}
+          annotations: |
+            index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            index:org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+            index:org.opencontainers.image.revision=${{ needs.validate.outputs.sha }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=release
+          cache-to: type=gha,mode=max,scope=release
+
+      - name: Resume publication from reusable immutable image
+        if: ${{ needs.plan.outputs.reuse_source != '' }}
+        env:
+          SOURCE: ${{ needs.plan.outputs.reuse_source }}
+          TAGS_JSON: ${{ needs.plan.outputs.tags_json }}
+        run: |
+          args=()
+          while IFS= read -r tag; do
+            args+=(--tag "voxix/battlevive-bot:$tag")
+          done < <(jq -r '.[]' <<<"$TAGS_JSON")
+          docker buildx imagetools create "${args[@]}" "$SOURCE"
+
+      - name: Verify manifests and immutable revision
+        env:
+          RELEASE_SHA: ${{ needs.validate.outputs.sha }}
+          TAGS_JSON: ${{ needs.plan.outputs.tags_json }}
+        run: |
+          while IFS= read -r tag; do
+            reference="voxix/battlevive-bot:$tag"
+            docker buildx imagetools inspect --raw "$reference" \
+              | python scripts/release/verify_manifest.py \
+                  --revision "$RELEASE_SHA" \
+                  --source "${{ github.server_url }}/${{ github.repository }}" \
+                  --version "${{ needs.validate.outputs.version }}"
+            docker buildx imagetools inspect "$reference" --format '{{json .SBOM}}' \
+              | jq -e 'type == "object" and length > 0' >/dev/null
+            docker buildx imagetools inspect "$reference" --format '{{json .Provenance}}' \
+              | jq -e 'type == "object" and length > 0' >/dev/null
+          done < <(jq -r '.[]' <<<"$TAGS_JSON")
+
+      - name: Record manifest digest
+        id: result
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          digest="$(docker buildx imagetools inspect "voxix/battlevive-bot:$VERSION" \
+            --format '{{.Manifest.Digest}}')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "image_digest=$digest" >>"$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Build, checksum and upload deployment bundle
+        id: bundle
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_SHA: ${{ needs.validate.outputs.sha }}
+          OPERATIONS_BUCKET: ${{ vars.AWS_OPERATIONS_BUCKET }}
+        run: |
+          mkdir -p dist
+          output="dist/battlevive-$VERSION.tar.gz"
+          checksum="$(python scripts/release/bundle.py --root . --output "$output")"
+          key="releases/$VERSION/battlevive-$RELEASE_SHA.tar.gz"
+          aws s3 cp "$output" "s3://$OPERATIONS_BUCKET/$key" \
+            --region "${{ vars.AWS_REGION }}" --only-show-errors
+          echo "bundle_key=$key" >>"$GITHUB_OUTPUT"
+          echo "bundle_checksum=$checksum" >>"$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy newer release
+    needs: [validate, plan, publish]
+    if: ${{ needs.plan.outputs.deploy == 'true' }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: production
+      version: ${{ needs.validate.outputs.version }}
+      image_digest: ${{ needs.publish.outputs.image_digest }}
+      bundle_key: ${{ needs.publish.outputs.bundle_key }}
+      bundle_checksum: ${{ needs.publish.outputs.bundle_checksum }}
+      target_selector: ${{ vars.PRODUCTION_TARGET_SELECTOR }}

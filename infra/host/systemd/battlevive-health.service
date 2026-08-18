@@ -1,0 +1,10 @@
+[Unit]
+Description=Publish Battlevive health heartbeat to CloudWatch
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/battlevive/publish-health
+User=root
+Group=root
+NoNewPrivileges=yes

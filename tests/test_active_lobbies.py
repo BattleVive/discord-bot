@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC
 from datetime import datetime
 import json
@@ -1000,3 +1001,31 @@ async def test_dispute_replaces_post_pings_moderators_once_and_resolution_delete
     await service._reconcile_guild(config, [resolved])
     assert alert.deleted is True
     assert database.posts[1][165]["message_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_service_liveness_fails_when_an_internal_task_terminates(
+    tmp_path: Path,
+) -> None:
+    service = ActiveLobbyService(
+        FakeBot(),
+        FakeAPI(),
+        FakeDatabase(),
+        None,
+        "https://battlevive.test",
+        tmp_path,
+    )
+    pending = asyncio.create_task(asyncio.sleep(60))
+
+    async def terminate() -> None:
+        return None
+
+    terminated = asyncio.create_task(terminate())
+    service._tasks = [pending, terminated]
+    assert service.is_running() is True
+    await terminated
+    try:
+        assert service.is_running() is False
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)

@@ -1,0 +1,45 @@
+x-aws-logging: &aws-logging
+  driver: awslogs
+  options:
+    awslogs-region: ${AWS_REGION:-eu-north-1}
+    awslogs-group: ${BATTLEVIVE_LOG_GROUP:-/battlevive/production/application}
+    awslogs-create-group: "false"
+    tag: "{{.Name}}"
+
+services:
+  db:
+    environment:
+      POSTGRES_PASSWORD: null
+      POSTGRES_PASSWORD_FILE: /run/battlevive/postgres-password
+    volumes:
+      - ${BATTLEVIVE_POSTGRES_DATA_PATH:-/var/lib/battlevive/postgresql}:/var/lib/postgresql:Z
+      - /run/battlevive:/run/battlevive:ro
+    logging: *aws-logging
+
+  migration:
+    environment:
+      DATABASE_URL: null
+      DATABASE_URL_FILE: /run/battlevive/database-url
+    volumes:
+      - /run/battlevive:/run/battlevive:ro
+    logging: *aws-logging
+
+  bot:
+    environment:
+      DATABASE_URL: null
+      DATABASE_URL_FILE: /run/battlevive/database-url
+      DISCORD_TOKEN: null
+      DISCORD_TOKEN_FILE: /run/battlevive/discord-token
+      SUPABASE_API_KEY: null
+      SUPABASE_API_KEY_FILE: /run/battlevive/supabase-api-key
+      BOOTSTRAP_JWT: null
+      BOOTSTRAP_JWT_FILE: /run/battlevive/bootstrap-jwt
+      BOOTSTRAP_REFRESH_TOKEN: null
+      BOOTSTRAP_REFRESH_TOKEN_FILE: /run/battlevive/bootstrap-refresh-token
+      BATTLEVIVE_TOKEN_STORE: ssm
+      BATTLEVIVE_TOKEN_SSM_PARAMETER: ${BATTLEVIVE_TOKEN_SSM_PARAMETER:-/battlevive/production/tokens}
+      AWS_REGION: ${AWS_REGION:-eu-north-1}
+    volumes:
+      - ${BATTLEVIVE_BOT_DATA_PATH:-/var/lib/battlevive/bot}:/app/data:Z
+      - /run/battlevive:/run/battlevive:ro
+    logging: *aws-logging

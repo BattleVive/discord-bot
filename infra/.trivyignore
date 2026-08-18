@@ -1,0 +1,10 @@
+# AWS-managed SSE-S3 is an explicit cost constraint for both private buckets.
+AVD-AWS-0132
+# SNS uses alias/aws/sns to avoid a dedicated customer-managed KMS key charge.
+AVD-AWS-0136
+# The adopted root volume retains its live encryption state; an unencrypted
+# volume follows the separately approved snapshot/copy replacement runbook.
+AVD-AWS-0131
+# Discord, Supabase, Docker Hub and AWS public APIs require internet egress;
+# the instance deliberately has zero ingress and no NAT/private-endpoint scope.
+AVD-AWS-0104

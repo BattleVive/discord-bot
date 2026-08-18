@@ -1,0 +1,11 @@
+[Unit]
+Description=Monthly Battlevive restore verification schedule
+
+[Timer]
+OnCalendar=*-*-01 04:15:00 Europe/Warsaw
+RandomizedDelaySec=45m
+Persistent=true
+Unit=battlevive-restore-verify.service
+
+[Install]
+WantedBy=timers.target

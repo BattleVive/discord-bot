@@ -1,0 +1,14 @@
+[Unit]
+Description=Verify the latest Battlevive backup with an isolated restore
+After=docker.service battlevive-secrets.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/battlevive/restore-verify
+User=root
+Group=root
+UMask=0077
+Nice=15
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

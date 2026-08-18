@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly Battlevive PostgreSQL backup schedule
+
+[Timer]
+OnCalendar=Sun *-*-* 02:15:00 Europe/Warsaw
+RandomizedDelaySec=20m
+Persistent=true
+Unit=battlevive-backup.service
+
+[Install]
+WantedBy=timers.target

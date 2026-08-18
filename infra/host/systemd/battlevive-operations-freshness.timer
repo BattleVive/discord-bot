@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily Battlevive operations freshness check
+
+[Timer]
+OnBootSec=5m
+OnCalendar=daily
+RandomizedDelaySec=30m
+Persistent=true
+Unit=battlevive-operations-freshness.service
+
+[Install]
+WantedBy=timers.target

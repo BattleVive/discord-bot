@@ -1,0 +1,122 @@
+name: Deploy by immutable digest
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      image_digest:
+        required: true
+        type: string
+      bundle_key:
+        required: true
+        type: string
+      bundle_checksum:
+        required: true
+        type: string
+      target_selector:
+        description: JSON array of SSM tag targets
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.version }} to ${{ inputs.environment }}
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - name: Validate deployment contract
+        env:
+          VERSION: ${{ inputs.version }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          BUNDLE_KEY: ${{ inputs.bundle_key }}
+          BUNDLE_CHECKSUM: ${{ inputs.bundle_checksum }}
+          TARGET_SELECTOR: ${{ inputs.target_selector }}
+          OPERATIONS_BUCKET: ${{ vars.AWS_OPERATIONS_BUCKET }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$BUNDLE_CHECKSUM" =~ ^[0-9a-f]{64}$ ]]
+          [[ -n "$BUNDLE_KEY" && "$BUNDLE_KEY" != /* && "$BUNDLE_KEY" != *..* ]]
+          [[ "$OPERATIONS_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]]
+          [[ "$AWS_REGION" =~ ^[a-z]{2}-[a-z]+-[0-9]+$ ]]
+          jq -e 'type == "array" and length == 2 and all(
+            .[]; (.Key | startswith("tag:")) and
+            (.Values | type == "array" and length == 1 and all(.[]; type == "string" and length > 0))
+          )' <<<"$TARGET_SELECTOR" >/dev/null
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Send deployment through SSM
+        id: command
+        env:
+          VERSION: ${{ inputs.version }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          BUNDLE_KEY: ${{ inputs.bundle_key }}
+          BUNDLE_CHECKSUM: ${{ inputs.bundle_checksum }}
+          TARGET_SELECTOR: ${{ inputs.target_selector }}
+          OPERATIONS_BUCKET: ${{ vars.AWS_OPERATIONS_BUCKET }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          parameters="$(jq -cn \
+            --arg environment "${{ inputs.environment }}" \
+            --arg version "$VERSION" \
+            --arg digest "$IMAGE_DIGEST" \
+            --arg key "$BUNDLE_KEY" \
+            --arg checksum "$BUNDLE_CHECKSUM" \
+            --arg operations_bucket "$OPERATIONS_BUCKET" \
+            --arg aws_region "$AWS_REGION" \
+            '{environment: [$environment], version: [$version], imageDigest: [$digest],
+              bundleKey: [$key], bundleChecksum: [$checksum],
+              targetSelector: ["Project=battlevive-bot,Environment=production"],
+              operationsBucket: [$operations_bucket], awsRegion: [$aws_region]}')"
+          command_id="$(aws ssm send-command \
+            --document-name battlevive-production-deploy \
+            --targets "$TARGET_SELECTOR" \
+            --parameters "$parameters" \
+            --timeout-seconds 300 \
+            --query 'Command.CommandId' \
+            --output text)"
+          [[ "$command_id" =~ ^[0-9a-f-]+$ ]]
+          echo "command_id=$command_id" >>"$GITHUB_OUTPUT"
+
+      - name: Require successful SSM completion
+        env:
+          COMMAND_ID: ${{ steps.command.outputs.command_id }}
+        run: |
+          deadline=$((SECONDS + 300))
+          while ((SECONDS <= deadline)); do
+            invocations="$(aws ssm list-command-invocations \
+              --command-id "$COMMAND_ID" --details --output json)"
+            count="$(jq '.CommandInvocations | length' <<<"$invocations")"
+            if [[ "$count" -gt 1 ]]; then
+              echo "deployment selector matched more than one instance" >&2
+              exit 1
+            fi
+            status="$(jq -r '.CommandInvocations[0].Status // "Pending"' <<<"$invocations")"
+            case "$status" in
+              Success) exit 0 ;;
+              Pending|InProgress|Delayed) sleep 10 ;;
+              *) echo "SSM deployment ended with status: $status" >&2; exit 1 ;;
+            esac
+          done
+          echo "SSM deployment exceeded the five-minute budget" >&2
+          exit 1

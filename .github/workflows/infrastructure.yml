@@ -1,0 +1,133 @@
+name: Infrastructure
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ["infra/**", ".github/workflows/infrastructure.yml"]
+  push:
+    branches: [main]
+    paths: ["infra/**", ".github/workflows/infrastructure.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infrastructure-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  static:
+    name: Terraform static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_wrapper: false
+      - uses: terraform-linters/setup-tflint@90f302c255ef959cbfb4bd10581afecdb7ece3e6 # v4.1.1
+      - name: Terraform format and validate
+        run: |
+          terraform fmt -check -recursive infra
+          terraform -chdir=infra/bootstrap init -backend=false
+          terraform -chdir=infra/bootstrap validate
+          terraform -chdir=infra/production init -backend=false
+          terraform -chdir=infra/production validate
+      - name: TFLint
+        run: |
+          tflint --init
+          tflint --chdir=infra/bootstrap
+          tflint --chdir=infra/production
+      - name: Scan Terraform configuration
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: infra
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          hide-progress: true
+
+  plan:
+    name: Read-only production plan
+    if: ${{ github.event_name == 'pull_request' }}
+    needs: static
+    environment: infrastructure-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    env:
+      TF_VAR_alert_email: ${{ secrets.TF_ALERT_EMAIL }}
+      TF_VAR_instance: ${{ vars.TF_INSTANCE_JSON }}
+      TF_VAR_operations_bucket_suffix: ${{ vars.TF_OPERATIONS_BUCKET_SUFFIX }}
+      TF_VAR_state_bucket_name: ${{ vars.TF_STATE_BUCKET }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Initialize read-only backend
+        run: >-
+          terraform -chdir=infra/production init
+          -backend-config=bucket=${{ vars.TF_STATE_BUCKET }}
+          -backend-config=key=${{ vars.TF_STATE_KEY }}
+      - name: Create reviewed plan
+        run: |
+          terraform -chdir=infra/production plan -lock=false -no-color -out=reviewed.tfplan
+          terraform -chdir=infra/production show -no-color reviewed.tfplan >plan.txt
+          {
+            echo '### Terraform production plan'
+            echo '```terraform'
+            sed -n '/^Terraform will perform/,/^Plan:/p' plan.txt
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  apply:
+    name: Apply reviewed production plan
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    needs: static
+    environment: infrastructure-apply
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_VAR_alert_email: ${{ secrets.TF_ALERT_EMAIL }}
+      TF_VAR_instance: ${{ vars.TF_INSTANCE_JSON }}
+      TF_VAR_operations_bucket_suffix: ${{ vars.TF_OPERATIONS_BUCKET_SUFFIX }}
+      TF_VAR_state_bucket_name: ${{ vars.TF_STATE_BUCKET }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Initialize locked backend
+        run: >-
+          terraform -chdir=infra/production init
+          -backend-config=bucket=${{ vars.TF_STATE_BUCKET }}
+          -backend-config=key=${{ vars.TF_STATE_KEY }}
+      - name: Plan exact main revision
+        run: terraform -chdir=infra/production plan -no-color -out=main.tfplan
+      - name: Apply exact reviewed plan
+        run: terraform -chdir=infra/production apply -auto-approve main.tfplan

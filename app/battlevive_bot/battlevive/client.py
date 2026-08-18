@@ -14,6 +14,7 @@ import aiohttp
 from .supabase import SupabaseTransport
 from .tokens import TokenPair
 from .tokens import TokenStore
+from .tokens import TokenStoreProtocol
 from ..logs import logger
 from ..models import Lobby
 from ..models import LobbyCaptain
@@ -60,8 +61,9 @@ class BattleviveClient:
         supabase_url: str,
         supabase_api_key: str,
         transport: SupabaseTransport | None = None,
+        token_store: TokenStoreProtocol | None = None,
     ) -> None:
-        self._token_store = TokenStore(token_path)
+        self._token_store = token_store or TokenStore(token_path)
         persisted_tokens = self._token_store.load()
         bootstrap_tokens = TokenPair.from_values(
             bootstrap_access_token,
@@ -71,14 +73,15 @@ class BattleviveClient:
         if self._tokens is None:
             raise ValueError("A complete Battlevive token pair is required")
 
+        path = getattr(self._token_store, "path", None)
         try:
-            token_path_exists = self._token_store.path.lstat() is not None
+            token_path_exists = path is not None and path.lstat() is not None
         except OSError:
             token_path_exists = False
         if persisted_tokens is None and token_path_exists:
             logger.warning(
                 "Ignoring invalid Battlevive token state at %s",
-                self._token_store.path,
+                path,
             )
 
         self._transport = transport or SupabaseTransport(
@@ -86,6 +89,11 @@ class BattleviveClient:
             supabase_api_key,
         )
         self._refresh_lock = asyncio.Lock()
+        self._persistence_degraded = False
+
+    @property
+    def persistence_degraded(self) -> bool:
+        return self._persistence_degraded
 
     async def get_users(self) -> list[User]:
         return await self._get_and_parse("users", parse_users)
@@ -244,9 +252,10 @@ class BattleviveClient:
         try:
             self._token_store.save(refreshed_tokens)
         except OSError:
-            logger.exception(
-                "Failed to persist refreshed Battlevive credentials to %s",
-                self._token_store.path,
+            self._persistence_degraded = True
+            logger.critical(
+                "Failed to persist refreshed Battlevive credentials; health is degraded."
             )
         else:
+            self._persistence_degraded = False
             logger.info("Refreshed and persisted Battlevive credentials")

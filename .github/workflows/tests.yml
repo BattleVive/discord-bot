@@ -2,29 +2,34 @@ name: Test Suite
 
 on:
   push:
-    branches: ["main"]
+    branches: [main]
   pull_request:
-    branches: ["main"]
+    branches: [main]
+  workflow_call:
+    inputs:
+      checkout_ref:
+        description: Exact commit to test
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: tests-${{ github.workflow }}-${{ github.ref }}
+  group: tests-${{ github.workflow }}-${{ github.ref }}-${{ inputs.checkout_ref || github.sha }}
   cancel-in-progress: true
 
 jobs:
   test:
-    name: Python 3.14
+    name: Tests (Python 3.14)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       checks: write
       contents: read
     outputs:
       passed: ${{ steps.test_report.outputs.passed }}
       failed: ${{ steps.test_report.outputs.failed }}
-
     services:
       postgres:
         image: postgres:18
@@ -39,7 +44,6 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
-
     env:
       PYTHON_DOTENV_DISABLED: "1"
       DATABASE_URL: postgresql://battlevive_test:battlevive_test@localhost:5432/battlevive_test
@@ -50,22 +54,25 @@ jobs:
       BOOTSTRAP_REFRESH_TOKEN: test-refresh
       SUPABASE_API_KEY: test-supabase-key
       SUPABASE_URL: https://supabase.test
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.14"
+          cache: pip
+          cache-dependency-path: .github/requirements-ci.lock
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r app/requirements.txt -r requirements-dev.txt
+      - name: Install locked dependencies
+        run: python -m pip install --require-hashes -r .github/requirements-ci.lock
 
       - name: Compile Python files
-        run: python -m compileall app utils
+        run: python -m compileall app utils scripts
 
       - name: Run test suite
         run: pytest --junitxml=test-results/pytest.xml
@@ -73,32 +80,125 @@ jobs:
       - name: Publish test report
         if: ${{ !cancelled() }}
         id: test_report
-        uses: dorny/test-reporter@v2
+        uses: dorny/test-reporter@df6247429542221bc30d46a036ee47af1102c451 # v2.7.0
         with:
           name: Pytest results
           path: test-results/pytest.xml
           reporter: java-junit
           fail-on-error: "false"
 
+  compose-migrations:
+    name: Compose and migrations
+    needs: [test, repository-static]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      POSTGRES_USER: battlevive_test
+      POSTGRES_PASSWORD: battlevive_test
+      POSTGRES_DB: battlevive_test
+      DATABASE_URL: postgresql://battlevive_test:battlevive_test@db:5432/battlevive_test
+      DISCORD_TOKEN: test-discord-token
+      BATTLEVIVE_URL: https://battlevive.test
+      BOOTSTRAP_JWT: test-jwt
+      BOOTSTRAP_REFRESH_TOKEN: test-refresh
+      SUPABASE_API_KEY: test-supabase-key
+      SUPABASE_URL: https://supabase.test
+      AWS_REGION: eu-north-1
+      BATTLEVIVE_IMAGE: voxix/battlevive-bot@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: .github/requirements-ci.lock
+
+      - name: Install locked dependencies
+        run: python -m pip install --require-hashes -r .github/requirements-ci.lock
+
+      - name: Validate base Compose
+        run: docker compose -f docker-compose.yml config --quiet
+
+      - name: Validate AWS Compose overlay
+        run: docker compose -f docker-compose.yml -f docker-compose.aws.yml config --quiet
+
+      - name: Exercise migration integration suite
+        run: pytest -q tests/test_migrations.py tests/test_migrations_postgres.py
+
+  repository-static:
+    name: Workflow and shell validation
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+          persist-credentials: false
+
+      - name: Install Actionlint
+        env:
+          GOBIN: /tmp/actionlint-bin
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+
+      - name: Validate workflows
+        run: /tmp/actionlint-bin/actionlint -color
+
+      - name: Validate shell scripts
+        run: find scripts infra -type f -name '*.sh' -print0 | xargs -0 shellcheck
+
+  image-smoke:
+    name: AMD64 and ARM64 image smoke
+    needs: compose-migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build and smoke-test AMD64
+        run: |
+          docker buildx build --platform linux/amd64 --load --tag battlevive-ci:amd64 .
+          test "$(docker image inspect battlevive-ci:amd64 --format '{{.Config.User}}')" != "" \
+            && test "$(docker image inspect battlevive-ci:amd64 --format '{{.Config.User}}')" != root
+          docker run --rm --platform linux/amd64 battlevive-ci:amd64 python --version
+
+      - name: Build and smoke-test ARM64 through QEMU
+        run: |
+          docker buildx build --platform linux/arm64 --load --tag battlevive-ci:arm64 .
+          test "$(docker image inspect battlevive-ci:arm64 --format '{{.Config.User}}')" != "" \
+            && test "$(docker image inspect battlevive-ci:arm64 --format '{{.Config.User}}')" != root
+          docker run --rm --platform linux/arm64 battlevive-ci:arm64 python --version
+
   badge:
     name: Test badge
     needs: test
     if: >-
-      ${{ always() &&
-          !cancelled() &&
-          github.event_name == 'push' &&
-          github.ref == 'refs/heads/main' &&
-          needs.test.outputs.passed != '' }}
+      ${{ always() && !cancelled() && github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' && needs.test.outputs.passed != '' }}
     continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - name: Publish test badge
-        uses: actions/github-script@v7
-        if: >-
-          ${{ needs.test.outputs.passed != '' }}
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           PASSED: ${{ needs.test.outputs.passed }}
           FAILED: ${{ needs.test.outputs.failed }}
@@ -106,13 +206,11 @@ jobs:
           script: |
             const passed = Number.parseInt(process.env.PASSED, 10)
             const failed = Number.parseInt(process.env.FAILED, 10)
-
             if (!Number.isSafeInteger(passed) || passed < 0 ||
                 !Number.isSafeInteger(failed) || failed < 0) {
               core.setFailed('Test reporter returned invalid badge counts')
               return
             }
-
             const owner = context.repo.owner
             const repo = context.repo.repo
             const branch = 'badges'
@@ -125,83 +223,36 @@ jobs:
               color: failed === 0 ? 'brightgreen' : 'red'
             })}\n`
             const commitMessage = `Badge: ${message}`
-
             let branchExists = true
             try {
-              await github.rest.git.getRef({
-                owner,
-                repo,
-                ref: `heads/${branch}`
-              })
+              await github.rest.git.getRef({owner, repo, ref: `heads/${branch}`})
             } catch (error) {
-              if (error.status !== 404) {
-                throw error
-              }
+              if (error.status !== 404) throw error
               branchExists = false
             }
-
             if (!branchExists) {
-              const blob = await github.rest.git.createBlob({
-                owner,
-                repo,
-                content: badge,
-                encoding: 'utf-8'
-              })
+              const blob = await github.rest.git.createBlob({owner, repo, content: badge, encoding: 'utf-8'})
               const tree = await github.rest.git.createTree({
-                owner,
-                repo,
-                tree: [{
-                  path,
-                  mode: '100644',
-                  type: 'blob',
-                  sha: blob.data.sha
-                }]
+                owner, repo, tree: [{path, mode: '100644', type: 'blob', sha: blob.data.sha}]
               })
               const commit = await github.rest.git.createCommit({
-                owner,
-                repo,
-                message: commitMessage,
-                tree: tree.data.sha,
-                parents: []
+                owner, repo, message: commitMessage, tree: tree.data.sha, parents: []
               })
-              await github.rest.git.createRef({
-                owner,
-                repo,
-                ref: `refs/heads/${branch}`,
-                sha: commit.data.sha
-              })
+              await github.rest.git.createRef({owner, repo, ref: `refs/heads/${branch}`, sha: commit.data.sha})
               return
             }
-
             let existing = null
             try {
-              const response = await github.rest.repos.getContent({
-                owner,
-                repo,
-                path,
-                ref: branch
-              })
+              const response = await github.rest.repos.getContent({owner, repo, path, ref: branch})
               if (Array.isArray(response.data) || response.data.type !== 'file') {
                 core.setFailed(`${path} on ${branch} is not a file`)
                 return
               }
               existing = response.data
             } catch (error) {
-              if (error.status !== 404) {
-                throw error
-              }
+              if (error.status !== 404) throw error
             }
-
-            if (existing) {
-              const current = Buffer.from(
-                existing.content,
-                'base64'
-              ).toString('utf8')
-              if (current === badge) {
-                return
-              }
-            }
-
+            if (existing && Buffer.from(existing.content, 'base64').toString('utf8') === badge) return
             await github.rest.repos.createOrUpdateFileContents({
               owner,
               repo,

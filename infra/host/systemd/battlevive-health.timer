@@ -1,0 +1,11 @@
+[Unit]
+Description=Publish Battlevive health every minute
+
+[Timer]
+OnBootSec=2m
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=battlevive-health.service
+
+[Install]
+WantedBy=timers.target

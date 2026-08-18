@@ -1,0 +1,11 @@
+[Unit]
+Description=Publish Battlevive backup and restore-drill freshness metrics
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/battlevive/publish-operations-freshness
+User=root
+Group=root
+NoNewPrivileges=yes
