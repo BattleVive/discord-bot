@@ -103,7 +103,7 @@ resource "aws_ssm_document" "deploy" {
           "  trap - EXIT",
           "  rm -rf -- \"$bootstrap_dir\"",
           "fi",
-          "timeout 295 /usr/local/libexec/battlevive/deploy --environment \"$SSM_environment\" --version \"$SSM_version\" --image-digest \"$SSM_imageDigest\" --bundle-key \"$SSM_bundleKey\" --bundle-checksum \"$SSM_bundleChecksum\" --target-selector \"$SSM_targetSelector\"",
+          "timeout 295 /usr/local/libexec/battlevive/deploy --environment \"$SSM_environment\" --version \"$SSM_version\" --image-digest \"$SSM_imageDigest\" --bundle-key \"$SSM_bundleKey\" --bundle-checksum \"$SSM_bundleChecksum\" --target-selector \"$SSM_targetSelector\" --operations-bucket \"$SSM_operationsBucket\" --aws-region \"$SSM_awsRegion\"",
         ]
       }
     }]
