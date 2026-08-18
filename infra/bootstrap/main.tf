@@ -45,6 +45,7 @@ resource "aws_s3_bucket_versioning" "state" {
   }
 }
 
+#trivy:ignore:AVD-AWS-0132 AWS-managed SSE is deliberate: the state bucket is private, versioned, and does not justify a customer-managed key.
 resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
   bucket = aws_s3_bucket.state.id
 

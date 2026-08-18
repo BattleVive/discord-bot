@@ -1,3 +1,4 @@
+#trivy:ignore:AVD-AWS-0104 The bot needs outbound HTTPS to Discord, Supabase, Docker Hub, and AWS endpoints; ingress remains empty.
 resource "aws_security_group" "bot" {
   name        = var.security_group_name
   description = var.security_group_description
@@ -30,6 +31,7 @@ resource "aws_security_group" "bot" {
   tags = merge(local.common_tags, { Name = "${local.name}-zero-ingress" })
 }
 
+#trivy:ignore:AVD-AWS-0131 The adopted root volume's real encryption state is supplied from the sanitized inventory and is encrypted in production.
 resource "aws_instance" "bot" {
   ami                                  = var.ami_id
   availability_zone                    = var.availability_zone

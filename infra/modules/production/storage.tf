@@ -26,6 +26,7 @@ resource "aws_s3_bucket_versioning" "operations" {
   versioning_configuration { status = "Enabled" }
 }
 
+#trivy:ignore:AVD-AWS-0132 AWS-managed SSE is deliberate: this private operations bucket does not require a customer-managed KMS key.
 resource "aws_s3_bucket_server_side_encryption_configuration" "operations" {
   bucket = aws_s3_bucket.operations.id
   rule {
