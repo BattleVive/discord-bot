@@ -22,3 +22,13 @@ def test_published_release_can_be_resumed_from_the_fixed_workflow() -> None:
     assert "workflow_dispatch:" in release
     assert "release_tag:" in release
     assert "github.event.release.tag_name || inputs.release_tag" in release
+
+
+def test_release_plan_uses_the_workflow_revision_for_release_tooling() -> None:
+    """A recovered release must not run a stale helper from the release tag."""
+    release = (WORKFLOWS / "release.yml").read_text()
+    plan = release.split("  plan:\n", 1)[1].split("  publish:\n", 1)[0]
+
+    assert "name: Check out release tooling" in plan
+    assert "ref: ${{ github.workflow_sha }}" in plan
+    assert "ref: ${{ needs.validate.outputs.sha }}" not in plan
