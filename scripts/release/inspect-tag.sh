@@ -13,7 +13,7 @@ if manifest=$(docker buildx imagetools inspect --raw "$reference" 2>"$error_file
     exit 1
   fi
   printf '%s\n' "$revision"
-elif grep -Eqi 'manifest unknown|name_unknown' "$error_file"; then
+elif grep -Eqi 'manifest unknown|name_unknown|(^|[[:space:]])docker\.io/[^[:space:]]+:[^[:space:]]+:[[:space:]]+not found$' "$error_file"; then
   exit 4
 else
   cat "$error_file" >&2

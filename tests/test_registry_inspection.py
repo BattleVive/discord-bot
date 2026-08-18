@@ -16,6 +16,7 @@ def run_case(tmp_path, mode):
         "case \"$REGISTRY_MODE\" in\n"
         " valid) printf '%s\\n' '{\"annotations\":{\"org.opencontainers.image.revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}' ;;\n"
         " absent) echo 'manifest unknown' >&2; exit 1 ;;\n"
+        " absent_not_found) echo 'ERROR: docker.io/voxix/battlevive-bot:1.2.3: not found' >&2; exit 1 ;;\n"
         " unlabelled) printf '%s\\n' '{\"annotations\":{}}' ;;\n"
         " *) echo 'unauthorized or network failure' >&2; exit 1 ;;\n"
         "esac\n"
@@ -37,6 +38,12 @@ def test_returns_verified_revision(tmp_path):
 
 def test_absent_tag_has_distinct_exit_status(tmp_path):
     result = run_case(tmp_path, "absent")
+    assert result.returncode == 4
+
+
+def test_not_found_tag_has_distinct_exit_status(tmp_path):
+    """Buildx reports an absent Docker Hub tag as ``reference: not found``."""
+    result = run_case(tmp_path, "absent_not_found")
     assert result.returncode == 4
 
 
