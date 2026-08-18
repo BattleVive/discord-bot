@@ -8,10 +8,9 @@ resource "aws_cloudwatch_log_group" "production" {
   tags = local.common_tags
 }
 
-#trivy:ignore:AVD-AWS-0136 AWS-managed SNS encryption is deliberate to avoid an unnecessary customer-managed KMS key for the alert topic.
 resource "aws_sns_topic" "alerts" {
   name              = "${local.name}-alerts"
-  kms_master_key_id = "alias/aws/sns"
+  kms_master_key_id = aws_kms_key.alerts.arn
   tags              = local.common_tags
 }
 

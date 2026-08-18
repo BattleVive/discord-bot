@@ -30,3 +30,34 @@ def test_instance_role_can_read_supabase_url_runtime_configuration() -> None:
     )[1].split('\n  }', 1)[0]
 
     assert "aws_ssm_parameter.supabase_url.arn" in runtime_configuration
+
+
+def test_alert_topic_uses_cloudwatch_compatible_customer_managed_kms_key() -> None:
+    monitoring = (ROOT / "infra/modules/production/monitoring.tf").read_text(encoding="utf-8")
+    kms = (ROOT / "infra/modules/production/kms.tf").read_text(encoding="utf-8")
+
+    assert 'resource "aws_kms_key" "alerts"' in kms
+    assert '"cloudwatch.amazonaws.com"' in kms
+    assert '"kms:GenerateDataKey*"' in kms
+    assert '"kms:Decrypt"' in kms
+    assert 'kms_master_key_id = aws_kms_key.alerts.arn' in monitoring
+    assert 'kms_master_key_id = "alias/aws/sns"' not in monitoring
+
+
+def test_ci_roles_have_only_required_alert_kms_permissions() -> None:
+    source = (ROOT / "infra/modules/production/iam.tf").read_text(encoding="utf-8")
+    plan_policy = source.split(
+        'data "aws_iam_policy_document" "plan" {', 1
+    )[1].split('data "aws_iam_policy_document" "plan_with_state"', 1)[0]
+    apply_policy = source.split(
+        'data "aws_iam_policy_document" "apply" {', 1
+    )[1].split('resource "aws_iam_role_policy" "github_apply"', 1)[0]
+
+    assert '"kms:DescribeKey"' in plan_policy
+    assert '"kms:GetKeyPolicy"' in plan_policy
+    assert 'resources = [aws_kms_key.alerts.arn]' in plan_policy
+    assert '"CreateTaggedKMSKey"' in apply_policy
+    assert '"kms:CreateKey"' in apply_policy
+    assert '"aws:RequestTag/Project"' in apply_policy
+    assert '"ManageProjectKMSKey"' in apply_policy
+    assert '"ManageProjectKMSAlias"' in apply_policy

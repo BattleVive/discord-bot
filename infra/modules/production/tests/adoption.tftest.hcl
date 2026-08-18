@@ -25,6 +25,13 @@ mock_provider "aws" {
       arn = "arn:aws:sns:eu-north-1:598122632788:mock-topic"
     }
   }
+
+  mock_resource "aws_kms_key" {
+    defaults = {
+      arn    = "arn:aws:kms:eu-north-1:598122632788:key/01234567-89ab-cdef-0123-456789abcdef"
+      key_id = "01234567-89ab-cdef-0123-456789abcdef"
+    }
+  }
 }
 
 variables {
