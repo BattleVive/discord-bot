@@ -28,7 +28,7 @@ jobs:
       version: ${{ steps.release.outputs.version }}
     steps:
       - name: Check out release history
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.release.tag_name || inputs.release_tag }}
           fetch-depth: 0
@@ -82,7 +82,7 @@ jobs:
       reuse_source: ${{ steps.plan.outputs.reuse_source }}
     steps:
       - name: Check out release tooling
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
@@ -186,7 +186,7 @@ jobs:
       bundle_checksum: ${{ steps.bundle.outputs.bundle_checksum }}
     steps:
       - name: Check out exact release commit
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.sha }}
           persist-credentials: false
