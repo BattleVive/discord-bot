@@ -6,14 +6,16 @@ from pathlib import Path
 SSM = Path(__file__).resolve().parents[1] / "infra" / "modules" / "production" / "ssm.tf"
 
 
-def test_deploy_document_bootstraps_missing_host_helper_from_verified_bundle() -> None:
+def test_deploy_document_installs_verified_host_assets_before_every_deployment() -> None:
     document = SSM.read_text()
 
-    assert 'if ! test -x /usr/local/libexec/battlevive/deploy; then' in document
+    assert 'if ! test -x /usr/local/libexec/battlevive/deploy; then' not in document
     assert r'aws s3 cp \"s3://$SSM_operationsBucket/$SSM_bundleKey\" \"$bootstrap_archive\"' in document
     assert r'''printf '%s  %s\\n' \"$SSM_bundleChecksum\" \"$bootstrap_archive\" | sha256sum -c -''' in document
     assert r'tar -tzf \"$bootstrap_archive\"' in document
-    assert r'BATTLEVIVE_BUNDLE_ROOT=\"$bootstrap_dir\" \"$bootstrap_dir/install.sh\"' in document
+    install_command = r'BATTLEVIVE_BUNDLE_ROOT=\"$bootstrap_dir\" \"$bootstrap_dir/install.sh\"'
+    assert install_command in document
+    assert document.index(install_command) < document.index('timeout 295 /usr/local/libexec/battlevive/deploy')
 
 
 def test_deploy_document_passes_the_host_deploy_contract() -> None:

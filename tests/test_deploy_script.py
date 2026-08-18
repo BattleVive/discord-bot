@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tarfile
 from pathlib import Path
@@ -10,6 +11,14 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / "scripts" / "deploy" / "deploy.sh"
+DEPLOYMENT_STATE = ROOT / "infra" / "modules" / "production" / "storage.tf"
+
+TERRAFORM_BOOTSTRAP_STATE = {
+    "version": "0.0.0",
+    "image_digest": "",
+    "bundle_key": "",
+    "bundle_checksum": "",
+}
 
 
 def executable(path: Path, body: str):
@@ -160,6 +169,44 @@ def test_success_promotes_verified_digest_then_publishes_state(tmp_path):
     assert commands.index("inspect --format {{.State.Health.Status}}") < commands.index(
         "ssm put-parameter"
     )
+
+
+def test_terraform_bootstrap_state_allows_first_deployment(tmp_path):
+    args, env, deploy_root, log = prepare(tmp_path)
+    (deploy_root / "current").unlink()
+    env["CURRENT_STATE"] = json.dumps(TERRAFORM_BOOTSTRAP_STATE, separators=(",", ":"))
+
+    result = subprocess.run(args, env=env, text=True, capture_output=True)
+
+    assert result.returncode == 0, result.stderr
+    assert (deploy_root / "current").resolve().name == "1.1.0-aaaaaaaaaaaa"
+    assert "s3 cp" in log.read_text()
+
+
+def test_terraform_initial_state_matches_the_host_bootstrap_contract():
+    configuration = DEPLOYMENT_STATE.read_text()
+
+    for key, value in TERRAFORM_BOOTSTRAP_STATE.items():
+        assert re.search(rf'\b{key}\s*=\s*"{re.escape(value)}"', configuration)
+
+
+def test_noncanonical_bootstrap_state_remains_rejected(tmp_path):
+    args, env, _, log = prepare(tmp_path)
+    env["CURRENT_STATE"] = json.dumps(
+        {
+            "version": "0.0.0",
+            "image_digest": "sha256:" + "0" * 64,
+            "bundle_key": "",
+            "bundle_checksum": "",
+        },
+        separators=(",", ":"),
+    )
+
+    result = subprocess.run(args, env=env, text=True, capture_output=True)
+
+    assert result.returncode != 0
+    assert "deployment state is malformed" in result.stderr
+    assert "s3 cp" not in log.read_text()
 
 
 @pytest.mark.parametrize("stage", ["download", "backup", "migration", "startup", "health", "state_write"])
