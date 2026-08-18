@@ -286,9 +286,17 @@ data "aws_iam_policy_document" "plan" {
     actions = [
       "cloudwatch:Describe*", "cloudwatch:Get*", "cloudwatch:List*",
       "ec2:Describe*", "iam:Get*", "iam:List*", "logs:Describe*", "logs:ListTagsForResource",
+      "kms:ListAliases", "kms:ListKeys",
       "sns:Get*", "sns:List*", "ssm:Describe*", "ssm:GetMaintenanceWindow*", "ssm:List*", "sts:GetCallerIdentity",
     ]
     resources = ["*"]
+  }
+
+  statement {
+    actions = [
+      "kms:DescribeKey", "kms:GetKeyPolicy", "kms:GetKeyRotationStatus", "kms:ListResourceTags",
+    ]
+    resources = [aws_kms_key.alerts.arn]
   }
 
   statement {
@@ -329,9 +337,18 @@ data "aws_iam_policy_document" "apply" {
     actions = [
       "cloudwatch:Describe*", "cloudwatch:Get*", "cloudwatch:List*",
       "ec2:Describe*", "iam:Get*", "iam:List*", "logs:Describe*", "logs:ListTagsForResource",
+      "kms:ListAliases", "kms:ListKeys",
       "sns:Get*", "sns:List*", "ssm:Describe*", "ssm:GetMaintenanceWindow*", "ssm:List*", "sts:GetCallerIdentity",
     ]
     resources = ["*"]
+  }
+
+  statement {
+    sid = "ReadProjectKMSKey"
+    actions = [
+      "kms:DescribeKey", "kms:GetKeyPolicy", "kms:GetKeyRotationStatus", "kms:ListResourceTags",
+    ]
+    resources = [aws_kms_key.alerts.arn]
   }
 
   statement {
@@ -484,6 +501,35 @@ data "aws_iam_policy_document" "apply" {
       "sns:UntagResource", "sns:Subscribe", "sns:Unsubscribe",
     ]
     resources = [aws_sns_topic.alerts.arn]
+  }
+
+  statement {
+    sid       = "CreateTaggedKMSKey"
+    actions   = ["kms:CreateKey"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = ["battlevive-bot"]
+    }
+  }
+
+  statement {
+    sid = "ManageProjectKMSKey"
+    actions = [
+      "kms:CreateAlias", "kms:DescribeKey", "kms:DisableKeyRotation", "kms:EnableKeyRotation",
+      "kms:GetKeyPolicy", "kms:GetKeyRotationStatus", "kms:ListResourceTags", "kms:PutKeyPolicy",
+      "kms:ScheduleKeyDeletion", "kms:TagResource", "kms:UntagResource",
+    ]
+    resources = [aws_kms_key.alerts.arn]
+  }
+
+  statement {
+    sid = "ManageProjectKMSAlias"
+    actions = [
+      "kms:CreateAlias", "kms:DeleteAlias", "kms:UpdateAlias",
+    ]
+    resources = ["arn:${data.aws_partition.current.partition}:kms:${var.aws_region}:${var.account_id}:alias/${local.name}-alerts"]
   }
 
   statement {
