@@ -32,6 +32,7 @@ services:
       DISCORD_TOKEN_FILE: /run/battlevive/discord-token
       SUPABASE_API_KEY: null
       SUPABASE_API_KEY_FILE: /run/battlevive/supabase-api-key
+      SUPABASE_URL: ${SUPABASE_URL:?}
       BOOTSTRAP_JWT: null
       BOOTSTRAP_JWT_FILE: /run/battlevive/bootstrap-jwt
       BOOTSTRAP_REFRESH_TOKEN: null
