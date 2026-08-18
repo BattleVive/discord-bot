@@ -448,6 +448,12 @@ def test_host_installer_creates_canonical_runtime_contract(tmp_path: Path) -> No
     assert (install_root / "etc/rsyslog.d/30-battlevive-messages.conf").exists()
 
 
+def test_host_installer_starts_runtime_secret_renderer_on_bootstrap() -> None:
+    installer = (ROOT / "infra" / "host" / "install.sh").read_text(encoding="utf-8")
+
+    assert "systemctl enable --now battlevive-secrets.service" in installer
+
+
 def test_predeploy_backup_refuses_concurrent_operations_lock(tmp_path: Path) -> None:
     lock_path = tmp_path / "operations.lock"
     lock_path.touch()

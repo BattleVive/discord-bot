@@ -58,5 +58,5 @@ if [[ -z $install_root ]]; then
   systemctl enable --now rsyslog
   systemctl daemon-reload
   systemctl enable --now battlevive-health.timer battlevive-operations-freshness.timer battlevive-backup.timer battlevive-restore-verify.timer
-  systemctl enable battlevive-secrets.service
+  systemctl enable --now battlevive-secrets.service
 fi

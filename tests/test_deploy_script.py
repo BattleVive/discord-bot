@@ -118,6 +118,17 @@ esac
         "BATTLEVIVE_LOG_GROUP=/battlevive/production/application\n"
     )
     host_env.chmod(0o600)
+    secret_dir = tmp_path / "run" / "battlevive"
+    secret_dir.mkdir(parents=True)
+    for secret_name in (
+        "database-url",
+        "discord-token",
+        "supabase-api-key",
+        "bootstrap-jwt",
+        "bootstrap-refresh-token",
+        "postgres-password",
+    ):
+        (secret_dir / secret_name).write_text("test-value\n")
     running_image = tmp_path / "running-image"
     running_image.write_text("voxix/battlevive-bot@sha256:" + "b" * 64 + "\n")
     operations_lock = tmp_path / "operations.lock"
@@ -128,6 +139,7 @@ esac
         "FAIL_STAGE": fail_stage,
         "BATTLEVIVE_ROOT": str(deploy_root),
         "BATTLEVIVE_HOST_ENV": str(host_env),
+        "BATTLEVIVE_SECRET_DIR": str(secret_dir),
         "BATTLEVIVE_COMPOSE_CLI": str(fake_bin / "docker"),
         "OPERATIONS_LOCK_PATH": str(operations_lock),
         "RUNNING_IMAGE_FILE": str(running_image),
@@ -149,6 +161,17 @@ esac
         "--aws-region", "eu-north-1",
     ]
     return args, env, deploy_root, log
+
+
+def test_missing_runtime_secret_files_stop_before_backup_or_docker(tmp_path):
+    args, env, _, log = prepare(tmp_path)
+    (Path(env["BATTLEVIVE_SECRET_DIR"]) / "database-url").unlink()
+
+    result = subprocess.run(args, env=env, text=True, capture_output=True)
+
+    assert result.returncode != 0
+    assert "runtime secret file is missing or empty: database-url" in result.stderr
+    assert not log.exists()
 
 
 def test_success_promotes_verified_digest_then_publishes_state(tmp_path):
@@ -289,3 +312,12 @@ def test_rollback_failure_is_reported_as_critical(tmp_path):
     result = subprocess.run(args, env=env, text=True, capture_output=True)
     assert result.returncode != 0
     assert "CRITICAL: rollback failed health or digest verification" in result.stderr
+
+
+def test_failed_deployment_reports_a_secret_free_failure_stage(tmp_path):
+    args, env, _, _ = prepare(tmp_path, "migration")
+
+    result = subprocess.run(args, env=env, text=True, capture_output=True)
+
+    assert result.returncode != 0
+    assert "BATTLEVIVE_DEPLOY_FAILURE_STAGE=migration" in result.stderr
