@@ -285,13 +285,13 @@ data "aws_iam_policy_document" "plan" {
     actions = [
       "cloudwatch:Describe*", "cloudwatch:Get*", "cloudwatch:List*",
       "ec2:Describe*", "iam:Get*", "iam:List*", "logs:Describe*", "logs:ListTagsForResource",
-      "sns:Get*", "sns:List*", "ssm:Describe*", "ssm:GetMaintenanceWindow", "ssm:GetMaintenanceWindowTask", "ssm:List*", "sts:GetCallerIdentity",
+      "sns:Get*", "sns:List*", "ssm:Describe*", "ssm:GetMaintenanceWindow*", "ssm:List*", "sts:GetCallerIdentity",
     ]
     resources = ["*"]
   }
 
   statement {
-    actions = ["s3:GetBucket*", "s3:GetLifecycleConfiguration", "s3:GetReplicationConfiguration", "s3:ListBucket", "s3:GetObject"]
+    actions = ["s3:Get*", "s3:ListBucket"]
     resources = [
       aws_s3_bucket.operations.arn,
       "${aws_s3_bucket.operations.arn}/*",
@@ -328,7 +328,7 @@ data "aws_iam_policy_document" "apply" {
     actions = [
       "cloudwatch:Describe*", "cloudwatch:Get*", "cloudwatch:List*",
       "ec2:Describe*", "iam:Get*", "iam:List*", "logs:Describe*", "logs:ListTagsForResource",
-      "sns:Get*", "sns:List*", "ssm:Describe*", "ssm:GetMaintenanceWindow", "ssm:GetMaintenanceWindowTask", "ssm:List*", "sts:GetCallerIdentity",
+      "sns:Get*", "sns:List*", "ssm:Describe*", "ssm:GetMaintenanceWindow*", "ssm:List*", "sts:GetCallerIdentity",
     ]
     resources = ["*"]
   }
@@ -374,7 +374,7 @@ data "aws_iam_policy_document" "apply" {
   statement {
     sid = "ManageOperationsBucket"
     actions = [
-      "s3:CreateBucket", "s3:DeleteBucket", "s3:GetBucket*", "s3:GetLifecycleConfiguration", "s3:GetReplicationConfiguration", "s3:ListBucket",
+      "s3:CreateBucket", "s3:DeleteBucket", "s3:Get*", "s3:ListBucket",
       "s3:PutBucketPolicy", "s3:DeleteBucketPolicy", "s3:PutBucketPublicAccessBlock",
       "s3:PutBucketOwnershipControls", "s3:PutBucketVersioning", "s3:PutEncryptionConfiguration",
       "s3:PutLifecycleConfiguration", "s3:PutBucketTagging", "s3:DeletePublicAccessBlock",
