@@ -107,3 +107,13 @@ resource "aws_ssm_parameter" "operations_bucket" {
   type  = "String"
   value = aws_s3_bucket.operations.id
 }
+
+# The endpoint is non-secret runtime configuration. Terraform creates a
+# deterministic path but ignores the operator-entered endpoint afterward.
+resource "aws_ssm_parameter" "supabase_url" {
+  name  = "${local.parameter_root}/config/supabase-url"
+  type  = "String"
+  value = "https://configuration-required.invalid"
+
+  lifecycle { ignore_changes = [value] }
+}

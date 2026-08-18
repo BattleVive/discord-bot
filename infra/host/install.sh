@@ -19,6 +19,16 @@ if [[ -z ${OPERATIONS_BUCKET:-} ]]; then
     --name /battlevive/production/config/operations-bucket \
     --query Parameter.Value --output text)
 fi
+if [[ -z ${SUPABASE_URL:-} ]]; then
+  SUPABASE_URL=$("$AWS_CLI" ssm get-parameter --region "$AWS_REGION" \
+    --name /battlevive/production/config/supabase-url \
+    --query Parameter.Value --output text)
+fi
+if [[ $SUPABASE_URL == https://configuration-required.invalid ||
+  ! $SUPABASE_URL =~ ^https://[^[:space:]@/]+(/[^[:space:]@]*)?$ ]]; then
+  echo "The /battlevive/production/config/supabase-url parameter must be a safe HTTPS URL." >&2
+  exit 1
+fi
 
 prefix() { printf '%s%s' "$install_root" "$1"; }
 install -d -m 0755 "$(prefix /usr/local/libexec/battlevive)" "$(prefix /run/lock)" "$(prefix /etc/systemd/system)" "$(prefix /etc/rsyslog.d)"
@@ -50,6 +60,7 @@ BATTLEVIVE_POSTGRES_DATA_PATH=/var/lib/battlevive/postgresql
 BATTLEVIVE_LOG_GROUP=/battlevive/production/application
 POSTGRES_USER=battlevive
 POSTGRES_DB=battlevive
+SUPABASE_URL=$SUPABASE_URL
 EOF
 chmod 0600 "$host_env"
 

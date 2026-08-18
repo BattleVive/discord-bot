@@ -409,7 +409,16 @@ def test_host_installer_creates_canonical_runtime_contract(tmp_path: Path) -> No
     for command in ("systemctl", "dnf"):
         executable(fake_bin / command, "#!/bin/sh\nexit 0\n")
     fake_aws = fake_bin / "aws"
-    executable(fake_aws, "#!/bin/sh\nprintf 'operations-test-bucket\\n'\n")
+    executable(
+        fake_aws,
+        """#!/bin/sh
+case "$*" in
+  */operations-bucket*) printf 'operations-test-bucket\\n' ;;
+  */supabase-url*) printf 'https://supabase.test\\n' ;;
+  *) exit 9 ;;
+esac
+""",
+    )
     install_root = tmp_path / "root"
 
     result = run_script(
@@ -442,10 +451,17 @@ def test_host_installer_creates_canonical_runtime_contract(tmp_path: Path) -> No
         "BATTLEVIVE_LOG_GROUP=/battlevive/production/application",
         "POSTGRES_USER=battlevive",
         "POSTGRES_DB=battlevive",
+        "SUPABASE_URL=https://supabase.test",
     ]
     assert (install_root / "var/lib/battlevive/bot").stat().st_uid == os.getuid()
     assert (install_root / "var/lib/battlevive/postgresql").stat().st_uid == os.getuid()
     assert (install_root / "etc/rsyslog.d/30-battlevive-messages.conf").exists()
+
+
+def test_aws_compose_passes_supabase_url_from_host_environment() -> None:
+    compose = (ROOT / "docker-compose.aws.yml").read_text(encoding="utf-8")
+
+    assert "SUPABASE_URL: ${SUPABASE_URL:?}" in compose
 
 
 def test_host_installer_starts_runtime_secret_renderer_on_bootstrap() -> None:
