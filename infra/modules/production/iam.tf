@@ -334,6 +334,14 @@ data "aws_iam_policy_document" "apply" {
   }
 
   statement {
+    sid     = "ReadProjectSSMDocuments"
+    actions = ["ssm:GetDocument"]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:document/${local.name}-*",
+    ]
+  }
+
+  statement {
     sid = "ManageNamedIAMResources"
     actions = [
       "iam:CreateRole", "iam:DeleteRole", "iam:TagRole", "iam:UntagRole",
