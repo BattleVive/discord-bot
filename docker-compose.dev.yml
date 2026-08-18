@@ -4,14 +4,14 @@ services:
     build:
       context: .
     env_file:
-      - path: ${BATTLEVIVE_ENV_FILE:-.env}
+      - path: ${BATTLEVIVE_ENV_FILE:-utils/.env}
         required: false
+    volumes:
+      - ${BATTLEVIVE_BOT_DATA_PATH:-./app/data/bot}:/app/data:Z,U
   migration:
     image: battlevive-bot:local
-    build:
-      context: .
     env_file:
-      - path: ${BATTLEVIVE_ENV_FILE:-.env}
+      - path: ${BATTLEVIVE_ENV_FILE:-utils/.env}
         required: false
   db:
     ports:

@@ -20,7 +20,6 @@ from dotenv import load_dotenv
 from dotenv import set_key
 
 from battlevive_bot.battlevive.tokens import TokenPair
-from battlevive_bot.battlevive.tokens import TokenStore
 
 
 load_dotenv(UTILS_DIR / ".env")
@@ -29,7 +28,6 @@ load_dotenv(UTILS_DIR / ".env")
 AUTH_FILE = UTILS_DIR / "playwright/.auth/state.json"
 UTILS_ENV = UTILS_DIR / ".env"
 ROOT_ENV = ROOT_DIR / ".env"
-TOKEN_FILE = ROOT_DIR / "app/data/battlevive_tokens.json"
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 
 
@@ -86,13 +84,11 @@ def main() -> None:
 
     tokens = get_token_pair()
 
-    # Always recreate .env files from utils/.env
+    # The local Compose override reads utils/.env directly. The runtime then
+    # persists refreshed tokens inside its dedicated, non-root data mount.
+    set_key(UTILS_ENV, "BOOTSTRAP_JWT", tokens.access_token)
+    set_key(UTILS_ENV, "BOOTSTRAP_REFRESH_TOKEN", tokens.refresh_token)
     copy2(UTILS_ENV, ROOT_ENV)
-
-    # Inject generated values
-    set_key(ROOT_ENV, "BOOTSTRAP_JWT", tokens.access_token)
-    set_key(ROOT_ENV, "BOOTSTRAP_REFRESH_TOKEN", tokens.refresh_token)
-    TokenStore(TOKEN_FILE).save(tokens)
 
 
 if __name__ == "__main__":
