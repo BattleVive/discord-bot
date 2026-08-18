@@ -33,6 +33,72 @@ def run_script(path: Path, *args: str, env: dict[str, str] | None = None, stdin:
     )
 
 
+def test_compose_launcher_uses_standalone_binary_when_docker_plugin_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "calls.log"
+    fake_docker = tmp_path / "docker"
+    executable(
+        fake_docker,
+        """#!/bin/sh
+if [ "$1 $2" = "compose version" ]; then exit 1; fi
+printf 'docker %s\\n' "$*" >>"$CALLS"
+""",
+    )
+    fake_compose = tmp_path / "docker-compose"
+    executable(fake_compose, "#!/bin/sh\nprintf 'standalone %s\\n' \"$*\" >>\"$CALLS\"\n")
+
+    result = run_script(
+        HOST / "compose",
+        "--env-file",
+        "/dev/null",
+        "-f",
+        "/tmp/compose.yaml",
+        "config",
+        "--quiet",
+        env={
+            "DOCKER_CLI": str(fake_docker),
+            "DOCKER_COMPOSE_CLI": str(fake_compose),
+            "CALLS": str(calls),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert calls.read_text() == (
+        "standalone --env-file /dev/null -f /tmp/compose.yaml config --quiet\n"
+    )
+
+
+def test_compose_launcher_prefers_docker_compose_plugin(tmp_path: Path) -> None:
+    calls = tmp_path / "calls.log"
+    fake_docker = tmp_path / "docker"
+    executable(
+        fake_docker,
+        """#!/bin/sh
+if [ "$1 $2" = "compose version" ]; then exit 0; fi
+printf 'docker %s\\n' "$*" >>"$CALLS"
+""",
+    )
+    fake_compose = tmp_path / "docker-compose"
+    executable(fake_compose, "#!/bin/sh\nprintf 'standalone %s\\n' \"$*\" >>\"$CALLS\"\n")
+
+    result = run_script(
+        HOST / "compose",
+        "-f",
+        "/tmp/compose.yaml",
+        "config",
+        "--quiet",
+        env={
+            "DOCKER_CLI": str(fake_docker),
+            "DOCKER_COMPOSE_CLI": str(fake_compose),
+            "CALLS": str(calls),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert calls.read_text() == "docker compose -f /tmp/compose.yaml config --quiet\n"
+
+
 def test_ssm_session_resolves_exactly_one_tagged_instance(tmp_path: Path) -> None:
     fake_aws = tmp_path / "aws"
     executable(
@@ -224,7 +290,7 @@ esac
         env={
             "AWS_CLI": str(fake_aws),
             "AWS_LOG": str(aws_log),
-            "DOCKER_CLI": str(fake_docker),
+            "BATTLEVIVE_COMPOSE_CLI": str(fake_docker),
             "OPERATIONS_BUCKET": "test-operations-bucket",
             "BACKUP_TMP_ROOT": str(tmp_path),
             "ALLOW_NON_ROOT_FOR_TESTS": "1",
@@ -252,7 +318,7 @@ def test_backup_failure_emits_failure_metric_and_returns_nonzero(tmp_path: Path)
         env={
             "AWS_CLI": str(fake_aws),
             "AWS_LOG": str(aws_log),
-            "DOCKER_CLI": str(fake_docker),
+            "BATTLEVIVE_COMPOSE_CLI": str(fake_docker),
             "OPERATIONS_BUCKET": "test-operations-bucket",
             "BACKUP_TMP_ROOT": str(tmp_path),
             "ALLOW_NON_ROOT_FOR_TESTS": "1",
@@ -269,6 +335,7 @@ def test_host_installer_creates_canonical_runtime_contract(tmp_path: Path) -> No
         (bundle / directory).mkdir(parents=True, exist_ok=True)
     for relative in (
         "bin/render-secrets.sh",
+        "bin/compose",
         "scripts/deploy.sh",
         "scripts/backup.sh",
         "scripts/restore-verify.sh",
@@ -304,6 +371,8 @@ def test_host_installer_creates_canonical_runtime_contract(tmp_path: Path) -> No
     assert result.returncode == 0, result.stderr
     deploy = install_root / "usr/local/libexec/battlevive/deploy"
     assert deploy.exists() and os.access(deploy, os.X_OK)
+    compose = install_root / "usr/local/libexec/battlevive/compose"
+    assert compose.exists() and os.access(compose, os.X_OK)
     host_env = install_root / "run/battlevive/host.env"
     assert stat.S_IMODE(host_env.stat().st_mode) == 0o600
     assert host_env.read_text().splitlines() == [
@@ -434,7 +503,7 @@ def test_health_publisher_emits_zero_oom_and_host_telemetry_heartbeat(tmp_path: 
         env={
             "AWS_CLI": str(fake_aws),
             "AWS_LOG": str(aws_log),
-            "DOCKER_CLI": str(fake_docker),
+            "BATTLEVIVE_COMPOSE_CLI": str(fake_docker),
             "SYSTEMCTL_CLI": str(fake_systemctl),
             "SYSTEM_MESSAGES_FILE": str(messages),
         },

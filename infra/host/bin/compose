@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+docker_cli=${DOCKER_CLI:-docker}
+docker_compose_cli=${DOCKER_COMPOSE_CLI:-docker-compose}
+
+if "$docker_cli" compose version >/dev/null 2>&1; then
+  exec "$docker_cli" compose "$@"
+fi
+
+if command -v "$docker_compose_cli" >/dev/null 2>&1; then
+  exec "$docker_compose_cli" "$@"
+fi
+
+echo "Docker Compose is unavailable: install the Docker Compose plugin or docker-compose." >&2
+exit 127

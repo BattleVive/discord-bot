@@ -36,6 +36,7 @@ done
 
 battlevive_root="${BATTLEVIVE_ROOT:-/opt/battlevive}"
 host_env="${BATTLEVIVE_HOST_ENV:-/run/battlevive/host.env}"
+compose_cli="${BATTLEVIVE_COMPOSE_CLI:-/usr/local/libexec/battlevive/compose}"
 operations_lock="${OPERATIONS_LOCK_PATH:-/run/lock/battlevive-operations.lock}"
 health_timeout="${HEALTH_TIMEOUT_SECONDS:-120}"
 rollback_timeout="${ROLLBACK_TIMEOUT_SECONDS:-60}"
@@ -44,6 +45,7 @@ image="voxix/battlevive-bot@${image_digest}"
 state_parameter="/battlevive/production/deployment/state"
 mkdir -p "$battlevive_root/releases" "$(dirname "$operations_lock")"
 [[ -f "$host_env" ]] || { echo "canonical host environment is missing: $host_env" >&2; exit 1; }
+[[ -x "$compose_cli" ]] || { echo "production compose launcher is missing: $compose_cli" >&2; exit 1; }
 if [[ "${ALLOW_NON_ROOT_FOR_TESTS:-0}" != 1 ]]; then
   read -r env_owner env_mode < <(stat -c '%U %a' "$host_env")
   [[ "$env_owner" == root && "$env_mode" == 600 ]] || {
@@ -79,7 +81,7 @@ transition_started=false complete=false active_dir=""
 compose() {
   local directory="$1"
   shift
-  BATTLEVIVE_IMAGE="$image" docker compose --env-file "$host_env" \
+  BATTLEVIVE_IMAGE="$image" "$compose_cli" --env-file "$host_env" \
     -f "$directory/compose.yaml" -f "$directory/compose.aws.yaml" "$@"
 }
 

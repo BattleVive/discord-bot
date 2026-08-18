@@ -128,6 +128,7 @@ esac
         "FAIL_STAGE": fail_stage,
         "BATTLEVIVE_ROOT": str(deploy_root),
         "BATTLEVIVE_HOST_ENV": str(host_env),
+        "BATTLEVIVE_COMPOSE_CLI": str(fake_bin / "docker"),
         "OPERATIONS_LOCK_PATH": str(operations_lock),
         "RUNNING_IMAGE_FILE": str(running_image),
         "CURRENT_STATE": json.dumps(previous_state, separators=(",", ":")),

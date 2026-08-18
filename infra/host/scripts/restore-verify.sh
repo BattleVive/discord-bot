@@ -16,7 +16,7 @@ if [[ ${BATTLEVIVE_OPERATIONS_LOCK_HELD:-0} != 1 ]]; then
 fi
 
 AWS_CLI=${AWS_CLI:-aws}
-DOCKER_CLI=${DOCKER_CLI:-docker}
+COMPOSE_CLI=${BATTLEVIVE_COMPOSE_CLI:-/usr/local/libexec/battlevive/compose}
 JQ_CLI=${JQ_CLI:-jq}
 AWS_REGION_NAME=${AWS_REGION_NAME:-eu-north-1}
 COMPOSE_FILE=${COMPOSE_FILE:-/opt/battlevive/current/compose.yaml}
@@ -47,7 +47,7 @@ restore_db=""
 on_exit() {
   rc=$?
   if [[ -n $restore_db ]]; then
-    "$DOCKER_CLI" compose -f "$COMPOSE_FILE" exec -T db \
+    "$COMPOSE_CLI" -f "$COMPOSE_FILE" exec -T db \
       dropdb --if-exists --force --username "$POSTGRES_USER" "$restore_db" >/dev/null 2>&1 || true
   fi
   [[ -z $workdir ]] || rm -rf -- "$workdir"
@@ -80,14 +80,14 @@ done
 (cd "$workdir" && sha256sum --check "$archive.sha256")
 
 restore_db="battlevive_restore_$(date -u +%Y%m%d%H%M%S)"
-"$DOCKER_CLI" compose -f "$COMPOSE_FILE" exec -T db \
+"$COMPOSE_CLI" -f "$COMPOSE_FILE" exec -T db \
   createdb --username "$POSTGRES_USER" "$restore_db"
-"$DOCKER_CLI" compose -f "$COMPOSE_FILE" exec -T db \
+"$COMPOSE_CLI" -f "$COMPOSE_FILE" exec -T db \
   pg_restore --exit-on-error --no-owner --no-privileges \
   --username "$POSTGRES_USER" --dbname "$restore_db" <"$workdir/$archive"
 
 actual=$(
-  "$DOCKER_CLI" compose -f "$COMPOSE_FILE" exec -T db \
+  "$COMPOSE_CLI" -f "$COMPOSE_FILE" exec -T db \
     psql --username "$POSTGRES_USER" --dbname "$restore_db" --tuples-only --no-align \
     --command "SELECT json_build_object('schema_migrations', (SELECT count(*) FROM schema_migrations), 'guild_config', (SELECT count(*) FROM guild_config));"
 )
@@ -103,7 +103,7 @@ printf '{"verified_at":"%s","archive_key":"%s"}\n' \
   "$AWS_CLI" s3 cp - "s3://$OPERATIONS_BUCKET/backups/restore-drills/$(date -u +%Y%m%dT%H%M%SZ).json" \
     --region "$AWS_REGION_NAME" --only-show-errors
 trap - EXIT
-"$DOCKER_CLI" compose -f "$COMPOSE_FILE" exec -T db \
+"$COMPOSE_CLI" -f "$COMPOSE_FILE" exec -T db \
   dropdb --if-exists --force --username "$POSTGRES_USER" "$restore_db" >/dev/null
 restore_db=""
 rm -rf -- "$workdir"
