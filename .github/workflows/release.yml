@@ -81,10 +81,10 @@ jobs:
       deploy: ${{ steps.plan.outputs.deploy }}
       reuse_source: ${{ steps.plan.outputs.reuse_source }}
     steps:
-      - name: Check out exact release commit
+      - name: Check out release tooling
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ needs.validate.outputs.sha }}
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
 
       - name: Set up Docker Buildx
