@@ -55,6 +55,7 @@ data "aws_iam_policy_document" "instance" {
     resources = [
       aws_ssm_parameter.cloudwatch_agent_config.arn,
       aws_ssm_parameter.operations_bucket.arn,
+      aws_ssm_parameter.supabase_url.arn,
       aws_ssm_parameter.deployment_state.arn,
     ]
   }
