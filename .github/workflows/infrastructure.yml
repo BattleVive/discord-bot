@@ -18,10 +18,6 @@ concurrency:
 env:
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
-  TF_VAR_alert_email: ${{ vars.TF_ALERT_EMAIL }}
-  TF_VAR_instance: ${{ vars.TF_INSTANCE_JSON }}
-  TF_VAR_operations_bucket_suffix: ${{ vars.TF_OPERATIONS_BUCKET_SUFFIX }}
-  TF_VAR_state_bucket_name: ${{ vars.TF_STATE_BUCKET }}
 
 jobs:
   static:
@@ -68,6 +64,11 @@ jobs:
       contents: read
       id-token: write
       pull-requests: write
+    env:
+      TF_VAR_alert_email: ${{ vars.TF_ALERT_EMAIL }}
+      TF_VAR_instance: ${{ vars.TF_INSTANCE_JSON }}
+      TF_VAR_operations_bucket_suffix: ${{ vars.TF_OPERATIONS_BUCKET_SUFFIX }}
+      TF_VAR_state_bucket_name: ${{ vars.TF_STATE_BUCKET }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -105,6 +106,11 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      TF_VAR_alert_email: ${{ vars.TF_ALERT_EMAIL }}
+      TF_VAR_instance: ${{ vars.TF_INSTANCE_JSON }}
+      TF_VAR_operations_bucket_suffix: ${{ vars.TF_OPERATIONS_BUCKET_SUFFIX }}
+      TF_VAR_state_bucket_name: ${{ vars.TF_STATE_BUCKET }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
