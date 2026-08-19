@@ -40,6 +40,7 @@ services:
       BATTLEVIVE_TOKEN_STORE: ssm
       BATTLEVIVE_TOKEN_SSM_PARAMETER: ${BATTLEVIVE_TOKEN_SSM_PARAMETER:-/battlevive/production/tokens}
       AWS_REGION: ${AWS_REGION:-eu-north-1}
+      BATTLEVIVE_URL: "https://battlevive.com"
     volumes:
       - ${BATTLEVIVE_BOT_DATA_PATH:-/var/lib/battlevive/bot}:/app/data:Z
       - /run/battlevive:/run/battlevive:ro
