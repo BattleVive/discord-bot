@@ -16,6 +16,9 @@ module "production" {
   ami_id                     = var.instance.ami_id
   aws_region                 = var.aws_region
   availability_zone          = var.instance.availability_zone
+  bootstrap_jwt              = var.bootstrap_jwt
+  bootstrap_refresh_token    = var.bootstrap_refresh_token
+  bootstrap_token_generation = var.bootstrap_token_generation
   github_oidc_provider_arn   = var.github_oidc_provider_arn
   github_repository          = var.github_repository
   instance_profile_name      = var.instance.instance_profile_name

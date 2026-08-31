@@ -102,6 +102,38 @@ resource "aws_ssm_parameter" "deployment_state" {
   lifecycle { ignore_changes = [value] }
 }
 
+# Bootstrap credentials are operator-provided runtime secrets. Terraform uses
+# write-only fields so neither value is retained in plan files or state.
+resource "aws_ssm_parameter" "bootstrap_jwt" {
+  name             = local.secret_parameter_names.bootstrap_jwt
+  type             = "SecureString"
+  tier             = "Standard"
+  overwrite        = true
+  value_wo         = var.bootstrap_jwt
+  value_wo_version = var.bootstrap_token_generation
+
+  depends_on = [aws_iam_role_policy.github_apply]
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_ssm_parameter" "bootstrap_refresh_token" {
+  name             = local.secret_parameter_names.bootstrap_refresh_token
+  type             = "SecureString"
+  tier             = "Standard"
+  overwrite        = true
+  value_wo         = var.bootstrap_refresh_token
+  value_wo_version = var.bootstrap_token_generation
+
+  depends_on = [aws_iam_role_policy.github_apply]
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 resource "aws_ssm_parameter" "operations_bucket" {
   name  = "${local.parameter_root}/config/operations-bucket"
   type  = "String"

@@ -65,6 +65,40 @@ variable "state_bucket_name" {
   type        = string
 }
 
+variable "bootstrap_jwt" {
+  description = "Current Battlevive bootstrap JWT. Inject only through protected CI as an ephemeral sensitive value."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+
+  validation {
+    condition     = length(trimspace(var.bootstrap_jwt)) > 0
+    error_message = "bootstrap_jwt must be non-empty."
+  }
+}
+
+variable "bootstrap_refresh_token" {
+  description = "Current Battlevive bootstrap refresh token. Inject only through protected CI as an ephemeral sensitive value."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+
+  validation {
+    condition     = length(trimspace(var.bootstrap_refresh_token)) > 0
+    error_message = "bootstrap_refresh_token must be non-empty."
+  }
+}
+
+variable "bootstrap_token_generation" {
+  description = "Positive integer incremented whenever the protected bootstrap token pair changes."
+  type        = number
+
+  validation {
+    condition     = var.bootstrap_token_generation >= 1 && floor(var.bootstrap_token_generation) == var.bootstrap_token_generation
+    error_message = "bootstrap_token_generation must be a positive integer."
+  }
+}
+
 variable "create_imports" {
   description = "Set true only for the one-time manual adoption plan/apply."
   type        = bool
