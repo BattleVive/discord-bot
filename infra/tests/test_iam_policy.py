@@ -81,6 +81,7 @@ def test_bootstrap_tokens_use_write_only_terraform_inputs_and_narrow_ci_access()
     assert "value_wo_version = var.bootstrap_token_generation" in storage
     assert "value             = var.bootstrap_jwt" not in storage
     assert "prevent_destroy = true" in storage
+    assert "depends_on = [aws_iam_role_policy.github_apply]" in storage
 
     expected_parameter_arns = {
         '"arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter${local.secret_parameter_names.bootstrap_jwt}"',

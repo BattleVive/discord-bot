@@ -112,6 +112,8 @@ resource "aws_ssm_parameter" "bootstrap_jwt" {
   value_wo         = var.bootstrap_jwt
   value_wo_version = var.bootstrap_token_generation
 
+  depends_on = [aws_iam_role_policy.github_apply]
+
   lifecycle {
     prevent_destroy = true
   }
@@ -124,6 +126,8 @@ resource "aws_ssm_parameter" "bootstrap_refresh_token" {
   overwrite        = true
   value_wo         = var.bootstrap_refresh_token
   value_wo_version = var.bootstrap_token_generation
+
+  depends_on = [aws_iam_role_policy.github_apply]
 
   lifecycle {
     prevent_destroy = true
