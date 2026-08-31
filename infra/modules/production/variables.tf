@@ -19,6 +19,17 @@ variable "root_volume_type" { type = string }
 variable "security_group_name" { type = string }
 variable "security_group_description" { type = string }
 variable "state_bucket_name" { type = string }
+variable "bootstrap_jwt" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+}
+variable "bootstrap_refresh_token" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+}
+variable "bootstrap_token_generation" { type = number }
 variable "subnet_id" { type = string }
 variable "temporary_ssh_ingress_cidr" {
   description = "Temporary existing SSH CIDR retained only until a fresh SSM session succeeds; null is the required steady state."

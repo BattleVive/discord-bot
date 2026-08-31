@@ -316,6 +316,15 @@ data "aws_iam_policy_document" "plan" {
       "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter${local.parameter_root}/deployment/*",
     ]
   }
+
+  statement {
+    sid     = "ReadBootstrapTokenParameters"
+    actions = ["ssm:GetParameter"]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter${local.secret_parameter_names.bootstrap_jwt}",
+      "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter${local.secret_parameter_names.bootstrap_refresh_token}",
+    ]
+  }
 }
 
 data "aws_iam_policy_document" "plan_with_state" {
@@ -434,6 +443,18 @@ data "aws_iam_policy_document" "apply" {
       "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:document/battlevive-production-shell",
       "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter${local.parameter_root}/config/*",
       "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter${local.parameter_root}/deployment/*",
+    ]
+  }
+
+  statement {
+    sid = "ManageBootstrapTokenParameters"
+    actions = [
+      "ssm:GetParameter", "ssm:PutParameter",
+      "ssm:AddTagsToResource", "ssm:RemoveTagsFromResource",
+    ]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter${local.secret_parameter_names.bootstrap_jwt}",
+      "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter${local.secret_parameter_names.bootstrap_refresh_token}",
     ]
   }
 

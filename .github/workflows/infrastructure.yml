@@ -66,6 +66,9 @@ jobs:
       pull-requests: write
     env:
       TF_VAR_alert_email: ${{ secrets.TF_ALERT_EMAIL }}
+      TF_VAR_bootstrap_jwt: ${{ secrets.TF_BATTLEVIVE_BOOTSTRAP_JWT }}
+      TF_VAR_bootstrap_refresh_token: ${{ secrets.TF_BATTLEVIVE_BOOTSTRAP_REFRESH_TOKEN }}
+      TF_VAR_bootstrap_token_generation: ${{ vars.TF_BATTLEVIVE_BOOTSTRAP_TOKEN_GENERATION }}
       TF_VAR_instance: ${{ vars.TF_INSTANCE_JSON }}
       TF_VAR_operations_bucket_suffix: ${{ vars.TF_OPERATIONS_BUCKET_SUFFIX }}
       TF_VAR_state_bucket_name: ${{ vars.TF_STATE_BUCKET }}
@@ -108,6 +111,9 @@ jobs:
       id-token: write
     env:
       TF_VAR_alert_email: ${{ secrets.TF_ALERT_EMAIL }}
+      TF_VAR_bootstrap_jwt: ${{ secrets.TF_BATTLEVIVE_BOOTSTRAP_JWT }}
+      TF_VAR_bootstrap_refresh_token: ${{ secrets.TF_BATTLEVIVE_BOOTSTRAP_REFRESH_TOKEN }}
+      TF_VAR_bootstrap_token_generation: ${{ vars.TF_BATTLEVIVE_BOOTSTRAP_TOKEN_GENERATION }}
       TF_VAR_instance: ${{ vars.TF_INSTANCE_JSON }}
       TF_VAR_operations_bucket_suffix: ${{ vars.TF_OPERATIONS_BUCKET_SUFFIX }}
       TF_VAR_state_bucket_name: ${{ vars.TF_STATE_BUCKET }}

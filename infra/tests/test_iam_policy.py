@@ -61,3 +61,37 @@ def test_ci_roles_have_only_required_alert_kms_permissions() -> None:
     assert '"aws:RequestTag/Project"' in apply_policy
     assert '"ManageProjectKMSKey"' in apply_policy
     assert '"ManageProjectKMSAlias"' in apply_policy
+
+
+def test_bootstrap_tokens_use_write_only_terraform_inputs_and_narrow_ci_access() -> None:
+    versions = (ROOT / "infra/production/versions.tf").read_text(encoding="utf-8")
+    storage = (ROOT / "infra/modules/production/storage.tf").read_text(encoding="utf-8")
+    source = (ROOT / "infra/modules/production/iam.tf").read_text(encoding="utf-8")
+    plan_policy = source.split(
+        'data "aws_iam_policy_document" "plan" {', 1
+    )[1].split('data "aws_iam_policy_document" "plan_with_state"', 1)[0]
+    apply_policy = source.split(
+        'data "aws_iam_policy_document" "apply" {', 1
+    )[1].split('resource "aws_iam_role_policy" "github_apply"', 1)[0]
+
+    assert 'required_version = ">= 1.11.0"' in versions
+    assert 'resource "aws_ssm_parameter" "bootstrap_jwt"' in storage
+    assert 'resource "aws_ssm_parameter" "bootstrap_refresh_token"' in storage
+    assert "value_wo         = var.bootstrap_jwt" in storage
+    assert "value_wo_version = var.bootstrap_token_generation" in storage
+    assert "value             = var.bootstrap_jwt" not in storage
+    assert "prevent_destroy = true" in storage
+
+    expected_parameter_arns = {
+        '"arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter${local.secret_parameter_names.bootstrap_jwt}"',
+        '"arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter${local.secret_parameter_names.bootstrap_refresh_token}"',
+    }
+    for policy in (plan_policy, apply_policy):
+        assert '"ssm:GetParameter"' in policy
+        assert expected_parameter_arns <= set(
+            line.strip().rstrip(",") for line in policy.splitlines()
+        )
+
+    assert '"ssm:PutParameter"' in apply_policy
+    assert '"ssm:AddTagsToResource"' in apply_policy
+    assert '"ssm:RemoveTagsFromResource"' in apply_policy
