@@ -102,6 +102,18 @@ resource "aws_ssm_parameter" "deployment_state" {
   lifecycle { ignore_changes = [value] }
 }
 
+# IAM changes are eventually consistent. Delay the first credential write until
+# the GitHub apply role's updated policy has propagated through AWS.
+resource "time_sleep" "bootstrap_token_permission_propagation" {
+  create_duration = "60s"
+
+  triggers = {
+    policy = aws_iam_role_policy.github_apply.policy
+  }
+
+  depends_on = [aws_iam_role_policy.github_apply]
+}
+
 # Bootstrap credentials are operator-provided runtime secrets. Terraform uses
 # write-only fields so neither value is retained in plan files or state.
 resource "aws_ssm_parameter" "bootstrap_jwt" {
@@ -112,7 +124,7 @@ resource "aws_ssm_parameter" "bootstrap_jwt" {
   value_wo         = var.bootstrap_jwt
   value_wo_version = var.bootstrap_token_generation
 
-  depends_on = [aws_iam_role_policy.github_apply]
+  depends_on = [time_sleep.bootstrap_token_permission_propagation]
 
   lifecycle {
     prevent_destroy = true
@@ -127,7 +139,7 @@ resource "aws_ssm_parameter" "bootstrap_refresh_token" {
   value_wo         = var.bootstrap_refresh_token
   value_wo_version = var.bootstrap_token_generation
 
-  depends_on = [aws_iam_role_policy.github_apply]
+  depends_on = [time_sleep.bootstrap_token_permission_propagation]
 
   lifecycle {
     prevent_destroy = true

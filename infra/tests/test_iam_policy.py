@@ -81,7 +81,11 @@ def test_bootstrap_tokens_use_write_only_terraform_inputs_and_narrow_ci_access()
     assert "value_wo_version = var.bootstrap_token_generation" in storage
     assert "value             = var.bootstrap_jwt" not in storage
     assert "prevent_destroy = true" in storage
-    assert "depends_on = [aws_iam_role_policy.github_apply]" in storage
+    assert 'source  = "hashicorp/time"' in versions
+    assert 'resource "time_sleep" "bootstrap_token_permission_propagation"' in storage
+    assert 'create_duration = "60s"' in storage
+    assert "policy = aws_iam_role_policy.github_apply.policy" in storage
+    assert "depends_on = [time_sleep.bootstrap_token_permission_propagation]" in storage
 
     expected_parameter_arns = {
         '"arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter${local.secret_parameter_names.bootstrap_jwt}"',
