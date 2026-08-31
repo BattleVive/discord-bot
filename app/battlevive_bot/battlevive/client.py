@@ -100,12 +100,12 @@ class BattleviveClient:
 
     async def get_lobbies(self) -> list[Lobby]:
         lobbies, roster_members = await asyncio.gather(
-            self._get_and_parse("lobbies", parse_lobbies),
+            self._get_and_parse("matches", parse_lobbies),
             self._get_and_parse(
-                "lobby_slots",
+                "match_slots",
                 parse_lobby_roster_members,
                 params=(
-                    ("select", "lobby_id,user_id,slot"),
+                    ("select", "match_id,user_id,slot"),
                     ("order", "joined_at.asc,id.asc"),
                 ),
             ),
@@ -137,25 +137,25 @@ class BattleviveClient:
         lobby_id: int,
     ) -> list[LobbyDraftAction]:
         return await self._get_and_parse(
-            "lobby_draft_actions",
+            "match_draft_actions",
             parse_lobby_draft_actions,
             params=(
                 (
                     "select",
-                    "id,lobby_id,step,team_slot,action,champion,created_at",
+                    "id,match_id,step,team_slot,action,champion,created_at",
                 ),
-                ("lobby_id", f"eq.{lobby_id}"),
+                ("match_id", f"eq.{lobby_id}"),
                 ("order", "step.asc"),
             ),
         )
 
     async def get_lobby_captains(self, lobby_id: int) -> list[LobbyCaptain]:
         return await self._get_and_parse(
-            "lobby_slots",
+            "match_slots",
             parse_lobby_captains,
             params=(
                 ("select", "user_id,slot"),
-                ("lobby_id", f"eq.{lobby_id}"),
+                ("match_id", f"eq.{lobby_id}"),
                 ("is_captain", "eq.true"),
             ),
         )
@@ -170,9 +170,9 @@ class BattleviveClient:
             params=(
                 (
                     "select",
-                    "id,lobby_id,user_id,selected_winner,created_at,captain_slot",
+                    "id,match_id,user_id,selected_winner,created_at,captain_slot",
                 ),
-                ("lobby_id", f"eq.{lobby_id}"),
+                ("match_id", f"eq.{lobby_id}"),
                 ("order", "created_at.asc"),
             ),
         )

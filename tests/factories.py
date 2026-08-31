@@ -69,6 +69,16 @@ def lobby_payload(**overrides: object) -> dict[str, object]:
     return data
 
 
+def match_payload(**overrides: object) -> dict[str, object]:
+    """Return an upstream MATCHES row using its current field names."""
+    data = lobby_payload()
+    data["match_index"] = data.pop("lobby_number")
+    data["match_type"] = data.pop("lobby_type")
+    data["match_sequence"] = data.pop("game_number")
+    data.update(overrides)
+    return data
+
+
 def season_rating_payload(**overrides: object) -> dict[str, object]:
     data: dict[str, object] = {
         "id": 501,
@@ -88,7 +98,7 @@ def season_rating_payload(**overrides: object) -> dict[str, object]:
 def lobby_draft_action_payload(**overrides: object) -> dict[str, object]:
     data: dict[str, object] = {
         "id": 901,
-        "lobby_id": 101,
+        "match_id": 101,
         "step": 3,
         "team_slot": "team_one",
         "action": "pick",
@@ -111,7 +121,7 @@ def lobby_captain_payload(**overrides: object) -> dict[str, object]:
 def match_result_confirmation_payload(**overrides: object) -> dict[str, object]:
     data: dict[str, object] = {
         "id": 801,
-        "lobby_id": 101,
+        "match_id": 101,
         "user_id": USER_A_ID,
         "selected_winner": "team_one",
         "created_at": "2026-01-02T19:00:00+00:00",
