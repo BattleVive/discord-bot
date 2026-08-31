@@ -261,6 +261,51 @@ async def test_persisted_state_takes_precedence_over_bootstrap(
 
 
 @pytest.mark.asyncio
+async def test_rejected_persisted_refresh_falls_back_to_bootstrap_pair(
+    tmp_path: Path,
+) -> None:
+    class StalePersistedTokenTransport(FakeTransport):
+        async def refresh(self, refresh_token: str) -> TokenPair:
+            self.refresh_calls.append(refresh_token)
+            if refresh_token == "persisted-refresh":
+                raise response_error(400)
+            assert refresh_token == "bootstrap-refresh"
+            return TokenPair("fresh-access", "fresh-refresh")
+
+    token_path = tmp_path / "tokens.json"
+    TokenStore(token_path).save(TokenPair("persisted-access", "persisted-refresh"))
+    transport = StalePersistedTokenTransport(payloads={"users": [user_payload()]})
+    client = make_client(tmp_path, transport, token_path=token_path)
+
+    await client.refresh_credentials()
+    await client.get_users()
+
+    assert transport.refresh_calls == ["persisted-refresh", "bootstrap-refresh"]
+    assert transport.get_calls == [("users", "fresh-access")]
+    assert TokenStore(token_path).load() == TokenPair("fresh-access", "fresh-refresh")
+
+
+@pytest.mark.asyncio
+async def test_rejected_refresh_does_not_retry_an_identical_bootstrap_pair(
+    tmp_path: Path,
+) -> None:
+    class RejectedRefreshTransport(FakeTransport):
+        async def refresh(self, refresh_token: str) -> TokenPair:
+            self.refresh_calls.append(refresh_token)
+            raise response_error(400)
+
+    token_path = tmp_path / "tokens.json"
+    TokenStore(token_path).save(TokenPair("bootstrap-access", "bootstrap-refresh"))
+    transport = RejectedRefreshTransport(payloads={})
+    client = make_client(tmp_path, transport, token_path=token_path)
+
+    with pytest.raises(aiohttp.ClientResponseError, match="request failed"):
+        await client.refresh_credentials()
+
+    assert transport.refresh_calls == ["bootstrap-refresh"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("contents", [None, "{bad-json", '{"access_token": "only"}'])
 async def test_missing_or_invalid_state_falls_back_to_bootstrap(
     tmp_path: Path,

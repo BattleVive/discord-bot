@@ -65,13 +65,16 @@ class BattleviveClient:
     ) -> None:
         self._token_store = token_store or TokenStore(token_path)
         persisted_tokens = self._token_store.load()
-        bootstrap_tokens = TokenPair.from_values(
+        self._bootstrap_tokens = TokenPair.from_values(
             bootstrap_access_token,
             bootstrap_refresh_token,
         )
-        self._tokens = persisted_tokens or bootstrap_tokens
+        self._tokens = persisted_tokens or self._bootstrap_tokens
         if self._tokens is None:
             raise ValueError("A complete Battlevive token pair is required")
+        self._refresh_fallback_available = (
+            persisted_tokens is not None and self._bootstrap_tokens is not None
+        )
 
         path = getattr(self._token_store, "path", None)
         try:
@@ -244,9 +247,31 @@ class BattleviveClient:
             await self._refresh_credentials()
 
     async def _refresh_credentials(self) -> None:
-        refreshed_tokens = await self._transport.refresh(
-            self._tokens.refresh_token
-        )
+        try:
+            refreshed_tokens = await self._transport.refresh(
+                self._tokens.refresh_token
+            )
+        except aiohttp.ClientResponseError as error:
+            if (
+                error.status != 400
+                or not self._refresh_fallback_available
+                or self._bootstrap_tokens is None
+                or (
+                    self._bootstrap_tokens.refresh_token
+                    == self._tokens.refresh_token
+                )
+            ):
+                raise
+            self._refresh_fallback_available = False
+            logger.warning(
+                "Persisted Battlevive refresh token was rejected; "
+                "retrying bootstrap credentials."
+            )
+            refreshed_tokens = await self._transport.refresh(
+                self._bootstrap_tokens.refresh_token
+            )
+        else:
+            self._refresh_fallback_available = False
         self._tokens = refreshed_tokens
 
         try:
