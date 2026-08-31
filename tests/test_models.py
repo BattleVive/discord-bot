@@ -16,9 +16,9 @@ from battlevive_bot.models import parse_match_result_confirmations
 from battlevive_bot.models import parse_season_ratings
 from battlevive_bot.models import parse_user_trophies
 from battlevive_bot.models import parse_users
-from tests.factories import lobby_payload
 from tests.factories import lobby_captain_payload
 from tests.factories import lobby_draft_action_payload
+from tests.factories import match_payload
 from tests.factories import match_result_confirmation_payload
 from tests.factories import season_rating_payload
 from tests.factories import user_payload
@@ -30,12 +30,18 @@ def test_model_parsers_accept_json_and_serialize_datetimes() -> None:
     assert user.username_changed_at == datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
     assert user.json()["username_changed_at"] == "2026-01-01T12:00:00+00:00"
 
-    lobby = parse_lobbies(json.dumps([lobby_payload()]))[0]
+    lobby = parse_lobbies(json.dumps([match_payload()]))[0]
     assert lobby.creator_id == "00000000-0000-0000-0000-000000000001"
+    assert lobby.lobby_number == 44
+    assert lobby.lobby_type == "ranked"
+    assert lobby.game_number == 44
     assert lobby.team_one_roster == ["00000000-0000-0000-0000-000000000001"]
     assert lobby.team_two_roster == ["00000000-0000-0000-0000-000000000002"]
     assert lobby.json()["created_at"] == "2026-01-02T18:00:00+00:00"
     assert lobby.json()["map_pool"] == ["Arena", "Ruins"]
+
+    fallback = parse_lobbies([match_payload(match_index=None)])[0]
+    assert fallback.game_number == 1
 
     rating = parse_season_ratings(json.dumps([season_rating_payload()]))[0]
     assert rating.updated_at == datetime(2026, 1, 3, 9, 30, tzinfo=timezone.utc)
@@ -69,7 +75,7 @@ def test_active_lobby_models_parse_minimal_payloads() -> None:
     }
 
     roster_member = parse_lobby_roster_members(
-        [{"lobby_id": 101, "user_id": user_payload()["id"], "slot": "team_two"}]
+        [{"match_id": 101, "user_id": user_payload()["id"], "slot": "team_two"}]
     )[0]
     assert roster_member.json() == {
         "lobby_id": 101,
@@ -100,7 +106,7 @@ def test_active_lobby_models_parse_minimal_payloads() -> None:
         (parse_lobby_captains, {"user_id": None, "slot": "team_one"}),
         (
             parse_lobby_roster_members,
-            {"lobby_id": 101, "user_id": "user", "slot": "spectator"},
+            {"match_id": 101, "user_id": "user", "slot": "spectator"},
         ),
         (
             parse_lobby_captains,

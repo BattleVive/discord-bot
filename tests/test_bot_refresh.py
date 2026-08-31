@@ -67,6 +67,55 @@ async def test_setup_starts_services_and_refresh_loops(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("configured_url", ["", "http://battlevive.test"])
+async def test_setup_disables_match_links_when_the_configured_url_is_invalid(
+    monkeypatch,
+    configured_url: str,
+) -> None:
+    active_service_urls: list[str | None] = []
+    started: list[str] = []
+
+    async def init_pool(dsn):
+        return None
+
+    class LeaderboardService:
+        def __init__(self, *args):
+            pass
+
+        def start(self):
+            started.append("leaderboard")
+
+    class ActiveLobbyService:
+        def __init__(self, *args):
+            battlevive_url = args[4]
+            active_service_urls.append(battlevive_url)
+            if battlevive_url is not None:
+                raise ValueError("invalid test URL")
+
+        def start(self):
+            started.append("active-matches")
+
+    async def sync_tree(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(bot_module, "init_pool", init_pool)
+    monkeypatch.setattr(bot_module, "LeaderboardService", LeaderboardService)
+    monkeypatch.setattr(bot_module, "ActiveLobbyService", ActiveLobbyService)
+    monkeypatch.setattr(bot_module, "BATTLEVIVE_URL", configured_url)
+    monkeypatch.setattr(bot_module.revalidate_tokens, "start", lambda: None)
+    monkeypatch.setattr(bot_module.refresh_infrequently_changing_data, "start", lambda: None)
+    monkeypatch.setattr(bot_module.refresh_frequently_changing_data, "start", lambda: None)
+    monkeypatch.setattr(bot_module.publish_health, "start", lambda: None)
+    monkeypatch.setattr(bot_module.bot.tree, "copy_global_to", lambda **kwargs: None)
+    monkeypatch.setattr(bot_module.bot.tree, "sync", sync_tree)
+
+    await bot_module.setup_hook()
+
+    assert active_service_urls == [configured_url, None]
+    assert "active-matches" in started
+
+
+@pytest.mark.asyncio
 async def test_scheduled_token_refresh_allows_later_cycles(monkeypatch) -> None:
     client = FakeClient()
     monkeypatch.setattr(bot_module, "battlevive_client", client)

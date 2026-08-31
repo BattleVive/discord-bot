@@ -16,6 +16,7 @@ pytest.importorskip("asyncpg")
 from battlevive_bot.active_lobbies import ActiveLobbyService
 from battlevive_bot.active_lobbies import application_emoji_lookup
 from battlevive_bot.active_lobbies import build_active_lobby_embed
+from battlevive_bot.active_lobbies import build_empty_embed
 from battlevive_bot.active_lobbies import build_match_url
 from battlevive_bot.active_lobbies import LobbyPollState
 from battlevive_bot.active_lobbies import MapResolver
@@ -122,9 +123,11 @@ class FakeEmoji:
 def test_url_validation_and_optional_match_link() -> None:
     assert validate_battlevive_url("https://battlevive.test/") == "https://battlevive.test"
     assert build_match_url(candidate(), "https://battlevive.test") == (
-        "https://battlevive.test/matchmaking/2026/season-one/GAME-19"
+        "https://battlevive.test/matchmaking/2026/season-one/MATCH-19"
     )
     assert build_match_url(candidate(url_series=None), "https://battlevive.test") is None
+    assert build_match_url(candidate(), None) is None
+    assert build_match_url(candidate(), "") is None
     with pytest.raises(ValueError, match="HTTPS"):
         validate_battlevive_url("http://battlevive.test")
     with pytest.raises(ValueError, match="credentials"):
@@ -172,7 +175,7 @@ def test_embed_uses_case_insensitive_emojis_mentions_and_map_alias(
     )
 
     assert rendered.embed.title == "Friday Night Inhouse"
-    assert rendered.embed.url.endswith("/matchmaking/2026/season-one/GAME-19")
+    assert rendered.embed.url.endswith("/matchmaking/2026/season-one/MATCH-19")
     assert rendered.embed.description == "3v3 · EU · Draft · Step 3"
     team_values = [field.value for field in rendered.embed.fields[:2]]
     assert "👑 <@111>" in team_values[0]
@@ -207,8 +210,39 @@ def test_embed_title_and_metadata_have_defensive_fallbacks(tmp_path: Path) -> No
         battlevive_url="https://battlevive.test",
     )
 
-    assert rendered.embed.title == "Lobby #165"
+    assert rendered.embed.title == "Match #165"
     assert rendered.embed.description == "Draft · Step 3"
+
+
+def test_active_lobby_service_disables_links_when_base_url_is_unconfigured(
+    tmp_path: Path,
+) -> None:
+    service = ActiveLobbyService(
+        object(),
+        object(),
+        object(),
+        None,
+        None,
+        tmp_path,
+    )
+
+    rendered = build_active_lobby_embed(
+        candidate(),
+        LobbyPollState(),
+        emoji_lookup={},
+        map_resolver=MapResolver(tmp_path),
+        battlevive_url=service.battlevive_url,
+    )
+
+    assert service.battlevive_url is None
+    assert rendered.embed.url is None
+
+
+def test_empty_active_match_embed_uses_match_copy() -> None:
+    embed, _fingerprint = build_empty_embed()
+
+    assert embed.title == "Active Matches"
+    assert embed.description == "There are no active matches right now."
 
 
 def test_newest_confirmation_per_slot_drives_consensus_and_dispute() -> None:

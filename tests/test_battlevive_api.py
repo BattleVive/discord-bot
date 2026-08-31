@@ -18,6 +18,7 @@ from battlevive_bot.battlevive.tokens import TokenStore
 from tests.factories import lobby_payload
 from tests.factories import lobby_captain_payload
 from tests.factories import lobby_draft_action_payload
+from tests.factories import match_payload
 from tests.factories import match_result_confirmation_payload
 from tests.factories import season_rating_payload
 from tests.factories import user_payload
@@ -100,7 +101,7 @@ def make_client(
     ("method_name", "endpoint", "payload", "summary"),
     [
         ("get_users", "users", [user_payload()], ["PlayerOne"]),
-        ("get_lobbies", "lobbies", [lobby_payload()], [101]),
+        ("get_lobbies", "matches", [match_payload()], [101]),
         (
             "get_season_ratings",
             "season_ratings",
@@ -123,9 +124,9 @@ async def test_client_parses_every_endpoint(
     summary: list[object],
 ) -> None:
     payloads = {endpoint: payload}
-    if endpoint == "lobbies":
-        payloads["lobby_slots"] = [
-            {"lobby_id": 101, "user_id": user_payload()["id"], "slot": "team_one"}
+    if endpoint == "matches":
+        payloads["match_slots"] = [
+            {"match_id": 101, "user_id": user_payload()["id"], "slot": "team_one"}
         ]
     transport = FakeTransport(payloads=payloads)
     client = make_client(tmp_path, transport)
@@ -134,7 +135,7 @@ async def test_client_parses_every_endpoint(
 
     if endpoint == "users":
         actual = [item.discord_username for item in result]
-    elif endpoint == "lobbies":
+    elif endpoint == "matches":
         actual = [item.id for item in result]
     elif endpoint == "season_ratings":
         actual = [item.mmr for item in result]
@@ -142,8 +143,8 @@ async def test_client_parses_every_endpoint(
         actual = [item.json() for item in result]
     assert actual == summary
     expected_calls = [(endpoint, "bootstrap-access")]
-    if endpoint == "lobbies":
-        expected_calls.append(("lobby_slots", "bootstrap-access"))
+    if endpoint == "matches":
+        expected_calls.append(("match_slots", "bootstrap-access"))
     assert transport.get_calls == expected_calls
 
 
@@ -153,14 +154,14 @@ async def test_lobbies_hydrate_ordered_rosters_from_minimal_slot_query(
 ) -> None:
     transport = FakeTransport(
         payloads={
-            "lobbies": [
-                lobby_payload(team_one_roster=[], team_two_roster=[]),
+            "matches": [
+                match_payload(team_one_roster=[], team_two_roster=[]),
             ],
-            "lobby_slots": [
-                {"lobby_id": 101, "user_id": "user-two", "slot": "team_one"},
-                {"lobby_id": 101, "user_id": "user-one", "slot": "team_one"},
-                {"lobby_id": 101, "user_id": "user-three", "slot": "team_two"},
-                {"lobby_id": 999, "user_id": "orphan", "slot": "team_one"},
+            "match_slots": [
+                {"match_id": 101, "user_id": "user-two", "slot": "team_one"},
+                {"match_id": 101, "user_id": "user-one", "slot": "team_one"},
+                {"match_id": 101, "user_id": "user-three", "slot": "team_two"},
+                {"match_id": 999, "user_id": "orphan", "slot": "team_one"},
             ],
         }
     )
@@ -171,12 +172,12 @@ async def test_lobbies_hydrate_ordered_rosters_from_minimal_slot_query(
     assert result[0].team_one_roster == ["user-two", "user-one"]
     assert result[0].team_two_roster == ["user-three"]
     assert transport.get_params_calls == [
-        ("lobbies", "bootstrap-access", None),
+        ("matches", "bootstrap-access", None),
         (
-            "lobby_slots",
+            "match_slots",
             "bootstrap-access",
             (
-                ("select", "lobby_id,user_id,slot"),
+                ("select", "match_id,user_id,slot"),
                 ("order", "joined_at.asc,id.asc"),
             ),
         ),
@@ -189,24 +190,24 @@ async def test_lobbies_hydrate_ordered_rosters_from_minimal_slot_query(
     [
         (
             "get_lobby_draft_actions",
-            "lobby_draft_actions",
+            "match_draft_actions",
             [lobby_draft_action_payload()],
             (
                 (
                     "select",
-                    "id,lobby_id,step,team_slot,action,champion,created_at",
+                    "id,match_id,step,team_slot,action,champion,created_at",
                 ),
-                ("lobby_id", "eq.101"),
+                ("match_id", "eq.101"),
                 ("order", "step.asc"),
             ),
         ),
         (
             "get_lobby_captains",
-            "lobby_slots",
+            "match_slots",
             [lobby_captain_payload()],
             (
                 ("select", "user_id,slot"),
-                ("lobby_id", "eq.101"),
+                ("match_id", "eq.101"),
                 ("is_captain", "eq.true"),
             ),
         ),
@@ -217,9 +218,9 @@ async def test_lobbies_hydrate_ordered_rosters_from_minimal_slot_query(
             (
                 (
                     "select",
-                    "id,lobby_id,user_id,selected_winner,created_at,captain_slot",
+                    "id,match_id,user_id,selected_winner,created_at,captain_slot",
                 ),
-                ("lobby_id", "eq.101"),
+                ("match_id", "eq.101"),
                 ("order", "created_at.asc"),
             ),
         ),
@@ -562,7 +563,7 @@ class FakeSession:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "endpoint",
-    ["users", "lobbies", "season_ratings", "user_trophies"],
+    ["users", "matches", "season_ratings", "user_trophies"],
 )
 async def test_transport_builds_rest_urls_and_headers(endpoint: str) -> None:
     session = FakeSession([FakeResponse(200, [])])
@@ -596,13 +597,13 @@ async def test_transport_forwards_query_values_for_safe_encoding() -> None:
         session=session,
     )
     params = (
-        ("select", "id,lobby_id,champion"),
-        ("lobby_id", "eq.165"),
+        ("select", "id,match_id,champion"),
+        ("match_id", "eq.165"),
         ("order", "created_at.asc"),
     )
 
     await transport.get(
-        "lobby_draft_actions",
+        "match_draft_actions",
         "access-token",
         params=params,
     )
