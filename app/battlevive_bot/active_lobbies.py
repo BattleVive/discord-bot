@@ -245,15 +245,21 @@ def validate_battlevive_url(value: str) -> str:
     return value.strip().rstrip("/")
 
 
-def build_match_url(lobby: Mapping[str, Any], base_url: str) -> str | None:
+def build_match_url(lobby: Mapping[str, Any], base_url: str | None) -> str | None:
+    if not base_url:
+        return None
     year = lobby.get("url_year")
     series = lobby.get("url_series")
-    game = lobby.get("game_number")
-    if year is None or not series or game is None:
+    match = (
+        lobby.get("match_index")
+        or lobby.get("match_sequence")
+        or lobby.get("game_number")
+    )
+    if year is None or not series or match is None:
         return None
     return (
         f"{base_url}/matchmaking/{quote(str(year), safe='')}/"
-        f"{quote(str(series), safe='')}/GAME-{quote(str(game), safe='')}"
+        f"{quote(str(series), safe='')}/MATCH-{quote(str(match), safe='')}"
     )
 
 
@@ -517,10 +523,10 @@ def build_active_lobby_embed(
     *,
     emoji_lookup: Mapping[str, str],
     map_resolver: MapResolver,
-    battlevive_url: str,
+    battlevive_url: str | None,
 ) -> RenderedLobby:
     lobby_number = candidate.get("lobby_number", candidate.get("id", "?"))
-    title = str(candidate.get("title") or "").strip() or f"Lobby #{lobby_number}"
+    title = str(candidate.get("title") or "").strip() or f"Match #{lobby_number}"
     embed = discord.Embed(
         title=_truncate(title, MAX_EMBED_TITLE),
         url=build_match_url(candidate, battlevive_url),
@@ -591,8 +597,8 @@ def build_active_lobby_embed(
 
 def build_empty_embed() -> tuple[discord.Embed, str]:
     embed = discord.Embed(
-        title="Active Lobbies",
-        description="There are no active lobbies right now.",
+        title="Active Matches",
+        description="There are no active matches right now.",
         colour=discord.Colour.dark_grey(),
     )
     fingerprint = hashlib.sha256(
@@ -610,7 +616,7 @@ class ActiveLobbyService:
         api: ActiveLobbyAPI,
         database: ActiveLobbyDatabase,
         dsn: str | None,
-        battlevive_url: str,
+        battlevive_url: str | None,
         assets_root: Path,
         *,
         poll_interval: float = ACTIVE_LOBBY_POLL_SECONDS,
@@ -622,7 +628,11 @@ class ActiveLobbyService:
         self.api = api
         self.database = database
         self.dsn = dsn
-        self.battlevive_url = validate_battlevive_url(battlevive_url)
+        self.battlevive_url = (
+            None
+            if battlevive_url is None
+            else validate_battlevive_url(battlevive_url)
+        )
         self.map_resolver = MapResolver(assets_root)
         self.poll_interval = poll_interval
         self.idle_interval = idle_interval

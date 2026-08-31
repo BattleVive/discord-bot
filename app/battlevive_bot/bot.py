@@ -234,14 +234,25 @@ async def setup_hook() -> None:
     bot.command_access_service = CommandAccessService()
     bot.leaderboard_service = LeaderboardService(bot, DATABASE_URL)
     bot.leaderboard_service.start()
-    bot.active_lobby_service = ActiveLobbyService(
-        bot,
-        battlevive_client,
-        db,
-        DATABASE_URL,
-        BATTLEVIVE_URL,
-        ASSETS_DIR,
-    )
+    try:
+        bot.active_lobby_service = ActiveLobbyService(
+            bot,
+            battlevive_client,
+            db,
+            DATABASE_URL,
+            BATTLEVIVE_URL,
+            ASSETS_DIR,
+        )
+    except ValueError:
+        logger.warning("Battlevive match links disabled because their URL is invalid.")
+        bot.active_lobby_service = ActiveLobbyService(
+            bot,
+            battlevive_client,
+            db,
+            DATABASE_URL,
+            None,
+            ASSETS_DIR,
+        )
     bot.active_lobby_service.start()
 
     if DISCORD_COMMAND_GUILD_ID is None:

@@ -73,6 +73,24 @@ def _to_json(value: Any) -> Any:
     return value
 
 
+def _normalized_match_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Map the upstream match API onto the bot's persisted lobby model."""
+    if "match_type" not in data:
+        return data
+
+    normalized = dict(data)
+    match_index = data.get("match_index")
+    normalized["lobby_number"] = match_index
+    normalized["lobby_type"] = data["match_type"]
+    normalized["game_number"] = match_index or data.get("match_sequence")
+    return normalized
+
+
+def _match_id(data: dict[str, Any]) -> int:
+    key = "match_id" if "match_id" in data else "lobby_id"
+    return _required_int(data, key)
+
+
 @dataclass
 class User:
     id: str
@@ -149,6 +167,7 @@ class Lobby:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Lobby:
+        data = _normalized_match_data(data)
         return cls(
             id=data["id"],
             lobby_number=data["lobby_number"],
@@ -216,7 +235,7 @@ class LobbyDraftAction:
             raise TypeError("champion must be a string or null")
         return cls(
             id=_required_id(data, "id"),
-            lobby_id=_required_int(data, "lobby_id"),
+            lobby_id=_match_id(data),
             step=_required_int(data, "step"),
             team_slot=_required_choice(
                 data,
@@ -265,7 +284,7 @@ class LobbyRosterMember:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> LobbyRosterMember:
         return cls(
-            lobby_id=_required_int(data, "lobby_id"),
+            lobby_id=_match_id(data),
             user_id=_required_str(data, "user_id"),
             slot=_required_choice(data, "slot", _TEAM_SLOTS),
         )
@@ -287,7 +306,7 @@ class MatchResultConfirmation:
     def from_dict(cls, data: dict[str, Any]) -> MatchResultConfirmation:
         return cls(
             id=_required_id(data, "id"),
-            lobby_id=_required_int(data, "lobby_id"),
+            lobby_id=_match_id(data),
             user_id=_required_str(data, "user_id"),
             selected_winner=_required_choice(
                 data,
