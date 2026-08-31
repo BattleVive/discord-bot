@@ -1,3 +1,11 @@
+terraform {
+  required_providers {
+    time = {
+      source = "hashicorp/time"
+    }
+  }
+}
+
 variable "account_id" { type = string }
 variable "alert_email" { type = string }
 variable "ami_id" { type = string }
