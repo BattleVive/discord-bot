@@ -63,6 +63,8 @@ async def get_guild_config(
                active_lobby_role_id, website_moderator_role_id,
                active_lobby_baseline_pending,
                rank_cooldown_seconds,
+               guide_forum_channel_id, guide_notification_role_id,
+               guide_auto_delete_on_removal,
                updated_by
         FROM guild_config
         WHERE guild_id = $1
@@ -221,6 +223,88 @@ async def get_configured_active_lobbies() -> list[dict[str, int | bool | None]]:
         """
     )
     return [dict(row) for row in rows]
+
+
+async def get_configured_guides() -> list[dict[str, int | bool | None]]:
+    rows = await get_pool().fetch(
+        """
+        SELECT guild_id, guide_forum_channel_id, guide_notification_role_id,
+               guide_auto_delete_on_removal, updated_by
+        FROM guild_config
+        WHERE guide_forum_channel_id IS NOT NULL
+           OR EXISTS (SELECT 1 FROM guide_threads WHERE guide_threads.guild_id = guild_config.guild_id)
+        ORDER BY guild_id
+        """
+    )
+    return [dict(row) for row in rows]
+
+
+async def set_guide_forum_channel(guild_id: int, channel_id: int | None, updated_by: int) -> None:
+    await get_pool().execute(
+        """
+        INSERT INTO guild_config (guild_id, guide_forum_channel_id, updated_by)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET guide_forum_channel_id = EXCLUDED.guide_forum_channel_id,
+            updated_at = now(), updated_by = EXCLUDED.updated_by
+        """, guild_id, channel_id, updated_by,
+    )
+
+
+async def set_guide_notification_role(guild_id: int, role_id: int | None, updated_by: int) -> None:
+    await get_pool().execute(
+        """
+        INSERT INTO guild_config (guild_id, guide_notification_role_id, updated_by)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET guide_notification_role_id = EXCLUDED.guide_notification_role_id,
+            updated_at = now(), updated_by = EXCLUDED.updated_by
+        """, guild_id, role_id, updated_by,
+    )
+
+
+async def set_guide_auto_delete_on_removal(guild_id: int, enabled: bool, updated_by: int) -> None:
+    await get_pool().execute(
+        """
+        INSERT INTO guild_config (guild_id, guide_auto_delete_on_removal, updated_by)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET guide_auto_delete_on_removal = EXCLUDED.guide_auto_delete_on_removal,
+            updated_at = now(), updated_by = EXCLUDED.updated_by
+        """, guild_id, enabled, updated_by,
+    )
+
+
+async def get_guide_threads(guild_id: int) -> list[dict[str, Any]]:
+    rows = await get_pool().fetch(
+        """SELECT guild_id, source_guide_id, thread_id, source_updated_at
+           FROM guide_threads WHERE guild_id = $1 ORDER BY source_guide_id""", guild_id,
+    )
+    return [dict(row) for row in rows]
+
+
+async def upsert_guide_thread(guild_id: int, source_guide_id: str, thread_id: int, source_updated_at: datetime) -> None:
+    await get_pool().execute(
+        """INSERT INTO guide_threads (guild_id, source_guide_id, thread_id, source_updated_at)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (guild_id, source_guide_id) DO UPDATE
+           SET thread_id = EXCLUDED.thread_id, source_updated_at = EXCLUDED.source_updated_at""",
+        guild_id, source_guide_id, thread_id, source_updated_at,
+    )
+
+
+async def remove_guide_thread(guild_id: int, source_guide_id: str) -> None:
+    await get_pool().execute("DELETE FROM guide_threads WHERE guild_id = $1 AND source_guide_id = $2", guild_id, source_guide_id)
+
+
+async def reset_guide_config(guild_id: int, updated_by: int) -> None:
+    await get_pool().execute(
+        """INSERT INTO guild_config (guild_id, guide_forum_channel_id, guide_notification_role_id, guide_auto_delete_on_removal, updated_by)
+           VALUES ($1, NULL, NULL, FALSE, $2)
+           ON CONFLICT (guild_id) DO UPDATE SET guide_forum_channel_id = NULL,
+             guide_notification_role_id = NULL, guide_auto_delete_on_removal = FALSE,
+             updated_at = now(), updated_by = EXCLUDED.updated_by""", guild_id, updated_by,
+    )
 
 
 async def set_active_lobby_channel(

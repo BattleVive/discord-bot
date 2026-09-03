@@ -214,9 +214,12 @@ async def test_config_reset_and_show_are_ephemeral(monkeypatch: pytest.MonkeyPat
             "content": "Leaderboard channel: <#456>.\nLeaderboard limit: 50 (maximum).\n"
             "Active-lobby channel: not configured.\n"
             "Active-lobby notification role: not configured.\n"
-            "Website moderator role: not configured.\n"
-            "Rank cooldown: 20 seconds.\n"
-            "Whitelisted channels: none.\n"
+                "Website moderator role: not configured.\n"
+                "Rank cooldown: 20 seconds.\n"
+                "Guide forum: not configured.\n"
+                "Guide notification role: not configured.\n"
+                "Guide automatic deletion: disabled.\n"
+                "Whitelisted channels: none.\n"
             "Blacklisted channels: none.\n"
             "Debug exports: disabled.",
             "ephemeral": True,

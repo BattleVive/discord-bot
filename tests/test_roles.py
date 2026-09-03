@@ -80,7 +80,7 @@ async def test_create_roles_creates_only_unprivileged_mmr_tiers() -> None:
             return role
 
     result = await roles.create_roles(Guild())
-    assert result.created == list(roles.RANK_ROLE_NAMES_ORDERED)
+    assert result.created == [roles.GUIDE_UPDATES_ROLE, *roles.RANK_ROLE_NAMES_ORDERED]
     assert all(item[1].value == 0 and item[2] is False for item in Guild.created)
     assert "Active Lobby" not in result.created
     assert "Website Moderator" not in result.created
