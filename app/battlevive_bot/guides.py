@@ -93,6 +93,7 @@ class GuideThreadService:
             await self._requested.wait()
             self._requested.clear()
             try:
+                await self.bot.wait_until_ready()
                 await self.reconcile_all()
             except asyncio.CancelledError:
                 raise

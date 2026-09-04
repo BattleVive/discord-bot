@@ -89,6 +89,14 @@ def test_parse_guide_catalog_preserves_identity_timestamp_and_canonical_url() ->
     ]
 
 
+def test_parse_guide_catalog_normalizes_numeric_upstream_ids() -> None:
+    """Would fail if real integer primary keys were discarded as malformed."""
+    guides = parse_guide_catalog([guide_payload(id=42)])
+
+    assert guides[0].source_id == "42"
+    assert guides[0].url == "https://battlevive.com/battlerite-guides/42"
+
+
 @pytest.mark.parametrize(
     "payload",
     [
