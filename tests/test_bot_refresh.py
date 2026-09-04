@@ -56,13 +56,14 @@ async def test_setup_starts_services_and_refresh_loops(monkeypatch) -> None:
     monkeypatch.setattr(bot_module, "init_pool", init_pool)
     monkeypatch.setattr(bot_module, "LeaderboardService", Service)
     monkeypatch.setattr(bot_module, "ActiveLobbyService", Service)
+    monkeypatch.setattr(bot_module, "GuideThreadService", Service)
     monkeypatch.setattr(bot_module.revalidate_tokens, "start", lambda: started.append("tokens"))
     monkeypatch.setattr(bot_module.refresh_infrequently_changing_data, "start", lambda: started.append("hourly"))
     monkeypatch.setattr(bot_module.refresh_frequently_changing_data, "start", lambda: started.append("frequent"))
     monkeypatch.setattr(bot_module.bot.tree, "copy_global_to", lambda **kwargs: None)
     monkeypatch.setattr(bot_module.bot.tree, "sync", sync_tree)
     await bot_module.setup_hook()
-    assert started == ["service", "service", "tokens", "hourly", "frequent"]
+    assert started == ["service", "service", "service", "tokens", "hourly", "frequent"]
     assert bot_module.bot.command_access_service is not None
 
 
@@ -101,6 +102,7 @@ async def test_setup_disables_match_links_when_the_configured_url_is_invalid(
     monkeypatch.setattr(bot_module, "init_pool", init_pool)
     monkeypatch.setattr(bot_module, "LeaderboardService", LeaderboardService)
     monkeypatch.setattr(bot_module, "ActiveLobbyService", ActiveLobbyService)
+    monkeypatch.setattr(bot_module, "GuideThreadService", LeaderboardService)
     monkeypatch.setattr(bot_module, "BATTLEVIVE_URL", configured_url)
     monkeypatch.setattr(bot_module.revalidate_tokens, "start", lambda: None)
     monkeypatch.setattr(bot_module.refresh_infrequently_changing_data, "start", lambda: None)
@@ -178,6 +180,7 @@ async def test_manual_refresh_is_limited_to_invoking_guild(monkeypatch) -> None:
     monkeypatch.setattr(bot_module, "give_rank_roles", ranks)
     monkeypatch.setattr(bot_module.bot, "leaderboard_service", None)
     monkeypatch.setattr(bot_module.bot, "active_lobby_service", None)
+    monkeypatch.setattr(bot_module.bot, "guide_thread_service", None)
     messages: list[str] = []
 
     class Response:

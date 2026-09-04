@@ -809,6 +809,9 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
         "website_moderator_role_id": None,
         "active_lobby_baseline_pending": True,
         "rank_cooldown_seconds": 20,
+        "guide_forum_channel_id": None,
+        "guide_notification_role_id": None,
+        "guide_auto_delete_on_removal": False,
         "updated_by": 3012,
     }
     assert await db.get_guild_config(1002) == {
@@ -821,6 +824,9 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
         "website_moderator_role_id": None,
         "active_lobby_baseline_pending": True,
         "rank_cooldown_seconds": 20,
+        "guide_forum_channel_id": None,
+        "guide_notification_role_id": None,
+        "guide_auto_delete_on_removal": False,
         "updated_by": 3002,
     }
 
@@ -836,6 +842,9 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
         "website_moderator_role_id": None,
         "active_lobby_baseline_pending": True,
         "rank_cooldown_seconds": 20,
+        "guide_forum_channel_id": None,
+        "guide_notification_role_id": None,
+        "guide_auto_delete_on_removal": False,
         "updated_by": 3021,
     }
 

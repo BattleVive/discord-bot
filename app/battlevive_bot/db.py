@@ -63,8 +63,14 @@ async def get_guild_config(
                active_lobby_role_id, website_moderator_role_id,
                active_lobby_baseline_pending,
                rank_cooldown_seconds,
-               guide_forum_channel_id, guide_notification_role_id,
-               guide_auto_delete_on_removal,
+               (to_jsonb(guild_config) ->> 'guide_forum_channel_id')::BIGINT
+                   AS guide_forum_channel_id,
+               (to_jsonb(guild_config) ->> 'guide_notification_role_id')::BIGINT
+                   AS guide_notification_role_id,
+               COALESCE(
+                   (to_jsonb(guild_config) ->> 'guide_auto_delete_on_removal')::BOOLEAN,
+                   FALSE
+               ) AS guide_auto_delete_on_removal,
                updated_by
         FROM guild_config
         WHERE guild_id = $1

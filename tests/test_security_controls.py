@@ -145,6 +145,7 @@ async def test_setup_syncs_globally_by_default(
     monkeypatch.setattr(bot_module, "init_pool", init_pool)
     monkeypatch.setattr(bot_module, "LeaderboardService", LeaderboardService)
     monkeypatch.setattr(bot_module, "ActiveLobbyService", ActiveLobbyService)
+    monkeypatch.setattr(bot_module, "GuideThreadService", LeaderboardService)
     monkeypatch.setattr(bot_module, "DISCORD_COMMAND_GUILD_ID", None)
     monkeypatch.setattr(bot_module.bot.tree, "sync", sync)
     monkeypatch.setattr(
@@ -166,6 +167,7 @@ async def test_setup_syncs_globally_by_default(
     monkeypatch.setattr(bot_module.publish_health, "start", lambda: None)
     monkeypatch.setattr(bot_module.bot, "leaderboard_service", None)
     monkeypatch.setattr(bot_module.bot, "active_lobby_service", None)
+    monkeypatch.setattr(bot_module.bot, "guide_thread_service", None)
 
     await bot_module.setup_hook()
 
@@ -199,6 +201,7 @@ async def test_setup_can_sync_to_a_development_guild(
     monkeypatch.setattr(bot_module, "init_pool", init_pool)
     monkeypatch.setattr(bot_module, "LeaderboardService", LeaderboardService)
     monkeypatch.setattr(bot_module, "ActiveLobbyService", ActiveLobbyService)
+    monkeypatch.setattr(bot_module, "GuideThreadService", LeaderboardService)
     monkeypatch.setattr(bot_module, "DISCORD_COMMAND_GUILD_ID", 987654321)
     monkeypatch.setattr(
         bot_module.bot.tree,
@@ -220,6 +223,7 @@ async def test_setup_can_sync_to_a_development_guild(
     monkeypatch.setattr(bot_module.publish_health, "start", lambda: None)
     monkeypatch.setattr(bot_module.bot, "leaderboard_service", None)
     monkeypatch.setattr(bot_module.bot, "active_lobby_service", None)
+    monkeypatch.setattr(bot_module.bot, "guide_thread_service", None)
 
     await bot_module.setup_hook()
 
