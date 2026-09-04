@@ -97,6 +97,14 @@ def test_parse_guide_catalog_normalizes_numeric_upstream_ids() -> None:
     assert guides[0].url == "https://battlevive.com/battlerite-guides/42"
 
 
+def test_parse_guide_catalog_uses_public_guide_number_for_markdown_identity() -> None:
+    """Would fail if internal database IDs were sent to the public Markdown API."""
+    guides = parse_guide_catalog([guide_payload(id=1004, guide_number=4)])
+
+    assert guides[0].source_id == "4"
+    assert guides[0].url == "https://battlevive.com/battlerite-guides/4"
+
+
 @pytest.mark.parametrize(
     "payload",
     [

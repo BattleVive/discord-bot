@@ -39,13 +39,14 @@ def _required_text(record: Mapping[str, object], field: str) -> str:
     return value.strip()
 
 
-def _required_id(record: Mapping[str, object]) -> str:
-    value = record.get("id")
+def _required_source_id(record: Mapping[str, object]) -> str:
+    """Prefer the public guide number used by URLs and Markdown endpoints."""
+    value = record.get("guide_number", record.get("id"))
     if isinstance(value, int) and not isinstance(value, bool):
         return str(value)
     if isinstance(value, str) and value.strip():
         return value.strip()
-    raise ValueError("guide record has no valid id")
+    raise ValueError("guide record has no valid guide_number or id")
 
 
 def _parse_timestamp(value: object) -> datetime:
@@ -68,7 +69,7 @@ def parse_guide_catalog(payload: object) -> list[GuideMetadata]:
         if not isinstance(record, Mapping):
             raise TypeError("guide catalog record must be an object")
         try:
-            source_id = _required_id(record)
+            source_id = _required_source_id(record)
             title = _required_text(record, "title")
             last_modified = _parse_timestamp(record.get("updated_at"))
         except (TypeError, ValueError):
