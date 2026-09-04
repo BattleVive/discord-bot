@@ -118,6 +118,22 @@ def test_parse_guide_catalog_rejects_duplicate_stable_ids() -> None:
         parse_guide_catalog([guide_payload(), guide_payload(title="A duplicate")])
 
 
+def test_parse_guide_catalog_skips_malformed_rows_without_discarding_valid_guides() -> None:
+    """Would fail if one incomplete upstream row prevented guide reconciliation."""
+    guides = parse_guide_catalog(
+        [guide_payload(), guide_payload(id=None), {"title": "Untitled"}]
+    )
+
+    assert guides == [
+        GuideMetadata(
+            source_id="guide-123",
+            title="How to draft",
+            url="https://battlevive.com/battlerite-guides/guide-123",
+            last_modified=datetime(2026, 8, 2, 10, 30, tzinfo=UTC),
+        )
+    ]
+
+
 @pytest.mark.asyncio
 async def test_catalog_source_queries_normal_guides_endpoint_with_public_anon_auth() -> None:
     """Would fail if the listing used Markdown, user credentials, or unstable ordering."""

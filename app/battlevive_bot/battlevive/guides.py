@@ -8,6 +8,7 @@ from typing import Protocol
 import aiohttp
 
 from .supabase import SupabaseTransport
+from ..logs import logger
 
 
 GUIDE_PAGE_BASE_URL = "https://battlevive.com/battlerite-guides"
@@ -54,20 +55,25 @@ def parse_guide_catalog(payload: object) -> list[GuideMetadata]:
 
     guides: list[GuideMetadata] = []
     seen_ids: set[str] = set()
-    for record in payload:
+    for index, record in enumerate(payload):
         if not isinstance(record, Mapping):
             raise TypeError("guide catalog record must be an object")
-        source_id = _required_text(record, "id")
+        try:
+            source_id = _required_text(record, "id")
+            title = _required_text(record, "title")
+            last_modified = _parse_timestamp(record.get("updated_at"))
+        except (TypeError, ValueError):
+            logger.warning("Skipping malformed guide catalog record at index %s.", index)
+            continue
         if source_id in seen_ids:
             raise ValueError("guide catalog contains duplicate guide id")
         seen_ids.add(source_id)
-        title = _required_text(record, "title")
         guides.append(
             GuideMetadata(
                 source_id=source_id,
                 title=title,
                 url=f"{GUIDE_PAGE_BASE_URL}/{source_id}",
-                last_modified=_parse_timestamp(record.get("updated_at")),
+                last_modified=last_modified,
             )
         )
     return guides
