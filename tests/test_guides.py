@@ -102,7 +102,7 @@ def test_split_markdown_never_includes_a_newline_at_the_limit() -> None:
     assert split_markdown(markdown) == ["a" * 2_000, "\nnext"]
 
 
-def test_guide_embed_uses_the_champion_emoji_in_its_linked_title() -> None:
+def test_guide_embed_uses_the_existing_compact_champion_emoji_name() -> None:
     guide = GuideMetadata(
         source_id="3",
         title="Ruh Kaan guide",
@@ -111,9 +111,9 @@ def test_guide_embed_uses_the_champion_emoji_in_its_linked_title() -> None:
         champion="Ruh Kaan",
     )
 
-    embed = GuideThreadService._guide_embed(guide, {"ruh_kaan": "<:ruh_kaan:101>"})
+    embed = GuideThreadService._guide_embed(guide, {"ruhkaan": "<:RuhKaan:101>"})
 
-    assert embed.title == "<:ruh_kaan:101> Ruh Kaan guide"
+    assert embed.title == "<:RuhKaan:101> Ruh Kaan guide"
     assert embed.url == guide.url
     assert embed.thumbnail.url == champion_icon_url("Ruh Kaan")
 
@@ -238,13 +238,13 @@ async def test_replace_uses_tracked_messages_without_visible_markers() -> None:
         champion="Ruh Kaan",
     )
     service = GuideThreadService(None, None, None, FakeContentSource())
-    service._emoji_lookup = {"ruh_kaan": "<:ruh_kaan:101>"}
+    service._emoji_lookup = {"ruhkaan": "<:RuhKaan:101>"}
 
     message_ids = await service._replace(thread, guide, [1, 2])
 
     assert message_ids == [1]
-    assert thread.messages[1].content == "<:ruh_kaan:101>\n\nUpdated"
-    assert thread.messages[1].embed.title == "<:ruh_kaan:101> Ruh Kaan guide"
+    assert thread.messages[1].content == "<:RuhKaan:101>\n\nUpdated"
+    assert thread.messages[1].embed.title == "<:RuhKaan:101> Ruh Kaan guide"
     assert thread.messages[1].embed.thumbnail.url == champion_icon_url("Ruh Kaan")
     assert thread.messages[2].deleted is True
 

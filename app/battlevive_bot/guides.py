@@ -94,7 +94,7 @@ def _emoji_key_from_url(url: str) -> str | None:
     """
     parts = urlparse(url).path.strip("/").split("/")
     if len(parts) == 4 and parts[:3] == ["images", "champions", "icons"]:
-        return _emoji_key(parts[-1].removesuffix(".png"))
+        return _champion_emoji_key(parts[-1].removesuffix(".png"))
     if len(parts) == 5 and parts[:3] == ["images", "champions", "battlerites"]:
         return _emoji_key(parts[-1].removesuffix(".png"))
     return None
@@ -103,6 +103,11 @@ def _emoji_key_from_url(url: str) -> str | None:
 def _emoji_key(value: str) -> str:
     """Normalize a value into a lowercase identifier containing letters, digits, and underscores."""
     return re.sub(r"[^a-z0-9]+", "_", value.casefold()).strip("_")
+
+
+def _champion_emoji_key(value: str) -> str:
+    """Normalize a champion name to the compact aliases used by existing Discord emojis."""
+    return _emoji_key(value).replace("_", "")
 
 
 def champion_icon_url(champion: str | None) -> str | None:
@@ -409,7 +414,7 @@ class GuideThreadService:
         Returns:
             discord.Embed: An embed linking to the guide and optionally displaying its champion emoji and thumbnail.
         """
-        champion_emoji = emoji_lookup.get(_emoji_key(guide.champion or ""))
+        champion_emoji = emoji_lookup.get(_champion_emoji_key(guide.champion or ""))
         title = f"{champion_emoji} {guide.title}" if champion_emoji else guide.title
         embed = discord.Embed(title=title, url=guide.url)
         if icon_url := champion_icon_url(guide.champion):
