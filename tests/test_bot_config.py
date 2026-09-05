@@ -53,14 +53,17 @@ class FakeResponse:
         return self.deferred or bool(self.messages)
 
     async def defer(self, **_kwargs: object) -> None:
+        """Mark the response as deferred."""
         self.deferred = True
 
 
 class FakeFollowup:
     def __init__(self) -> None:
+        """Initialize a fake followup with an empty message list."""
         self.messages: list[dict[str, object]] = []
 
     async def send(self, content: str, **kwargs: object) -> None:
+        """Record a followup message with its content and parameters."""
         self.messages.append({"content": content, **kwargs})
 
 
@@ -115,6 +118,7 @@ def make_interaction(
 
 
 def test_guide_forum_permissions_requires_sending_messages_in_threads() -> None:
+    """Verify that guide forum permission check requires send_messages_in_threads."""
     permissions = SimpleNamespace(
         view_channel=True,
         send_messages=True,
@@ -686,7 +690,7 @@ async def test_config_command_returns_ephemeral_error_when_database_fails(
 async def test_config_reset_guides_defers_before_archiving_threads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Reset must acknowledge first because archiving many threads can exceed 3 seconds."""
+    """Verify that guide reset defers the interaction before archiving threads to avoid timeout."""
     interaction = make_interaction()
     interaction.guild.get_thread = lambda _thread_id: None
 
@@ -713,7 +717,7 @@ async def test_config_reset_guides_defers_before_archiving_threads(
 
 @pytest.mark.asyncio
 async def test_deferred_config_failure_uses_followup() -> None:
-    """A deferred interaction must receive errors through its follow-up token."""
+    """Verify that deferred interactions send error responses through the followup token."""
     interaction = make_interaction()
     await interaction.response.defer(ephemeral=True)
 

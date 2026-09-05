@@ -16,6 +16,7 @@ from battlevive_bot.guides import split_markdown
 
 
 def test_guide_thread_service_requires_sending_messages_in_threads() -> None:
+    """Verify that guide thread service requires send_messages_in_threads permission."""
     permissions = SimpleNamespace(
         view_channel=True,
         send_messages=True,
@@ -31,7 +32,7 @@ def test_guide_thread_service_requires_sending_messages_in_threads() -> None:
 
 
 def test_normalize_discord_markdown_uses_missing_emoji_tokens_and_removes_rules() -> None:
-    """Missing custom emojis stay readable without leaving BattleVive image URLs."""
+    """Verify that markdown normalization converts images to emoji tokens and removes horizontal rules."""
     markdown = (
         "# Blossom control\n\n"
         "![](https://battlevive.com/images/champions/battlerites/Blossom/Blossom_E_Control.png)\n\n"
@@ -47,7 +48,7 @@ def test_normalize_discord_markdown_uses_missing_emoji_tokens_and_removes_rules(
 
 
 def test_normalize_discord_markdown_separates_emoji_tokens_from_following_text() -> None:
-    """A converted image token must not absorb the next heading or label."""
+    """Verify that emoji tokens are separated from following text with whitespace."""
     markdown = "![](https://battlevive.com/images/champions/battlerites/Varesh/Varesh_Mouse1_Control.png)**Silence combo:**"
 
     assert normalize_discord_markdown(markdown) == (
@@ -57,6 +58,7 @@ def test_normalize_discord_markdown_separates_emoji_tokens_from_following_text()
 
 
 def test_normalize_discord_markdown_keeps_consecutive_battlerites_inline() -> None:
+    """Verify that consecutive battlerite images are kept inline without extra spacing."""
     markdown = (
         "![](https://battlevive.com/images/champions/battlerites/Varesh/Varesh_Mouse1_Control.png)"
         "![](https://battlevive.com/images/champions/battlerites/Varesh/Varesh_E_Offense.png)"
@@ -66,7 +68,7 @@ def test_normalize_discord_markdown_keeps_consecutive_battlerites_inline() -> No
 
 
 def test_normalize_discord_markdown_replaces_known_guide_images_with_custom_emojis() -> None:
-    """Known champion and battlerite assets never leave image links in Discord."""
+    """Verify that known guide images are replaced with Discord custom emoji mentions."""
     markdown = (
         "![](https://battlevive.com/images/champions/icons/Varesh.png)\n"
         "![](https://battlevive.com/images/champions/battlerites/Varesh/Varesh_Mouse1_Control.png)"
@@ -82,27 +84,28 @@ def test_normalize_discord_markdown_replaces_known_guide_images_with_custom_emoj
 
 
 def test_normalize_discord_markdown_preserves_blank_lines_in_code_blocks() -> None:
-    """Discord-supported code blocks must not be altered while removing rules."""
+    """Verify that code blocks and their blank lines are preserved during normalization."""
     markdown = "```\nfirst\n\n\nlast\n```\n\n---\n\nAfter"
 
     assert normalize_discord_markdown(markdown) == "```\nfirst\n\n\nlast\n```\n\nAfter"
 
 
 def test_normalize_discord_markdown_preserves_image_syntax_in_code() -> None:
-    """Literal image syntax in a code block is not an image that Discord should preview."""
+    """Verify that image syntax inside code blocks is not converted to emoji tokens."""
     markdown = "Use `![](https://example.com/inline.png)`\n```\n![](https://example.com/block.png)\n```"
 
     assert normalize_discord_markdown(markdown) == markdown
 
 
 def test_split_markdown_never_includes_a_newline_at_the_limit() -> None:
-    """A newline at the limit must not make a Discord message 2,001 characters long."""
+    """Verify that split markdown respects the character limit without exceeding it with newlines."""
     markdown = "a" * 2_000 + "\nnext"
 
     assert split_markdown(markdown) == ["a" * 2_000, "\nnext"]
 
 
 def test_guide_embed_uses_the_existing_compact_champion_emoji_name() -> None:
+    """Verify that guide embeds use compact champion emoji names without separators."""
     guide = GuideMetadata(
         source_id="3",
         title="Ruh Kaan guide",
@@ -143,7 +146,7 @@ class FakeMessage:
 
 class FakeThread:
     def __init__(self) -> None:
-        """Initialize the fake thread with existing messages and an empty sent-message list."""
+        """Initialize a fake thread with tracked messages for testing."""
         self.messages = {1: FakeMessage(1, "old first"), 2: FakeMessage(2, "old second")}
         self.sent: list[FakeMessage] = []
 
@@ -172,7 +175,7 @@ class FakeThread:
         return message
 
     async def edit(self, **_kwargs: object) -> None:
-        """Simulate editing the message without changing its state."""
+        """Simulate thread editing without modifying state."""
         pass
 
 
@@ -192,7 +195,7 @@ class FakeContentSource:
 
 class MissingMessage(FakeMessage):
     async def edit(self, **_kwargs: object) -> None:
-        """Raise a Discord not-found error when an edit is attempted."""
+        """Simulate a missing message by raising NotFound on edit attempts."""
         raise discord.NotFound(
             SimpleNamespace(status=404, reason="Not Found"),
             {"code": 10003, "message": "Unknown Channel"},
@@ -201,7 +204,7 @@ class MissingMessage(FakeMessage):
 
 class MissingDeleteMessage(FakeMessage):
     async def delete(self) -> None:
-        """Simulate a continuation deleted between reconciliation and deletion."""
+        """Simulate a message already deleted by raising NotFound on delete attempts."""
         raise discord.NotFound(
             SimpleNamespace(status=404, reason="Not Found"),
             {"code": 10008, "message": "Unknown Message"},
@@ -210,7 +213,7 @@ class MissingDeleteMessage(FakeMessage):
 
 @pytest.mark.asyncio
 async def test_replace_reports_a_staff_deleted_forum_post_for_republication() -> None:
-    """A stale cached thread must be recreated instead of trapping reconciliation."""
+    """Verify that guide replacement raises GuideThreadMissing when the thread is deleted."""
     thread = FakeThread()
     thread.messages[1] = MissingMessage(1, "old first")
     guide = GuideMetadata(
@@ -228,7 +231,7 @@ async def test_replace_reports_a_staff_deleted_forum_post_for_republication() ->
 
 @pytest.mark.asyncio
 async def test_replace_uses_tracked_messages_without_visible_markers() -> None:
-    """Only tracked guide messages change; their content contains no service metadata."""
+    """Verify that guide replacement updates tracked messages and removes surplus continuations."""
     thread = FakeThread()
     guide = GuideMetadata(
         source_id="3",
@@ -251,7 +254,7 @@ async def test_replace_uses_tracked_messages_without_visible_markers() -> None:
 
 @pytest.mark.asyncio
 async def test_replace_keeps_the_forum_post_when_a_surplus_message_is_already_deleted() -> None:
-    """A missing continuation is not evidence that the whole forum post disappeared."""
+    """Verify that guide replacement continues when surplus messages are already deleted."""
     thread = FakeThread()
     thread.messages[2] = MissingDeleteMessage(2, "old second")
     guide = GuideMetadata(
@@ -268,15 +271,17 @@ async def test_replace_keeps_the_forum_post_when_a_surplus_message_is_already_de
 
 class CloseableSource:
     def __init__(self) -> None:
+        """Initialize a closeable source for testing cleanup."""
         self.closed = False
 
     async def close(self) -> None:
+        """Mark the source as closed."""
         self.closed = True
 
 
 @pytest.mark.asyncio
 async def test_stop_closes_guide_sources_after_stopping_workers() -> None:
-    """Guide-owned HTTP resources must not outlive the Discord service."""
+    """Verify that guide service stop closes catalog and content sources."""
     catalog = CloseableSource()
     content = CloseableSource()
     service = GuideThreadService(None, None, catalog, content)
