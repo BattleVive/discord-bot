@@ -18,6 +18,7 @@ AGENTS.md
 .claude
 .agents
 .codex
+.worktrees
 #keep
 !utils/playwright/.auth/.gitkeep
 !data/.gitkeep
