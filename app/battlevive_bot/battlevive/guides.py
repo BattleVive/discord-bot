@@ -22,6 +22,7 @@ class GuideMetadata:
     title: str
     url: str
     last_modified: datetime
+    champion: str | None = None
 
 
 class GuideCatalogSource(Protocol):
@@ -47,6 +48,11 @@ def _required_source_id(record: Mapping[str, object]) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
     raise ValueError("guide record has no valid guide_number or id")
+
+
+def _optional_text(record: Mapping[str, object], field: str) -> str | None:
+    value = record.get(field)
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _parse_timestamp(value: object) -> datetime:
@@ -84,6 +90,7 @@ def parse_guide_catalog(payload: object) -> list[GuideMetadata]:
                 title=title,
                 url=f"{GUIDE_PAGE_BASE_URL}/{source_id}",
                 last_modified=last_modified,
+                champion=_optional_text(record, "champion"),
             )
         )
     return guides

@@ -283,19 +283,26 @@ async def set_guide_auto_delete_on_removal(guild_id: int, enabled: bool, updated
 
 async def get_guide_threads(guild_id: int) -> list[dict[str, Any]]:
     rows = await get_pool().fetch(
-        """SELECT guild_id, source_guide_id, thread_id, source_updated_at
+        """SELECT guild_id, source_guide_id, thread_id, source_updated_at, managed_message_ids
            FROM guide_threads WHERE guild_id = $1 ORDER BY source_guide_id""", guild_id,
     )
     return [dict(row) for row in rows]
 
 
-async def upsert_guide_thread(guild_id: int, source_guide_id: str, thread_id: int, source_updated_at: datetime) -> None:
+async def upsert_guide_thread(
+    guild_id: int,
+    source_guide_id: str,
+    thread_id: int,
+    source_updated_at: datetime,
+    managed_message_ids: list[int],
+) -> None:
     await get_pool().execute(
-        """INSERT INTO guide_threads (guild_id, source_guide_id, thread_id, source_updated_at)
-           VALUES ($1, $2, $3, $4)
+        """INSERT INTO guide_threads (guild_id, source_guide_id, thread_id, source_updated_at, managed_message_ids)
+           VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (guild_id, source_guide_id) DO UPDATE
-           SET thread_id = EXCLUDED.thread_id, source_updated_at = EXCLUDED.source_updated_at""",
-        guild_id, source_guide_id, thread_id, source_updated_at,
+           SET thread_id = EXCLUDED.thread_id, source_updated_at = EXCLUDED.source_updated_at,
+             managed_message_ids = EXCLUDED.managed_message_ids""",
+        guild_id, source_guide_id, thread_id, source_updated_at, managed_message_ids,
     )
 
 

@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS guide_threads (
     source_guide_id   TEXT NOT NULL,
     thread_id         BIGINT NOT NULL,
     source_updated_at TIMESTAMPTZ NOT NULL,
+    managed_message_ids BIGINT[] NOT NULL DEFAULT '{}',
     PRIMARY KEY (guild_id, source_guide_id),
     UNIQUE (guild_id, thread_id)
 );

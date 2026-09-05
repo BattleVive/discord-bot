@@ -521,6 +521,43 @@ async def test_create_roles_reuses_legacy_roles_without_adopting_ownership(
 
 
 @pytest.mark.asyncio
+async def test_create_roles_skips_guide_updates_when_a_custom_guide_role_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = CommandRole(61, roles_module.ACTIVE_LOBBY_ROLE)
+    moderator = CommandRole(62, roles_module.WEBSITE_MODERATOR_ROLE)
+    custom_guide_role = CommandRole(63, "Guide Subscribers")
+    interaction = role_setup_interaction(
+        [active, moderator, custom_guide_role],
+        None,
+    )
+    skipped: list[frozenset[str]] = []
+
+    async def fake_create_roles(
+        guild: object,
+        *,
+        skip_role_names: frozenset[str] = frozenset(),
+    ) -> roles_module.RoleCreationResult:
+        skipped.append(skip_role_names)
+        return roles_module.RoleCreationResult()
+
+    async def get_config(guild_id: int) -> dict[str, object]:
+        return {
+            "active_lobby_role_id": active.id,
+            "website_moderator_role_id": moderator.id,
+            "guide_notification_role_id": custom_guide_role.id,
+        }
+
+    monkeypatch.setattr(bot_module, "create_roles", fake_create_roles)
+    monkeypatch.setattr(bot_module.db, "get_guild_config", get_config)
+    monkeypatch.setattr(bot_module.bot, "active_lobby_service", None)
+
+    await bot_module.create_roles_slash.callback(interaction)
+
+    assert skipped == [frozenset({roles_module.GUIDE_UPDATES_ROLE})]
+
+
+@pytest.mark.asyncio
 async def test_config_limit_sets_amount_and_omission_restores_the_maximum(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

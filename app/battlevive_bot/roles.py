@@ -149,7 +149,11 @@ def _safe_assignable_role(
     return role
 
 
-async def create_roles(guild: discord.Guild) -> RoleCreationResult:
+async def create_roles(
+    guild: discord.Guild,
+    *,
+    skip_role_names: frozenset[str] = frozenset(),
+) -> RoleCreationResult:
     logger.info("Creating Battlevive roles in guild '%s' (%s)", guild.name, guild.id)
     result = RoleCreationResult()
     bot_member = guild.me
@@ -159,10 +163,14 @@ async def create_roles(guild: discord.Guild) -> RoleCreationResult:
         or bot_member.top_role <= guild.default_role
     ):
         for role_name in REQUIRED_ROLE_NAMES:
+            if role_name in skip_role_names:
+                continue
             result.failed[role_name] = "the bot lacks Manage Roles"
         return result
 
     for role_name in REQUIRED_ROLE_NAMES:
+        if role_name in skip_role_names:
+            continue
         existing_role = discord.utils.get(guild.roles, name=role_name)
 
         if existing_role is not None:

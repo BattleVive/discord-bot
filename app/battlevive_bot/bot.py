@@ -1264,7 +1264,16 @@ async def create_roles_slash(interaction: discord.Interaction) -> None:
     )
     try:
         await db.ensure_guild_config(interaction.guild.id, interaction.user.id)
-        result = await create_roles(interaction.guild)
+        config = await db.get_guild_config(interaction.guild.id) or {}
+        skip_role_names = (
+            frozenset({GUIDE_UPDATES_ROLE})
+            if config.get("guide_notification_role_id")
+            else frozenset()
+        )
+        result = await create_roles(
+            interaction.guild,
+            skip_role_names=skip_role_names,
+        )
         notification_outcomes, cleanup_issues = await _ensure_notification_roles(interaction)
         if bot.active_lobby_service is not None:
             bot.active_lobby_service.request_reconciliation()

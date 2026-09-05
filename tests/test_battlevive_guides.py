@@ -105,6 +105,13 @@ def test_parse_guide_catalog_uses_public_guide_number_for_markdown_identity() ->
     assert guides[0].url == "https://battlevive.com/battlerite-guides/4"
 
 
+def test_parse_guide_catalog_preserves_champion_for_forum_icon() -> None:
+    """Would fail if a guide's champion icon could not be rendered in Discord."""
+    guides = parse_guide_catalog([guide_payload(champion="Ezmo")])
+
+    assert guides[0].champion == "Ezmo"
+
+
 @pytest.mark.parametrize(
     "payload",
     [
