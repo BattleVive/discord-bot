@@ -15,7 +15,13 @@ variable "github_oidc_provider_arn" {
   type    = string
   default = null
 }
-variable "github_repository" { type = string }
+variable "github_oidc_subjects" {
+  type = object({
+    infrastructure_plan  = set(string)
+    infrastructure_apply = set(string)
+    production           = set(string)
+  })
+}
 variable "instance_profile_name" { type = string }
 variable "instance_role_name" { type = string }
 variable "instance_type" { type = string }

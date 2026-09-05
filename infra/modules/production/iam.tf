@@ -181,7 +181,7 @@ data "aws_iam_policy_document" "github_plan_assume" {
     condition {
       test     = "StringEquals"
       variable = "${local.oidc_hostpath}:sub"
-      values   = ["repo:${var.github_repository}:environment:infrastructure-plan"]
+      values   = var.github_oidc_subjects.infrastructure_plan
     }
   }
 }
@@ -201,7 +201,7 @@ data "aws_iam_policy_document" "github_apply_assume" {
     condition {
       test     = "StringEquals"
       variable = "${local.oidc_hostpath}:sub"
-      values   = ["repo:${var.github_repository}:environment:infrastructure-apply"]
+      values   = var.github_oidc_subjects.infrastructure_apply
     }
   }
 }
@@ -221,7 +221,7 @@ data "aws_iam_policy_document" "github_deploy_assume" {
     condition {
       test     = "StringEquals"
       variable = "${local.oidc_hostpath}:sub"
-      values   = ["repo:${var.github_repository}:environment:production"]
+      values   = var.github_oidc_subjects.production
     }
   }
 }
