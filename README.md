@@ -2,7 +2,7 @@
 
 Discord bot that syncs player, lobby, season rating, and leaderboard data from Battlevive/Supabase and manages Battlevive roles, ranks, and match info in Discord.
 
-[![Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fvoxix-dev%2Fbattlevive-bot%2Fbadges%2Ftests.json)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/tests.yml) [![Docker Image](https://github.com/voxix-dev/battlevive-bot/actions/workflows/docker-image.yml/badge.svg)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/docker-image.yml) [![CodeQL Advanced](https://github.com/voxix-dev/battlevive-bot/actions/workflows/codeql.yml/badge.svg)](https://github.com/voxix-dev/battlevive-bot/actions/workflows/codeql.yml)
+[![Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FBattleVive%2Fdiscord-bot%2Fbadges%2Ftests.json)](https://github.com/BattleVive/discord-bot/actions/workflows/tests.yml) [![Stable Release](https://github.com/BattleVive/discord-bot/actions/workflows/release.yml/badge.svg)](https://github.com/BattleVive/discord-bot/actions/workflows/release.yml) [![CodeQL Advanced](https://github.com/BattleVive/discord-bot/actions/workflows/codeql.yml/badge.svg)](https://github.com/BattleVive/discord-bot/actions/workflows/codeql.yml)
 
 This project is under active development.
 

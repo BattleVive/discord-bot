@@ -11,7 +11,7 @@ VERIFY = ROOT / "scripts" / "release" / "verify_manifest.py"
 def run_manifest(manifest, revision="a" * 40):
     return subprocess.run(
         [sys.executable, str(VERIFY), "--revision", revision,
-         "--source", "https://github.com/voxix-dev/battlevive-bot",
+         "--source", "https://github.com/BattleVive/discord-bot",
          "--version", "1.2.3"],
         input=json.dumps(manifest),
         text=True,
@@ -24,7 +24,7 @@ def valid_manifest():
         "schemaVersion": 2,
         "annotations": {
             "org.opencontainers.image.revision": "a" * 40,
-            "org.opencontainers.image.source": "https://github.com/voxix-dev/battlevive-bot",
+            "org.opencontainers.image.source": "https://github.com/BattleVive/discord-bot",
             "org.opencontainers.image.version": "1.2.3",
         },
         "manifests": [
