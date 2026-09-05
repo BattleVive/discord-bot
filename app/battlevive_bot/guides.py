@@ -330,7 +330,7 @@ class GuideThreadService:
         if member is None:
             return False
         permissions = channel.permissions_for(member)
-        return all((permissions.view_channel, permissions.send_messages, permissions.read_message_history, permissions.manage_threads, permissions.mention_everyone))
+        return all((permissions.view_channel, permissions.send_messages, permissions.send_messages_in_threads, permissions.read_message_history, permissions.manage_threads, permissions.mention_everyone))
 
     async def _publish(self, channel: discord.ForumChannel, guild: discord.Guild, config: dict[str, Any], guide: GuideMetadata) -> None:
         """Publish a guide as a Discord forum thread and record its message metadata."""

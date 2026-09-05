@@ -15,6 +15,21 @@ from battlevive_bot.guides import normalize_discord_markdown
 from battlevive_bot.guides import split_markdown
 
 
+def test_guide_thread_service_requires_sending_messages_in_threads() -> None:
+    permissions = SimpleNamespace(
+        view_channel=True,
+        send_messages=True,
+        send_messages_in_threads=False,
+        read_message_history=True,
+        manage_threads=True,
+        mention_everyone=True,
+    )
+    channel = SimpleNamespace(permissions_for=lambda _member: permissions)
+    guild = SimpleNamespace(me=object())
+
+    assert GuideThreadService._has_permissions(guild, channel) is False
+
+
 def test_normalize_discord_markdown_uses_missing_emoji_tokens_and_removes_rules() -> None:
     """Missing custom emojis stay readable without leaving BattleVive image URLs."""
     markdown = (

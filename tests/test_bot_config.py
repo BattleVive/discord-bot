@@ -114,6 +114,21 @@ def make_interaction(
     )
 
 
+def test_guide_forum_permissions_requires_sending_messages_in_threads() -> None:
+    permissions = SimpleNamespace(
+        view_channel=True,
+        send_messages=True,
+        send_messages_in_threads=False,
+        read_message_history=True,
+        manage_threads=True,
+        mention_everyone=True,
+    )
+    channel = SimpleNamespace(permissions_for=lambda _member: permissions)
+    guild = SimpleNamespace(me=object())
+
+    assert bot_module._guide_forum_permissions(channel, guild) is False
+
+
 @pytest.mark.asyncio
 async def test_config_channel_requires_manage_guild() -> None:
     interaction = make_interaction(manage_guild=False)
@@ -676,6 +691,7 @@ async def test_config_reset_guides_defers_before_archiving_threads(
     interaction.guild.get_thread = lambda _thread_id: None
 
     async def guide_threads(_guild_id: int) -> list[dict[str, object]]:
+        assert interaction.response.deferred is True
         return []
 
     async def reset(_guild_id: int, _updated_by: int) -> None:

@@ -525,13 +525,13 @@ def _guide_forum_permissions(channel: discord.ForumChannel, guild: discord.Guild
         guild (discord.Guild): The guild containing the channel.
     
     Returns:
-        bool: `true` if the bot can view, send messages, read history, manage threads, and mention everyone in the channel, `false` otherwise.
+        bool: `true` if the bot can view, send messages in the forum and its threads, read history, manage threads, and mention everyone in the channel, `false` otherwise.
     """
     member = guild.me
     if member is None:
         return False
     permissions = channel.permissions_for(member)
-    return all((permissions.view_channel, permissions.send_messages, permissions.read_message_history, permissions.manage_threads, permissions.mention_everyone))
+    return all((permissions.view_channel, permissions.send_messages, permissions.send_messages_in_threads, permissions.read_message_history, permissions.manage_threads, permissions.mention_everyone))
 
 
 def _safe_notification_role(
@@ -851,7 +851,7 @@ async def config_guides_channel(interaction: discord.Interaction, channel: disco
         await interaction.response.send_message("Please choose a forum channel.", ephemeral=True)
         return
     if not _guide_forum_permissions(channel, interaction.guild):
-        await interaction.response.send_message("I need View Channel, Send Messages, Read Message History, Manage Threads, and Mention @everyone, @here, and All Roles permissions in that forum.", ephemeral=True)
+        await interaction.response.send_message("I need View Channel, Send Messages, Send Messages in Threads, Read Message History, Manage Threads, and Mention @everyone, @here, and All Roles permissions in that forum.", ephemeral=True)
         return
     try:
         await db.set_guide_forum_channel(interaction.guild.id, channel.id, interaction.user.id)
