@@ -74,6 +74,18 @@ async def test_create_roles_creates_only_unprivileged_mmr_tiers() -> None:
         created: list[tuple[str, object, bool]] = []
 
         async def create_role(self, *, name, permissions, mentionable, reason):
+            """
+            Create a role and record its creation parameters.
+            
+            Parameters:
+                name: The role name.
+                permissions: The role permissions.
+                mentionable: Whether the role can be mentioned.
+                reason: The reason for creating the role.
+            
+            Returns:
+                The newly created fake role.
+            """
             self.created.append((name, permissions, mentionable))
             role = FakeRole(name)
             self.roles.append(role)

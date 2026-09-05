@@ -27,7 +27,15 @@ _INLINE_CODE = re.compile(r"(`+[^`\n]*`+)")
 
 
 def normalize_discord_markdown(markdown: str, *, emoji_lookup: Mapping[str, str] | None = None) -> str:
-    """Keep Discord-supported Markdown and translate unsupported GFM syntax."""
+    """Normalize Markdown for Discord by removing unsupported horizontal rules and converting supported guide images to emoji references.
+    
+    Parameters:
+        markdown (str): Markdown content to normalize.
+        emoji_lookup (Mapping[str, str] | None): Optional mapping of normalized image identifiers to Discord emoji references.
+    
+    Returns:
+        str: Discord-compatible Markdown with surrounding whitespace removed.
+    """
     emoji_lookup = emoji_lookup or {}
     lines = markdown.split("\n")
     normalized: list[str] = []
@@ -76,6 +84,14 @@ def _emoji_for_url(url: str, emoji_lookup: Mapping[str, str]) -> str:
 
 
 def _emoji_key_from_url(url: str) -> str | None:
+    """Extract the normalized emoji identifier from a supported champion image URL.
+    
+    Parameters:
+    	url (str): The image URL to inspect.
+    
+    Returns:
+    	str | None: The normalized emoji identifier, or `None` if the URL is unsupported.
+    """
     parts = urlparse(url).path.strip("/").split("/")
     if len(parts) == 4 and parts[:3] == ["images", "champions", "icons"]:
         return _emoji_key(parts[-1].removesuffix(".png"))
@@ -85,6 +101,7 @@ def _emoji_key_from_url(url: str) -> str | None:
 
 
 def _emoji_key(value: str) -> str:
+    """Normalize a value into a lowercase identifier containing letters, digits, and underscores."""
     return re.sub(r"[^a-z0-9]+", "_", value.casefold()).strip("_")
 
 
@@ -97,7 +114,19 @@ def champion_icon_url(champion: str | None) -> str | None:
 
 
 def split_markdown(markdown: str, *, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
-    """Split in-memory Markdown without losing content or exceeding Discord limits."""
+    """
+    Split Markdown into chunks that preserve all content within the specified size limit.
+    
+    Parameters:
+    	markdown (str): Markdown content to split.
+    	limit (int): Maximum number of characters per chunk.
+    
+    Returns:
+    	list[str]: Markdown chunks, each no longer than the specified limit.
+    
+    Raises:
+    	ValueError: If the limit is less than 2.
+    """
     if limit < 2:
         raise ValueError("message limit must permit content")
     if not markdown:
@@ -132,6 +161,16 @@ class GuideThreadService:
         *,
         reconcile_interval: float = 300,
     ) -> None:
+        """
+        Initialize the guide thread service with its dependencies and reconciliation interval.
+        
+        Parameters:
+        	bot (Any): Discord bot instance used to manage forum threads.
+        	database (Any): Persistence service for guide thread records.
+        	catalog (GuideCatalogSource): Source of guide metadata.
+        	content (GuideContentSource): Source of guide content.
+        	reconcile_interval (float): Interval, in seconds, between periodic reconciliations.
+        """
         self.bot = bot
         self.database = database
         self.catalog = catalog
@@ -145,6 +184,7 @@ class GuideThreadService:
         self._emojis_loaded = False
 
     def start(self) -> None:
+        """Start the background reconciliation tasks and request an initial reconciliation."""
         if self._tasks:
             return
         self._closed.clear()
@@ -155,6 +195,7 @@ class GuideThreadService:
         self.request_reconciliation()
 
     async def stop(self) -> None:
+        """Stop the service and wait for all background tasks to finish."""
         self._closed.set()
         self._requested.set()
         for task in self._tasks:
@@ -163,12 +204,23 @@ class GuideThreadService:
         self._tasks.clear()
 
     def is_running(self) -> bool:
+        """Determine whether all service tasks are currently active.
+        
+        Returns:
+        	bool: `true` if the service has active tasks and is not closed, `false` otherwise.
+        """
         return bool(self._tasks) and not self._closed.is_set() and all(not task.done() for task in self._tasks)
 
     def request_reconciliation(self, *_args: object) -> None:
+        """Request a guide reconciliation run."""
         self._requested.set()
 
     async def _worker(self) -> None:
+        """Process reconciliation requests until the service is closed.
+        
+        Waits for Discord readiness before running each reconciliation pass and logs
+        unexpected failures without stopping the worker.
+        """
         while not self._closed.is_set():
             await self._requested.wait()
             self._requested.clear()
@@ -181,6 +233,7 @@ class GuideThreadService:
                 logger.exception("Guide reconciliation pass failed.")
 
     async def _periodic(self) -> None:
+        """Request guide reconciliation at regular intervals until the service is closed."""
         while not self._closed.is_set():
             try:
                 await asyncio.wait_for(self._closed.wait(), timeout=self.reconcile_interval)
@@ -188,6 +241,7 @@ class GuideThreadService:
                 self.request_reconciliation()
 
     async def reconcile_all(self) -> None:
+        """Reconcile all configured guilds with the current guide catalog."""
         async with self._lock:
             await self._refresh_application_emojis()
             guides = await self.catalog.list_guides()
@@ -200,6 +254,17 @@ class GuideThreadService:
                     logger.exception("Guide reconciliation failed for guild %s.", config["guild_id"])
 
     async def reconcile_guild(self, config: dict[str, Any], guides: list[GuideMetadata]) -> None:
+        """
+        Synchronize the configured guild's guide forum threads with the current guide catalog.
+        
+        Parameters:
+            config (dict[str, Any]): Guild and guide-forum configuration.
+            guides (list[GuideMetadata]): Current guide metadata to publish or update.
+        
+        Raises:
+            RuntimeError: If the configured guild is unavailable or the guide forum is
+                missing or lacks the required permissions.
+        """
         guild_id = config["guild_id"]
         tracked = {row["source_guide_id"]: row for row in await self.database.get_guide_threads(guild_id)}
         channel_id = config.get("guide_forum_channel_id")
@@ -246,6 +311,16 @@ class GuideThreadService:
 
     @staticmethod
     def _has_permissions(guild: discord.Guild, channel: discord.ForumChannel) -> bool:
+        """
+        Determine whether the bot has the permissions required to manage the forum channel.
+        
+        Parameters:
+        	guild (discord.Guild): Guild containing the bot member.
+        	channel (discord.ForumChannel): Forum channel to check.
+        
+        Returns:
+        	bool: `true` if the bot has all required permissions, `false` otherwise.
+        """
         member = guild.me
         if member is None:
             return False
@@ -253,6 +328,7 @@ class GuideThreadService:
         return all((permissions.view_channel, permissions.send_messages, permissions.read_message_history, permissions.manage_threads, permissions.mention_everyone))
 
     async def _publish(self, channel: discord.ForumChannel, guild: discord.Guild, config: dict[str, Any], guide: GuideMetadata) -> None:
+        """Publish a guide as a Discord forum thread and record its message metadata."""
         markdown = normalize_discord_markdown(await self.content.fetch_markdown(guide.source_id), emoji_lookup=self._emoji_lookup)
         role = guild.get_role(config["guide_notification_role_id"]) if config.get("guide_notification_role_id") else None
         prefix = role.mention + "\n" if role is not None else ""
@@ -271,6 +347,20 @@ class GuideThreadService:
         await self.database.upsert_guide_thread(config["guild_id"], guide.source_id, thread.id, guide.last_modified, message_ids)
 
     async def _replace(self, thread: discord.Thread, guide: GuideMetadata, managed_message_ids: Iterable[int]) -> list[int]:
+        """
+        Update a guide thread's managed messages and title to reflect the current guide content.
+        
+        Parameters:
+            thread (discord.Thread): The forum thread to update.
+            guide (GuideMetadata): Metadata for the guide being synchronized.
+            managed_message_ids (Iterable[int]): IDs of messages currently managed by the service.
+        
+        Returns:
+            list[int]: IDs of the messages retained or created during the update.
+        
+        Raises:
+            GuideThreadMissing: If the thread or one of its managed messages no longer exists.
+        """
         message_ids = list(managed_message_ids)
         managed = [thread.get_partial_message(message_id) for message_id in message_ids]
         markdown = normalize_discord_markdown(await self.content.fetch_markdown(guide.source_id), emoji_lookup=self._emoji_lookup)
@@ -301,6 +391,16 @@ class GuideThreadService:
 
     @staticmethod
     def _guide_embed(guide: GuideMetadata, emoji_lookup: Mapping[str, str]) -> discord.Embed:
+        """
+        Create an embed for a guide with its title, link, and champion branding.
+        
+        Parameters:
+            guide (GuideMetadata): Guide metadata used for the embed title and URL.
+            emoji_lookup (Mapping[str, str]): Mapping of normalized champion names to Discord emoji mentions.
+        
+        Returns:
+            discord.Embed: An embed linking to the guide and optionally displaying its champion emoji and thumbnail.
+        """
         champion_emoji = emoji_lookup.get(_emoji_key(guide.champion or ""))
         title = f"{champion_emoji} {guide.title}" if champion_emoji else guide.title
         embed = discord.Embed(title=title, url=guide.url)
@@ -309,6 +409,7 @@ class GuideThreadService:
         return embed
 
     async def _refresh_application_emojis(self) -> None:
+        """Load application emojis and build a normalized name lookup for guide rendering."""
         if self._emojis_loaded:
             return
         fetch = getattr(self.bot, "fetch_application_emojis", None)
@@ -325,6 +426,14 @@ class GuideThreadService:
         self._emojis_loaded = True
 
     async def _remove_missing(self, guild: discord.Guild, row: dict[str, Any], delete: bool) -> None:
+        """
+        Remove a Discord thread for a guide that no longer exists.
+        
+        Parameters:
+            guild (discord.Guild): Guild containing the tracked thread.
+            row (dict[str, Any]): Database record identifying the thread and source guide.
+            delete (bool): Whether to delete the thread instead of archiving it.
+        """
         try:
             thread = guild.get_thread(row["thread_id"]) or await self.bot.fetch_channel(row["thread_id"])
             if delete:

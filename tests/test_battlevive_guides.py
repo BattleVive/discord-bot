@@ -15,6 +15,15 @@ from battlevive_bot.battlevive.guides import parse_guide_catalog
 
 
 def guide_payload(**overrides: object) -> dict[str, object]:
+    """
+    Build a valid default guide record with optional field overrides.
+    
+    Parameters:
+    	overrides (object): Field values that replace the default guide record values.
+    
+    Returns:
+    	dict[str, object]: A guide record containing the default fields and any supplied overrides.
+    """
     payload: dict[str, object] = {
         "id": "guide-123",
         "title": "How to draft",
@@ -26,6 +35,15 @@ def guide_payload(**overrides: object) -> dict[str, object]:
 
 
 def response_error(status: int) -> aiohttp.ClientResponseError:
+    """
+    Create an HTTP response error for the specified status code.
+    
+    Parameters:
+    	status (int): The HTTP status code to include in the error.
+    
+    Returns:
+    	aiohttp.ClientResponseError: An HTTP response error with the specified status.
+    """
     return aiohttp.ClientResponseError(
         request_info=SimpleNamespace(
             real_url="https://supabase.test/rest/v1/guides"
@@ -54,6 +72,19 @@ class FakeGuideTransport:
         *,
         params: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
     ) -> object:
+        """Record a request and return the configured response payload.
+        
+        Parameters:
+        	endpoint (str): The requested endpoint.
+        	access_token (str): The access token used for the request.
+        	params (Mapping[str, str] | Sequence[tuple[str, str]] | None): Optional request query parameters.
+        
+        Returns:
+        	object: The configured response payload.
+        
+        Raises:
+        	BaseException: The configured exception when the payload is an exception.
+        """
         self.calls.append((endpoint, access_token, params))
         if isinstance(self.payload, BaseException):
             raise self.payload

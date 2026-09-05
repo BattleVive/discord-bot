@@ -73,6 +73,9 @@ async def test_setup_disables_match_links_when_the_configured_url_is_invalid(
     monkeypatch,
     configured_url: str,
 ) -> None:
+    """
+    Verify that setup retries the active lobby service without the configured URL when URL validation fails.
+    """
     active_service_urls: list[str | None] = []
     started: list[str] = []
 

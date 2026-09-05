@@ -169,6 +169,7 @@ async def refresh_frequently_changing_data_error(error: Exception) -> None:
 
 @tasks.loop(seconds=30)
 async def publish_health() -> None:
+    """Publish the current readiness status of Discord, the database, background services, and token persistence."""
     try:
         database_ready = await database_is_ready(get_pool())
     except RuntimeError:
@@ -211,6 +212,9 @@ class BattleviveBot(commands.Bot):
     refresh_coordinator: RefreshCoordinator = refresh_coordinator
 
     async def close(self) -> None:
+        """
+        Shut down background tasks, application services, external clients, and the Discord bot.
+        """
         if publish_health.is_running():
             publish_health.cancel()
         if revalidate_tokens.is_running():
@@ -241,6 +245,9 @@ bot = BattleviveBot(
 # Events
 @bot.event
 async def setup_hook() -> None:
+    """
+    Initialize bot services, synchronize application commands, and start background tasks.
+    """
     await init_pool(DATABASE_URL)
     bot.command_access_service = CommandAccessService()
     bot.leaderboard_service = LeaderboardService(bot, DATABASE_URL)
@@ -296,6 +303,12 @@ async def setup_hook() -> None:
 
 @bot.event
 async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent) -> None:
+    """
+    Request reconciliation for services affected by a deleted Discord message.
+    
+    Parameters:
+    	payload (discord.RawMessageDeleteEvent): Event data for the deleted message.
+    """
     service = bot.leaderboard_service
     if service is not None:
         service.request_reconciliation()
@@ -476,6 +489,16 @@ def _active_lobby_channel_permissions(
     channel: discord.abc.GuildChannel,
     guild: discord.Guild,
 ) -> bool:
+    """
+    Determine whether the bot has all permissions required for an active-lobby channel.
+    
+    Parameters:
+    	channel (discord.abc.GuildChannel): The channel whose permissions are checked.
+    	guild (discord.Guild): The guild containing the bot member.
+    
+    Returns:
+    	bool: `true` if the bot can view, send messages to, embed links in, attach files to, read message history in, and mention everyone in the channel; `false` otherwise.
+    """
     bot_member = guild.me
     if bot_member is None:
         return False
@@ -494,6 +517,16 @@ def _active_lobby_channel_permissions(
 
 
 def _guide_forum_permissions(channel: discord.ForumChannel, guild: discord.Guild) -> bool:
+    """
+    Determine whether the bot has the permissions required to use a guide forum.
+    
+    Parameters:
+        channel (discord.ForumChannel): The guide forum channel to check.
+        guild (discord.Guild): The guild containing the channel.
+    
+    Returns:
+        bool: `true` if the bot can view, send messages, read history, manage threads, and mention everyone in the channel, `false` otherwise.
+    """
     member = guild.me
     if member is None:
         return False
@@ -505,6 +538,16 @@ def _safe_notification_role(
     guild: discord.Guild,
     role: discord.Role,
 ) -> bool:
+    """
+    Determine whether a role can be used as a notification role.
+    
+    Parameters:
+    	guild (discord.Guild): Guild containing the role.
+    	role (discord.Role): Role to evaluate.
+    
+    Returns:
+    	bool: `True` if the role is neither the default role nor managed, `False` otherwise.
+    """
     is_default = getattr(role, "is_default", None)
     return not (
         role == guild.default_role
@@ -732,6 +775,11 @@ async def config_active_lobbies_moderator_role(
     interaction: discord.Interaction,
     role: discord.Role | None = None,
 ) -> None:
+    """Configure the role mentioned for disputed-game notifications.
+    
+    Parameters:
+    	role (discord.Role | None): Role to use; when omitted, the default Website Moderator role is selected.
+    """
     if not await _check_config_access(interaction):
         return
 
@@ -786,6 +834,12 @@ async def config_active_lobbies_moderator_role(
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 async def config_guides_channel(interaction: discord.Interaction, channel: discord.ForumChannel) -> None:
+    """
+    Set the forum channel used for guide threads.
+    
+    Parameters:
+    	channel (discord.ForumChannel): Forum channel with the permissions required for guide management.
+    """
     if not await _check_config_access(interaction):
         return
     if not isinstance(channel, discord.ForumChannel):
@@ -807,6 +861,13 @@ async def config_guides_channel(interaction: discord.Interaction, channel: disco
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 async def config_guides_role(interaction: discord.Interaction, role: discord.Role | None = None) -> None:
+    """
+    Configure the role used for guide update notifications.
+    
+    Parameters:
+    	interaction (discord.Interaction): The Discord interaction used to apply the configuration.
+    	role (discord.Role | None): The notification role to configure, or the default Guide Updates role when omitted.
+    """
     if not await _check_config_access(interaction):
         return
     if role is None:
@@ -830,6 +891,13 @@ async def config_guides_role(interaction: discord.Interaction, role: discord.Rol
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 async def config_guides_automatic_deletion(interaction: discord.Interaction, enabled: bool) -> None:
+    """
+    Configure whether guide threads are automatically deleted when their associated content is removed.
+    
+    Parameters:
+    	interaction (discord.Interaction): The Discord interaction used to identify the guild and user.
+    	enabled (bool): Whether to enable automatic guide deletion.
+    """
     if not await _check_config_access(interaction):
         return
     try:
@@ -845,6 +913,11 @@ async def config_guides_automatic_deletion(interaction: discord.Interaction, ena
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 async def config_reset_guides(interaction: discord.Interaction) -> None:
+    """
+    Reset the guild's guide configuration and archive its managed guide posts.
+    
+    The managed guide thread records are removed after each thread is archived, while missing threads are ignored. Configuration reset failures are reported to the user.
+    """
     if not await _check_config_access(interaction):
         return
     try:
@@ -1041,6 +1114,11 @@ async def config_commands_remove(
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 async def config_show(interaction: discord.Interaction) -> None:
+    """
+    Display the guild's configured channels, roles, limits, rules, and feature settings.
+    
+    The configuration is sent as one or more ephemeral messages when it exceeds Discord's message length limit.
+    """
     if not await _check_config_access(interaction):
         return
 
@@ -1238,6 +1316,11 @@ async def _ensure_notification_roles(
 @app_commands.default_permissions(manage_roles=True)
 @app_commands.guild_only()
 async def create_roles_slash(interaction: discord.Interaction) -> None:
+    """
+    Create the Battlevive roles required by the guild and report the setup results.
+    
+    The command also ensures notification roles are configured and requests active-lobby reconciliation.
+    """
     if not await _check_guild_permission(
         interaction,
         permission="manage_roles",
@@ -1575,6 +1658,11 @@ async def rank_command(interaction: discord.Interaction) -> None:
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 async def refresh(interaction: discord.Interaction) -> None:
+    """
+    Refresh Battlevive data and synchronize related roles and services.
+    
+    Requires the Manage Server permission. A refresh cannot start while another manual refresh is running.
+    """
     if not await _check_guild_permission(
         interaction,
         permission="manage_guild",

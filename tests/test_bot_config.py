@@ -538,10 +538,17 @@ async def test_create_roles_skips_guide_updates_when_a_custom_guide_role_is_conf
         *,
         skip_role_names: frozenset[str] = frozenset(),
     ) -> roles_module.RoleCreationResult:
+        """Record role names to skip and return an empty role creation result."""
         skipped.append(skip_role_names)
         return roles_module.RoleCreationResult()
 
     async def get_config(guild_id: int) -> dict[str, object]:
+        """
+        Retrieve role identifiers for a guild's configuration.
+        
+        Returns:
+        	dict[str, object]: Configuration containing the active lobby, website moderator, and guide notification role IDs.
+        """
         return {
             "active_lobby_role_id": active.id,
             "website_moderator_role_id": moderator.id,

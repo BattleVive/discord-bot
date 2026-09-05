@@ -132,6 +132,14 @@ def _safe_assignable_role(
     guild: discord.Guild,
     role_name: str,
 ) -> discord.Role | None:
+    """Find a guild role by name when it is safe for the bot to assign.
+    
+    Parameters:
+    	role_name (str): Name of the role to find.
+    
+    Returns:
+    	discord.Role | None: The safe, assignable role, or `None` when the role is unavailable or unsafe.
+    """
     role = discord.utils.get(guild.roles, name=role_name)
     bot_member = guild.me
     if role is None or bot_member is None:
@@ -154,6 +162,16 @@ async def create_roles(
     *,
     skip_role_names: frozenset[str] = frozenset(),
 ) -> RoleCreationResult:
+    """
+    Ensure the guild has safe, assignable roles required by Battlevive.
+    
+    Parameters:
+        guild (discord.Guild): Guild where roles are created or validated.
+        skip_role_names (frozenset[str]): Role names to omit from creation and validation.
+    
+    Returns:
+        RoleCreationResult: Results describing created, existing, rejected, failed, and safe roles.
+    """
     logger.info("Creating Battlevive roles in guild '%s' (%s)", guild.name, guild.id)
     result = RoleCreationResult()
     bot_member = guild.me

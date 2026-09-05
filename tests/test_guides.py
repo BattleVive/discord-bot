@@ -97,43 +97,79 @@ def test_guide_embed_uses_the_champion_emoji_in_its_linked_title() -> None:
 
 class FakeMessage:
     def __init__(self, message_id: int, content: str) -> None:
+        """Initialize a fake message with an identifier and visible content.
+        
+        Parameters:
+            message_id (int): The message identifier.
+            content (str): The message content.
+        """
         self.id = message_id
         self.content = content
         self.deleted = False
         self.embed = None
 
     async def edit(self, *, content: str, embed: object = None, **_kwargs: object) -> None:
+        """Update the simulated message content and embed."""
         self.content = content
         self.embed = embed
 
     async def delete(self) -> None:
+        """Mark the simulated message as deleted."""
         self.deleted = True
 
 
 class FakeThread:
     def __init__(self) -> None:
+        """Initialize the fake thread with existing messages and an empty sent-message list."""
         self.messages = {1: FakeMessage(1, "old first"), 2: FakeMessage(2, "old second")}
         self.sent: list[FakeMessage] = []
 
     def get_partial_message(self, message_id: int) -> FakeMessage:
+        """Retrieve a tracked message by its identifier.
+        
+        Parameters:
+        	message_id (int): The identifier of the message to retrieve.
+        
+        Returns:
+        	FakeMessage: The tracked message associated with the identifier.
+        """
         return self.messages[message_id]
 
     async def send(self, content: str, **_kwargs: object) -> FakeMessage:
+        """Send content to the fake thread and record the resulting message.
+        
+        Parameters:
+            content (str): Message content to store.
+        
+        Returns:
+            FakeMessage: The newly created message.
+        """
         message = FakeMessage(100 + len(self.sent), content)
         self.sent.append(message)
         return message
 
     async def edit(self, **_kwargs: object) -> None:
+        """Simulate editing the message without changing its state."""
         pass
 
 
 class FakeContentSource:
     async def fetch_markdown(self, _source_id: str) -> str:
+        """
+        Provide the guide's markdown content.
+        
+        Parameters:
+            _source_id (str): Identifier of the guide content source.
+        
+        Returns:
+            str: Markdown containing a Ruh Kaan champion image and updated text.
+        """
         return "![](https://battlevive.com/images/champions/icons/Ruh-Kaan.png)\n\nUpdated"
 
 
 class MissingMessage(FakeMessage):
     async def edit(self, **_kwargs: object) -> None:
+        """Raise a Discord not-found error when an edit is attempted."""
         raise discord.NotFound(
             SimpleNamespace(status=404, reason="Not Found"),
             {"code": 10003, "message": "Unknown Channel"},
