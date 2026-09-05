@@ -13,6 +13,13 @@ from ..logs import logger
 
 GUIDE_PAGE_BASE_URL = "https://battlevive.com/battlerite-guides"
 
+# Temporary Cloudflare compatibility for AWS-hosted guide fetches. Remove once
+# Battlevive accepts aiohttp's default User-Agent without a bot challenge.
+GUIDE_MARKDOWN_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "Chrome/140.0.0.0 Safari/537.36"
+)
+
 
 @dataclass(frozen=True, slots=True)
 class GuideMetadata:
@@ -231,7 +238,10 @@ class HttpGuideContentSource:
             raise ValueError("guide ID is required")
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15, connect=5))
-        async with self._session.get(f"{self._base_url}/api/guides/{source_id}/markdown") as response:
+        async with self._session.get(
+            f"{self._base_url}/api/guides/{source_id}/markdown",
+            headers={"User-Agent": GUIDE_MARKDOWN_USER_AGENT},
+        ) as response:
             response.raise_for_status()
             markdown = await response.text()
         if not markdown:

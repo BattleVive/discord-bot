@@ -8,8 +8,11 @@ from types import SimpleNamespace
 
 import aiohttp
 import pytest
+from aiohttp import test_utils
+from aiohttp import web
 
 from battlevive_bot.battlevive.guides import GuideMetadata
+from battlevive_bot.battlevive.guides import HttpGuideContentSource
 from battlevive_bot.battlevive.guides import SupabaseGuideCatalogSource
 from battlevive_bot.battlevive.guides import parse_guide_catalog
 
@@ -229,3 +232,29 @@ async def test_catalog_source_propagates_normal_endpoint_failures() -> None:
         await source.list_guides()
 
     assert raised.value.status == 503
+
+
+@pytest.mark.asyncio
+async def test_content_source_sends_browser_compatible_user_agent() -> None:
+    """Would fail if guide Markdown requests again triggered Cloudflare's bot challenge."""
+    received_user_agents: list[str] = []
+
+    async def markdown(request: web.Request) -> web.Response:
+        received_user_agents.append(request.headers["User-Agent"])
+        return web.Response(text="# Guide")
+
+    app = web.Application()
+    app.router.add_get("/api/guides/4/markdown", markdown)
+    server = test_utils.TestServer(app)
+    await server.start_server()
+    source = HttpGuideContentSource(str(server.make_url("/")).rstrip("/"))
+    try:
+        assert await source.fetch_markdown("4") == "# Guide"
+    finally:
+        await source.close()
+        await server.close()
+
+    assert received_user_agents == [
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "Chrome/140.0.0.0 Safari/537.36"
+    ]
