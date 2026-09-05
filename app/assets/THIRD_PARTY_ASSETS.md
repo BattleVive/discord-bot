@@ -26,4 +26,4 @@ Asset preparation for this repository:
   lowercase filename including its champion, ability, and category.
 
 Rights holders may request correction or removal through the repository's
-[issue tracker](https://github.com/voxix-dev/battlevive-bot/issues).
+[issue tracker](https://github.com/BattleVive/discord-bot/issues).
