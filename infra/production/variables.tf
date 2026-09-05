@@ -13,9 +13,30 @@ variable "alert_email" {
   type        = string
 }
 
-variable "github_repository" {
-  type    = string
-  default = "voxix-dev/battlevive-bot"
+variable "github_oidc_subjects" {
+  type = object({
+    infrastructure_plan  = set(string)
+    infrastructure_apply = set(string)
+    production           = set(string)
+  })
+
+  default = {
+    infrastructure_plan = [
+      "repo:voxix-dev/battlevive-bot:environment:infrastructure-plan",
+      "repo:BattleVive@325350336/discord-bot@1295590282:environment:infrastructure-plan",
+      "repo:voxix-dev@203257071/battlevive-bot@1295590282:environment:infrastructure-plan",
+    ]
+    infrastructure_apply = [
+      "repo:voxix-dev/battlevive-bot:environment:infrastructure-apply",
+      "repo:BattleVive@325350336/discord-bot@1295590282:environment:infrastructure-apply",
+      "repo:voxix-dev@203257071/battlevive-bot@1295590282:environment:infrastructure-apply",
+    ]
+    production = [
+      "repo:voxix-dev/battlevive-bot:environment:production",
+      "repo:BattleVive@325350336/discord-bot@1295590282:environment:production",
+      "repo:voxix-dev@203257071/battlevive-bot@1295590282:environment:production",
+    ]
+  }
 }
 
 variable "github_oidc_provider_arn" {
