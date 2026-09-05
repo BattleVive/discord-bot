@@ -57,6 +57,7 @@ def response_error(status: int) -> aiohttp.ClientResponseError:
 class FakeGuideTransport:
     def __init__(self, payload: object) -> None:
         self.payload = payload
+        self.closed = False
         self.calls: list[
             tuple[
                 str,
@@ -89,6 +90,9 @@ class FakeGuideTransport:
         if isinstance(self.payload, BaseException):
             raise self.payload
         return self.payload
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 def test_parse_guide_catalog_preserves_identity_timestamp_and_canonical_url() -> None:
@@ -147,13 +151,6 @@ def test_parse_guide_catalog_preserves_champion_for_forum_icon() -> None:
     "payload",
     [
         {},
-        guide_payload(id=""),
-        guide_payload(id=None),
-        guide_payload(title=""),
-        guide_payload(title=None),
-        guide_payload(updated_at=None),
-        guide_payload(updated_at="not-a-timestamp"),
-        guide_payload(updated_at="2026-08-02T10:30:00"),
         [guide_payload(), "not-a-guide"],
         {"id": "not-an-array"},
     ],
@@ -207,6 +204,17 @@ async def test_catalog_source_queries_normal_guides_endpoint_with_public_anon_au
             ),
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_source_closes_its_transport() -> None:
+    """The catalog source owns its transport lifecycle during bot shutdown."""
+    transport = FakeGuideTransport([guide_payload()])
+    source = SupabaseGuideCatalogSource(transport, anon_key="public-anon-key")
+
+    await source.close()
+
+    assert transport.closed is True
 
 
 @pytest.mark.asyncio

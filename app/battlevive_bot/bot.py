@@ -566,6 +566,11 @@ async def _send_config_failure(
             SAFE_COMMAND_ERROR,
             ephemeral=True,
         )
+    else:
+        await interaction.followup.send(
+            SAFE_COMMAND_ERROR,
+            ephemeral=True,
+        )
 
 
 @config_leaderboard_group.command(
@@ -921,8 +926,8 @@ async def config_reset_guides(interaction: discord.Interaction) -> None:
     if not await _check_config_access(interaction):
         return
     try:
+        await interaction.response.defer(ephemeral=True)
         # Reconciliation sees no catalog only after posts are archived; retain rows on failures.
-        config = await db.get_guild_config(interaction.guild.id) or {}
         guild = interaction.guild
         for row in await db.get_guide_threads(guild.id):
             try:
@@ -932,7 +937,7 @@ async def config_reset_guides(interaction: discord.Interaction) -> None:
                 pass
             await db.remove_guide_thread(guild.id, row['source_guide_id'])
         await db.reset_guide_config(guild.id, interaction.user.id)
-        await interaction.response.send_message("Guide configuration reset; managed guide posts were archived.", ephemeral=True)
+        await interaction.followup.send("Guide configuration reset; managed guide posts were archived.", ephemeral=True)
     except Exception:
         await _send_config_failure(interaction, "config reset guides failed")
 

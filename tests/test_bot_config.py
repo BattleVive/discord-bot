@@ -44,12 +44,24 @@ def test_config_channel_exposes_text_and_news_channel_types() -> None:
 class FakeResponse:
     def __init__(self) -> None:
         self.messages: list[dict[str, object]] = []
+        self.deferred = False
 
     async def send_message(self, content: str, **kwargs: object) -> None:
         self.messages.append({"content": content, **kwargs})
 
     def is_done(self) -> bool:
-        return bool(self.messages)
+        return self.deferred or bool(self.messages)
+
+    async def defer(self, **_kwargs: object) -> None:
+        self.deferred = True
+
+
+class FakeFollowup:
+    def __init__(self) -> None:
+        self.messages: list[dict[str, object]] = []
+
+    async def send(self, content: str, **kwargs: object) -> None:
+        self.messages.append({"content": content, **kwargs})
 
 
 class FakeChannel:
@@ -97,6 +109,7 @@ def make_interaction(
         user=user,
         guild=guild,
         response=FakeResponse(),
+        followup=FakeFollowup(),
         channel=channel,
     )
 
@@ -647,6 +660,50 @@ async def test_config_command_returns_ephemeral_error_when_database_fails(
     await bot_module.config_show.callback(interaction)
 
     assert interaction.response.messages == [
+        {
+            "content": "The command failed. Please try again later.",
+            "ephemeral": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_config_reset_guides_defers_before_archiving_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reset must acknowledge first because archiving many threads can exceed 3 seconds."""
+    interaction = make_interaction()
+    interaction.guild.get_thread = lambda _thread_id: None
+
+    async def guide_threads(_guild_id: int) -> list[dict[str, object]]:
+        return []
+
+    async def reset(_guild_id: int, _updated_by: int) -> None:
+        return None
+
+    monkeypatch.setattr(bot_module.db, "get_guide_threads", guide_threads)
+    monkeypatch.setattr(bot_module.db, "reset_guide_config", reset)
+
+    await bot_module.config_reset_guides.callback(interaction)
+
+    assert interaction.response.deferred is True
+    assert interaction.followup.messages == [
+        {
+            "content": "Guide configuration reset; managed guide posts were archived.",
+            "ephemeral": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_deferred_config_failure_uses_followup() -> None:
+    """A deferred interaction must receive errors through its follow-up token."""
+    interaction = make_interaction()
+    await interaction.response.defer(ephemeral=True)
+
+    await bot_module._send_config_failure(interaction, "test deferred configuration failure")
+
+    assert interaction.followup.messages == [
         {
             "content": "The command failed. Please try again later.",
             "ephemeral": True,

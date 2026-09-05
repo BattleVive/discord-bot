@@ -26,25 +26,23 @@ class GuideMetadata:
 
 
 class GuideCatalogSource(Protocol):
-    async def list_guides(self) -> list[GuideMetadata]: """Retrieve the available guide metadata from the catalog source.
+    async def list_guides(self) -> list[GuideMetadata]:
+        """Retrieve the available guide metadata from the catalog source."""
+        ...
 
-Returns:
-	list[GuideMetadata]: The validated guide metadata entries.
-"""
-...
+    async def close(self) -> None:
+        """Release resources owned by the catalog source."""
+        ...
 
 
 class GuideContentSource(Protocol):
-    async def fetch_markdown(self, source_id: str) -> str: """
-Fetch the Markdown content for a guide.
+    async def fetch_markdown(self, source_id: str) -> str:
+        """Fetch the Markdown content for a guide."""
+        ...
 
-Parameters:
-    source_id (str): The guide's source identifier.
-
-Returns:
-    str: The guide's Markdown content.
-"""
-...
+    async def close(self) -> None:
+        """Release resources owned by the content source."""
+        ...
 
 
 def _required_text(record: Mapping[str, object], field: str) -> str:
@@ -201,6 +199,10 @@ class SupabaseGuideCatalogSource:
             ),
         )
         return parse_guide_catalog(payload)
+
+    async def close(self) -> None:
+        """Close the transport owned by this catalog source."""
+        await self._transport.close()
 
 
 class HttpGuideContentSource:

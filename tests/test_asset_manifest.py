@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 
 from PIL import Image
 import pytest
@@ -79,4 +80,4 @@ def test_committed_map_and_emoji_images_have_expected_dimensions(
     assert len(emoji_paths) == 28
     assert all(Image.open(path).size == (128, 128) for path in emoji_paths)
     assert all(path.stat().st_size < 256 * 1024 for path in emoji_paths)
-    assert all(path.stem.replace("_", "").isalnum() for path in emoji_paths)
+    assert all(re.fullmatch(r"[a-z0-9_]+", path.stem) is not None for path in emoji_paths)

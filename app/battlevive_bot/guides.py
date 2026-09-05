@@ -134,7 +134,7 @@ def split_markdown(markdown: str, *, limit: int = DISCORD_MESSAGE_LIMIT) -> list
     chunks: list[str] = []
     remaining = markdown
     while len(remaining) > limit:
-        boundary = max(remaining.rfind("\n\n", 0, limit + 1), remaining.rfind("\n", 0, limit + 1))
+        boundary = max(remaining.rfind("\n\n", 0, limit), remaining.rfind("\n", 0, limit))
         if boundary <= 0:
             boundary = limit
         else:
@@ -202,6 +202,11 @@ class GuideThreadService:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+        for source in (self.catalog, self.content):
+            try:
+                await source.close()
+            except Exception:
+                logger.exception("Could not close guide source during shutdown.")
 
     def is_running(self) -> bool:
         """Determine whether all service tasks are currently active.
@@ -374,7 +379,10 @@ class GuideThreadService:
                     await message.edit(content=chunk, allowed_mentions=discord.AllowedMentions.none())
                     updated_ids.append(message.id)
                 for message in managed[len(chunks):]:
-                    await message.delete()
+                    try:
+                        await message.delete()
+                    except discord.NotFound:
+                        pass
                 for chunk in chunks[len(managed):]:
                     message = await thread.send(chunk, allowed_mentions=discord.AllowedMentions.none())
                     updated_ids.append(message.id)

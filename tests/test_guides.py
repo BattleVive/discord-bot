@@ -12,6 +12,7 @@ from battlevive_bot.guides import champion_icon_url
 from battlevive_bot.guides import GuideThreadService
 from battlevive_bot.guides import GuideThreadMissing
 from battlevive_bot.guides import normalize_discord_markdown
+from battlevive_bot.guides import split_markdown
 
 
 def test_normalize_discord_markdown_uses_missing_emoji_tokens_and_removes_rules() -> None:
@@ -77,6 +78,13 @@ def test_normalize_discord_markdown_preserves_image_syntax_in_code() -> None:
     markdown = "Use `![](https://example.com/inline.png)`\n```\n![](https://example.com/block.png)\n```"
 
     assert normalize_discord_markdown(markdown) == markdown
+
+
+def test_split_markdown_never_includes_a_newline_at_the_limit() -> None:
+    """A newline at the limit must not make a Discord message 2,001 characters long."""
+    markdown = "a" * 2_000 + "\nnext"
+
+    assert split_markdown(markdown) == ["a" * 2_000, "\nnext"]
 
 
 def test_guide_embed_uses_the_champion_emoji_in_its_linked_title() -> None:
@@ -176,6 +184,15 @@ class MissingMessage(FakeMessage):
         )
 
 
+class MissingDeleteMessage(FakeMessage):
+    async def delete(self) -> None:
+        """Simulate a continuation deleted between reconciliation and deletion."""
+        raise discord.NotFound(
+            SimpleNamespace(status=404, reason="Not Found"),
+            {"code": 10008, "message": "Unknown Message"},
+        )
+
+
 @pytest.mark.asyncio
 async def test_replace_reports_a_staff_deleted_forum_post_for_republication() -> None:
     """A stale cached thread must be recreated instead of trapping reconciliation."""
@@ -215,3 +232,41 @@ async def test_replace_uses_tracked_messages_without_visible_markers() -> None:
     assert thread.messages[1].embed.title == "<:ruh_kaan:101> Ruh Kaan guide"
     assert thread.messages[1].embed.thumbnail.url == champion_icon_url("Ruh Kaan")
     assert thread.messages[2].deleted is True
+
+
+@pytest.mark.asyncio
+async def test_replace_keeps_the_forum_post_when_a_surplus_message_is_already_deleted() -> None:
+    """A missing continuation is not evidence that the whole forum post disappeared."""
+    thread = FakeThread()
+    thread.messages[2] = MissingDeleteMessage(2, "old second")
+    guide = GuideMetadata(
+        source_id="3",
+        title="Ruh Kaan guide",
+        url="https://battlevive.com/battlerite-guides/3",
+        last_modified=datetime(2026, 9, 4, tzinfo=UTC),
+        champion="Ruh Kaan",
+    )
+    service = GuideThreadService(None, None, None, FakeContentSource())
+
+    assert await service._replace(thread, guide, [1, 2]) == [1]
+
+
+class CloseableSource:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_stop_closes_guide_sources_after_stopping_workers() -> None:
+    """Guide-owned HTTP resources must not outlive the Discord service."""
+    catalog = CloseableSource()
+    content = CloseableSource()
+    service = GuideThreadService(None, None, catalog, content)
+
+    await service.stop()
+
+    assert catalog.closed is True
+    assert content.closed is True
