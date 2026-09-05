@@ -18,6 +18,9 @@ from PIL import Image
 from . import db
 from .active_lobbies import ActiveLobbyService
 from .battlevive import BattleviveClient
+from .battlevive.guides import HttpGuideContentSource
+from .battlevive.guides import SupabaseGuideCatalogSource
+from .battlevive.supabase import SupabaseTransport
 from .battlevive.tokens import build_token_store
 from .command_access import BattleviveCommandTree
 from .command_access import CommandAccessService
@@ -31,11 +34,13 @@ from .identity import IdentityStatus
 from .identity import resolve_member_identity
 from .images import build_card
 from .leaderboards import LeaderboardService
+from .guides import GuideThreadService
 from .logs import logger
 from .models import Lobby
 from .models import SeasonRating
 from .models import User
 from .roles import ACTIVE_LOBBY_ROLE
+from .roles import GUIDE_UPDATES_ROLE
 from .roles import create_roles
 from .roles import give_rank_roles
 from .roles import reconcile_member_roles
@@ -164,6 +169,7 @@ async def refresh_frequently_changing_data_error(error: Exception) -> None:
 
 @tasks.loop(seconds=30)
 async def publish_health() -> None:
+    """Publish the current readiness status of Discord, the database, background services, and token persistence."""
     try:
         database_ready = await database_is_ready(get_pool())
     except RuntimeError:
@@ -177,6 +183,8 @@ async def publish_health() -> None:
             and bot.leaderboard_service.is_running(),
             bot.active_lobby_service is not None
             and bot.active_lobby_service.is_running(),
+            bot.guide_thread_service is not None
+            and bot.guide_thread_service.is_running(),
         )
     )
     health_state.write(
@@ -199,10 +207,14 @@ intents.members = True
 class BattleviveBot(commands.Bot):
     leaderboard_service: LeaderboardService | None = None
     active_lobby_service: ActiveLobbyService | None = None
+    guide_thread_service: GuideThreadService | None = None
     command_access_service: CommandAccessService | None = None
     refresh_coordinator: RefreshCoordinator = refresh_coordinator
 
     async def close(self) -> None:
+        """
+        Shut down background tasks, application services, external clients, and the Discord bot.
+        """
         if publish_health.is_running():
             publish_health.cancel()
         if revalidate_tokens.is_running():
@@ -217,6 +229,9 @@ class BattleviveBot(commands.Bot):
         if self.active_lobby_service is not None:
             await self.active_lobby_service.stop()
             self.active_lobby_service = None
+        if self.guide_thread_service is not None:
+            await self.guide_thread_service.stop()
+            self.guide_thread_service = None
         await battlevive_client.close()
         await close_pool()
         await super().close()
@@ -230,6 +245,9 @@ bot = BattleviveBot(
 # Events
 @bot.event
 async def setup_hook() -> None:
+    """
+    Initialize bot services, synchronize application commands, and start background tasks.
+    """
     await init_pool(DATABASE_URL)
     bot.command_access_service = CommandAccessService()
     bot.leaderboard_service = LeaderboardService(bot, DATABASE_URL)
@@ -254,6 +272,16 @@ async def setup_hook() -> None:
             ASSETS_DIR,
         )
     bot.active_lobby_service.start()
+    bot.guide_thread_service = GuideThreadService(
+        bot,
+        db,
+        SupabaseGuideCatalogSource(
+            SupabaseTransport(SUPABASE_URL, SUPABASE_API_KEY),
+            anon_key=SUPABASE_API_KEY,
+        ),
+        HttpGuideContentSource(),
+    )
+    bot.guide_thread_service.start()
 
     if DISCORD_COMMAND_GUILD_ID is None:
         await bot.tree.sync()
@@ -275,12 +303,20 @@ async def setup_hook() -> None:
 
 @bot.event
 async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent) -> None:
+    """
+    Request reconciliation for services affected by a deleted Discord message.
+    
+    Parameters:
+    	payload (discord.RawMessageDeleteEvent): Event data for the deleted message.
+    """
     service = bot.leaderboard_service
     if service is not None:
         service.request_reconciliation()
     active_lobby_service = bot.active_lobby_service
     if active_lobby_service is not None:
         active_lobby_service.request_reconciliation()
+    if bot.guide_thread_service is not None:
+        bot.guide_thread_service.request_reconciliation()
 
 
 @bot.event
@@ -361,6 +397,9 @@ config_active_lobbies_group = app_commands.Group(
     name="active_lobbies",
     description="Configure active-lobby posts",
     parent=config_group,
+)
+config_guides_group = app_commands.Group(
+    name="guides", description="Configure guide forum posts", parent=config_group
 )
 config_reset_group = app_commands.Group(
     name="reset",
@@ -450,6 +489,16 @@ def _active_lobby_channel_permissions(
     channel: discord.abc.GuildChannel,
     guild: discord.Guild,
 ) -> bool:
+    """
+    Determine whether the bot has all permissions required for an active-lobby channel.
+    
+    Parameters:
+    	channel (discord.abc.GuildChannel): The channel whose permissions are checked.
+    	guild (discord.Guild): The guild containing the bot member.
+    
+    Returns:
+    	bool: `true` if the bot can view, send messages to, embed links in, attach files to, read message history in, and mention everyone in the channel; `false` otherwise.
+    """
     bot_member = guild.me
     if bot_member is None:
         return False
@@ -467,10 +516,38 @@ def _active_lobby_channel_permissions(
     )
 
 
+def _guide_forum_permissions(channel: discord.ForumChannel, guild: discord.Guild) -> bool:
+    """
+    Determine whether the bot has the permissions required to use a guide forum.
+    
+    Parameters:
+        channel (discord.ForumChannel): The guide forum channel to check.
+        guild (discord.Guild): The guild containing the channel.
+    
+    Returns:
+        bool: `true` if the bot can view, send messages in the forum and its threads, read history, manage threads, and mention everyone in the channel, `false` otherwise.
+    """
+    member = guild.me
+    if member is None:
+        return False
+    permissions = channel.permissions_for(member)
+    return all((permissions.view_channel, permissions.send_messages, permissions.send_messages_in_threads, permissions.read_message_history, permissions.manage_threads, permissions.mention_everyone))
+
+
 def _safe_notification_role(
     guild: discord.Guild,
     role: discord.Role,
 ) -> bool:
+    """
+    Determine whether a role can be used as a notification role.
+    
+    Parameters:
+    	guild (discord.Guild): Guild containing the role.
+    	role (discord.Role): Role to evaluate.
+    
+    Returns:
+    	bool: `True` if the role is neither the default role nor managed, `False` otherwise.
+    """
     is_default = getattr(role, "is_default", None)
     return not (
         role == guild.default_role
@@ -486,6 +563,11 @@ async def _send_config_failure(
     logger.exception(message)
     if not interaction.response.is_done():
         await interaction.response.send_message(
+            SAFE_COMMAND_ERROR,
+            ephemeral=True,
+        )
+    else:
+        await interaction.followup.send(
             SAFE_COMMAND_ERROR,
             ephemeral=True,
         )
@@ -698,6 +780,11 @@ async def config_active_lobbies_moderator_role(
     interaction: discord.Interaction,
     role: discord.Role | None = None,
 ) -> None:
+    """Configure the role mentioned for disputed-game notifications.
+    
+    Parameters:
+    	role (discord.Role | None): Role to use; when omitted, the default Website Moderator role is selected.
+    """
     if not await _check_config_access(interaction):
         return
 
@@ -746,6 +833,113 @@ async def config_active_lobbies_moderator_role(
             interaction,
             "config active lobbies moderator role failed",
         )
+
+
+@config_guides_group.command(name="channel", description="Set the forum for Battlevive guides")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def config_guides_channel(interaction: discord.Interaction, channel: discord.ForumChannel) -> None:
+    """
+    Set the forum channel used for guide threads.
+    
+    Parameters:
+    	channel (discord.ForumChannel): Forum channel with the permissions required for guide management.
+    """
+    if not await _check_config_access(interaction):
+        return
+    if not isinstance(channel, discord.ForumChannel):
+        await interaction.response.send_message("Please choose a forum channel.", ephemeral=True)
+        return
+    if not _guide_forum_permissions(channel, interaction.guild):
+        await interaction.response.send_message("I need View Channel, Send Messages, Send Messages in Threads, Read Message History, Manage Threads, and Mention @everyone, @here, and All Roles permissions in that forum.", ephemeral=True)
+        return
+    try:
+        await db.set_guide_forum_channel(interaction.guild.id, channel.id, interaction.user.id)
+        if bot.guide_thread_service is not None:
+            bot.guide_thread_service.request_reconciliation()
+        await interaction.response.send_message(f"Guide forum set to {channel}.", ephemeral=True)
+    except Exception:
+        await _send_config_failure(interaction, "config guides channel failed")
+
+
+@config_guides_group.command(name="role", description="Set the guide notification role")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def config_guides_role(interaction: discord.Interaction, role: discord.Role | None = None) -> None:
+    """
+    Configure the role used for guide update notifications.
+    
+    Parameters:
+    	interaction (discord.Interaction): The Discord interaction used to apply the configuration.
+    	role (discord.Role | None): The notification role to configure, or the default Guide Updates role when omitted.
+    """
+    if not await _check_config_access(interaction):
+        return
+    if role is None:
+        role = discord.utils.get(interaction.guild.roles, name=GUIDE_UPDATES_ROLE)
+        if role is None:
+            await interaction.response.send_message("The Guide Updates role does not exist. Run /create_roles first or choose another role.", ephemeral=True)
+            return
+    if not _safe_notification_role(interaction.guild, role):
+        await interaction.response.send_message("Please choose a safe, non-managed role that is not @everyone.", ephemeral=True)
+        return
+    try:
+        await db.set_guide_notification_role(interaction.guild.id, role.id, interaction.user.id)
+        if bot.guide_thread_service is not None:
+            bot.guide_thread_service.request_reconciliation()
+        await interaction.response.send_message(f"Guide notification role set to {role}.", ephemeral=True)
+    except Exception:
+        await _send_config_failure(interaction, "config guides role failed")
+
+
+@config_guides_group.command(name="automatic_deletion", description="Delete guide threads when guides leave the website")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def config_guides_automatic_deletion(interaction: discord.Interaction, enabled: bool) -> None:
+    """
+    Configure whether guide threads are automatically deleted when their associated content is removed.
+    
+    Parameters:
+    	interaction (discord.Interaction): The Discord interaction used to identify the guild and user.
+    	enabled (bool): Whether to enable automatic guide deletion.
+    """
+    if not await _check_config_access(interaction):
+        return
+    try:
+        await db.set_guide_auto_delete_on_removal(interaction.guild.id, enabled, interaction.user.id)
+        if bot.guide_thread_service is not None:
+            bot.guide_thread_service.request_reconciliation()
+        await interaction.response.send_message(f"Automatic guide deletion {'enabled' if enabled else 'disabled'}.", ephemeral=True)
+    except Exception:
+        await _send_config_failure(interaction, "config guides automatic deletion failed")
+
+
+@config_reset_group.command(name="guides", description="Archive all managed guide posts and reset guide configuration")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def config_reset_guides(interaction: discord.Interaction) -> None:
+    """
+    Reset the guild's guide configuration and archive its managed guide posts.
+    
+    The managed guide thread records are removed after each thread is archived, while missing threads are ignored. Configuration reset failures are reported to the user.
+    """
+    if not await _check_config_access(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+        # Reconciliation sees no catalog only after posts are archived; retain rows on failures.
+        guild = interaction.guild
+        for row in await db.get_guide_threads(guild.id):
+            try:
+                thread = guild.get_thread(row['thread_id']) or await bot.fetch_channel(row['thread_id'])
+                await thread.edit(archived=True, locked=False, reason="Guide configuration reset")
+            except discord.NotFound:
+                pass
+            await db.remove_guide_thread(guild.id, row['source_guide_id'])
+        await db.reset_guide_config(guild.id, interaction.user.id)
+        await interaction.followup.send("Guide configuration reset; managed guide posts were archived.", ephemeral=True)
+    except Exception:
+        await _send_config_failure(interaction, "config reset guides failed")
 
 
 @config_reset_group.command(
@@ -925,6 +1119,11 @@ async def config_commands_remove(
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 async def config_show(interaction: discord.Interaction) -> None:
+    """
+    Display the guild's configured channels, roles, limits, rules, and feature settings.
+    
+    The configuration is sent as one or more ephemeral messages when it exceeds Discord's message length limit.
+    """
     if not await _check_config_access(interaction):
         return
 
@@ -984,9 +1183,23 @@ async def config_show(interaction: discord.Interaction) -> None:
             if moderator_role_id is not None
             else "Website moderator role: not configured."
         )
+        guide_channel_id = config.get("guide_forum_channel_id") if config else None
+        guide_role_id = config.get("guide_notification_role_id") if config else None
+        guide_channel_message = (
+            f"Guide forum: <#{guide_channel_id}>."
+            if guide_channel_id is not None else "Guide forum: not configured."
+        )
+        guide_role_message = (
+            f"Guide notification role: <@&{guide_role_id}>."
+            if guide_role_id is not None else "Guide notification role: not configured."
+        )
+        guide_deletion_message = "Guide automatic deletion: " + (
+            "enabled." if config and config.get("guide_auto_delete_on_removal") else "disabled."
+        )
         message = (
             f"{channel_message}\n{limit_message}\n{active_channel_message}\n"
             f"{active_role_message}\n{moderator_role_message}\n{cooldown_message}\n"
+            f"{guide_channel_message}\n{guide_role_message}\n{guide_deletion_message}\n"
             f"{allow_message}\n{block_message}\n{debug_message}"
         )
         chunks: list[str] = []
@@ -1013,6 +1226,7 @@ _NOTIFICATION_PURPOSES = {
         "website_moderator_role_id",
         "set_website_moderator_role",
     ),
+    "guide_updates": (GUIDE_UPDATES_ROLE, "guide_notification_role_id", "set_guide_notification_role"),
 }
 
 
@@ -1107,6 +1321,11 @@ async def _ensure_notification_roles(
 @app_commands.default_permissions(manage_roles=True)
 @app_commands.guild_only()
 async def create_roles_slash(interaction: discord.Interaction) -> None:
+    """
+    Create the Battlevive roles required by the guild and report the setup results.
+    
+    The command also ensures notification roles are configured and requests active-lobby reconciliation.
+    """
     if not await _check_guild_permission(
         interaction,
         permission="manage_roles",
@@ -1133,7 +1352,16 @@ async def create_roles_slash(interaction: discord.Interaction) -> None:
     )
     try:
         await db.ensure_guild_config(interaction.guild.id, interaction.user.id)
-        result = await create_roles(interaction.guild)
+        config = await db.get_guild_config(interaction.guild.id) or {}
+        skip_role_names = (
+            frozenset({GUIDE_UPDATES_ROLE})
+            if config.get("guide_notification_role_id")
+            else frozenset()
+        )
+        result = await create_roles(
+            interaction.guild,
+            skip_role_names=skip_role_names,
+        )
         notification_outcomes, cleanup_issues = await _ensure_notification_roles(interaction)
         if bot.active_lobby_service is not None:
             bot.active_lobby_service.request_reconciliation()
@@ -1435,6 +1663,11 @@ async def rank_command(interaction: discord.Interaction) -> None:
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 async def refresh(interaction: discord.Interaction) -> None:
+    """
+    Refresh Battlevive data and synchronize related roles and services.
+    
+    Requires the Manage Server permission. A refresh cannot start while another manual refresh is running.
+    """
     if not await _check_guild_permission(
         interaction,
         permission="manage_guild",
@@ -1467,6 +1700,8 @@ async def refresh(interaction: discord.Interaction) -> None:
     active_lobby_service = bot.active_lobby_service
     if active_lobby_service is not None:
         active_lobby_service.request_reconciliation()
+    if bot.guide_thread_service is not None:
+        bot.guide_thread_service.request_reconciliation()
     await interaction.followup.send("Battlevive data refreshed.", ephemeral=True)
 
 # Runtime

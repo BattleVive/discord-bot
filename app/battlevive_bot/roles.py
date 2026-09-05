@@ -16,12 +16,14 @@ from .models import SeasonRating
 
 ACTIVE_LOBBY_ROLE = "Active Lobby"
 WEBSITE_MODERATOR_ROLE = "Website Moderator"
+GUIDE_UPDATES_ROLE = "Guide Updates"
 NOTIFICATION_ROLE_NAMES = frozenset(
-    {ACTIVE_LOBBY_ROLE, WEBSITE_MODERATOR_ROLE}
+    {ACTIVE_LOBBY_ROLE, WEBSITE_MODERATOR_ROLE, GUIDE_UPDATES_ROLE}
 )
 RANK_ROLE_NAMES_ORDERED = tuple(name for _, name in SeasonRating.RANKS)
 RANK_ROLE_NAMES = frozenset(RANK_ROLE_NAMES_ORDERED)
 REQUIRED_ROLE_NAMES = (
+    GUIDE_UPDATES_ROLE,
     *RANK_ROLE_NAMES_ORDERED,
 )
 
@@ -130,6 +132,14 @@ def _safe_assignable_role(
     guild: discord.Guild,
     role_name: str,
 ) -> discord.Role | None:
+    """Find a guild role by name when it is safe for the bot to assign.
+    
+    Parameters:
+    	role_name (str): Name of the role to find.
+    
+    Returns:
+    	discord.Role | None: The safe, assignable role, or `None` when the role is unavailable or unsafe.
+    """
     role = discord.utils.get(guild.roles, name=role_name)
     bot_member = guild.me
     if role is None or bot_member is None:
@@ -147,7 +157,21 @@ def _safe_assignable_role(
     return role
 
 
-async def create_roles(guild: discord.Guild) -> RoleCreationResult:
+async def create_roles(
+    guild: discord.Guild,
+    *,
+    skip_role_names: frozenset[str] = frozenset(),
+) -> RoleCreationResult:
+    """
+    Ensure the guild has safe, assignable roles required by Battlevive.
+    
+    Parameters:
+        guild (discord.Guild): Guild where roles are created or validated.
+        skip_role_names (frozenset[str]): Role names to omit from creation and validation.
+    
+    Returns:
+        RoleCreationResult: Results describing created, existing, rejected, failed, and safe roles.
+    """
     logger.info("Creating Battlevive roles in guild '%s' (%s)", guild.name, guild.id)
     result = RoleCreationResult()
     bot_member = guild.me
@@ -157,10 +181,14 @@ async def create_roles(guild: discord.Guild) -> RoleCreationResult:
         or bot_member.top_role <= guild.default_role
     ):
         for role_name in REQUIRED_ROLE_NAMES:
+            if role_name in skip_role_names:
+                continue
             result.failed[role_name] = "the bot lacks Manage Roles"
         return result
 
     for role_name in REQUIRED_ROLE_NAMES:
+        if role_name in skip_role_names:
+            continue
         existing_role = discord.utils.get(guild.roles, name=role_name)
 
         if existing_role is not None:

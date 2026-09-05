@@ -47,6 +47,7 @@ TABLES = {
 
 
 def get_test_database_url() -> str:
+    """Retrieve and validate the test database URL from environment variables."""
     dsn = os.environ.get("TEST_DATABASE_URL")
     if not dsn:
         pytest.skip("TEST_DATABASE_URL is not set; skipping PostgreSQL integration tests")
@@ -62,6 +63,7 @@ def get_test_database_url() -> str:
 
 
 async def reset_database(conn: asyncpg.Connection) -> None:
+    """Drop and recreate all database tables using init SQL scripts."""
     await conn.execute(
         "DROP TABLE IF EXISTS active_lobby_obsolete_posts, "
         "active_lobby_empty_posts, active_lobby_posts, leaderboard_slots, "
@@ -73,6 +75,7 @@ async def reset_database(conn: asyncpg.Connection) -> None:
 
 
 async def drop_database_tables(conn: asyncpg.Connection) -> None:
+    """Drop all test database tables to clean up after tests."""
     await conn.execute(
         "DROP TABLE IF EXISTS active_lobby_obsolete_posts, "
         "active_lobby_empty_posts, active_lobby_posts, leaderboard_slots, "
@@ -110,6 +113,7 @@ async def postgres_db() -> AsyncIterator[None]:
 
 @pytest.mark.asyncio
 async def test_init_db_sql_creates_expected_schema(postgres_db: None) -> None:
+    """Verify that init SQL scripts create all required tables, columns, triggers, and constraints."""
     pool = db.get_pool()
     table_names = {
         row["table_name"]
@@ -809,6 +813,9 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
         "website_moderator_role_id": None,
         "active_lobby_baseline_pending": True,
         "rank_cooldown_seconds": 20,
+        "guide_forum_channel_id": None,
+        "guide_notification_role_id": None,
+        "guide_auto_delete_on_removal": False,
         "updated_by": 3012,
     }
     assert await db.get_guild_config(1002) == {
@@ -821,6 +828,9 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
         "website_moderator_role_id": None,
         "active_lobby_baseline_pending": True,
         "rank_cooldown_seconds": 20,
+        "guide_forum_channel_id": None,
+        "guide_notification_role_id": None,
+        "guide_auto_delete_on_removal": False,
         "updated_by": 3002,
     }
 
@@ -836,6 +846,9 @@ async def test_guild_config_is_isolated_and_can_be_upserted_and_reset(
         "website_moderator_role_id": None,
         "active_lobby_baseline_pending": True,
         "rank_cooldown_seconds": 20,
+        "guide_forum_channel_id": None,
+        "guide_notification_role_id": None,
+        "guide_auto_delete_on_removal": False,
         "updated_by": 3021,
     }
 

@@ -44,12 +44,27 @@ def test_config_channel_exposes_text_and_news_channel_types() -> None:
 class FakeResponse:
     def __init__(self) -> None:
         self.messages: list[dict[str, object]] = []
+        self.deferred = False
 
     async def send_message(self, content: str, **kwargs: object) -> None:
         self.messages.append({"content": content, **kwargs})
 
     def is_done(self) -> bool:
-        return bool(self.messages)
+        return self.deferred or bool(self.messages)
+
+    async def defer(self, **_kwargs: object) -> None:
+        """Mark the response as deferred."""
+        self.deferred = True
+
+
+class FakeFollowup:
+    def __init__(self) -> None:
+        """Initialize a fake followup with an empty message list."""
+        self.messages: list[dict[str, object]] = []
+
+    async def send(self, content: str, **kwargs: object) -> None:
+        """Record a followup message with its content and parameters."""
+        self.messages.append({"content": content, **kwargs})
 
 
 class FakeChannel:
@@ -97,8 +112,25 @@ def make_interaction(
         user=user,
         guild=guild,
         response=FakeResponse(),
+        followup=FakeFollowup(),
         channel=channel,
     )
+
+
+def test_guide_forum_permissions_requires_sending_messages_in_threads() -> None:
+    """Verify that guide forum permission check requires send_messages_in_threads."""
+    permissions = SimpleNamespace(
+        view_channel=True,
+        send_messages=True,
+        send_messages_in_threads=False,
+        read_message_history=True,
+        manage_threads=True,
+        mention_everyone=True,
+    )
+    channel = SimpleNamespace(permissions_for=lambda _member: permissions)
+    guild = SimpleNamespace(me=object())
+
+    assert bot_module._guide_forum_permissions(channel, guild) is False
 
 
 @pytest.mark.asyncio
@@ -214,9 +246,12 @@ async def test_config_reset_and_show_are_ephemeral(monkeypatch: pytest.MonkeyPat
             "content": "Leaderboard channel: <#456>.\nLeaderboard limit: 50 (maximum).\n"
             "Active-lobby channel: not configured.\n"
             "Active-lobby notification role: not configured.\n"
-            "Website moderator role: not configured.\n"
-            "Rank cooldown: 20 seconds.\n"
-            "Whitelisted channels: none.\n"
+                "Website moderator role: not configured.\n"
+                "Rank cooldown: 20 seconds.\n"
+                "Guide forum: not configured.\n"
+                "Guide notification role: not configured.\n"
+                "Guide automatic deletion: disabled.\n"
+                "Whitelisted channels: none.\n"
             "Blacklisted channels: none.\n"
             "Debug exports: disabled.",
             "ephemeral": True,
@@ -518,6 +553,50 @@ async def test_create_roles_reuses_legacy_roles_without_adopting_ownership(
 
 
 @pytest.mark.asyncio
+async def test_create_roles_skips_guide_updates_when_a_custom_guide_role_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = CommandRole(61, roles_module.ACTIVE_LOBBY_ROLE)
+    moderator = CommandRole(62, roles_module.WEBSITE_MODERATOR_ROLE)
+    custom_guide_role = CommandRole(63, "Guide Subscribers")
+    interaction = role_setup_interaction(
+        [active, moderator, custom_guide_role],
+        None,
+    )
+    skipped: list[frozenset[str]] = []
+
+    async def fake_create_roles(
+        guild: object,
+        *,
+        skip_role_names: frozenset[str] = frozenset(),
+    ) -> roles_module.RoleCreationResult:
+        """Record role names to skip and return an empty role creation result."""
+        skipped.append(skip_role_names)
+        return roles_module.RoleCreationResult()
+
+    async def get_config(guild_id: int) -> dict[str, object]:
+        """
+        Retrieve role identifiers for a guild's configuration.
+        
+        Returns:
+        	dict[str, object]: Configuration containing the active lobby, website moderator, and guide notification role IDs.
+        """
+        return {
+            "active_lobby_role_id": active.id,
+            "website_moderator_role_id": moderator.id,
+            "guide_notification_role_id": custom_guide_role.id,
+        }
+
+    monkeypatch.setattr(bot_module, "create_roles", fake_create_roles)
+    monkeypatch.setattr(bot_module.db, "get_guild_config", get_config)
+    monkeypatch.setattr(bot_module.bot, "active_lobby_service", None)
+
+    await bot_module.create_roles_slash.callback(interaction)
+
+    assert skipped == [frozenset({roles_module.GUIDE_UPDATES_ROLE})]
+
+
+@pytest.mark.asyncio
 async def test_config_limit_sets_amount_and_omission_restores_the_maximum(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -600,6 +679,51 @@ async def test_config_command_returns_ephemeral_error_when_database_fails(
     await bot_module.config_show.callback(interaction)
 
     assert interaction.response.messages == [
+        {
+            "content": "The command failed. Please try again later.",
+            "ephemeral": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_config_reset_guides_defers_before_archiving_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify that guide reset defers the interaction before archiving threads to avoid timeout."""
+    interaction = make_interaction()
+    interaction.guild.get_thread = lambda _thread_id: None
+
+    async def guide_threads(_guild_id: int) -> list[dict[str, object]]:
+        assert interaction.response.deferred is True
+        return []
+
+    async def reset(_guild_id: int, _updated_by: int) -> None:
+        return None
+
+    monkeypatch.setattr(bot_module.db, "get_guide_threads", guide_threads)
+    monkeypatch.setattr(bot_module.db, "reset_guide_config", reset)
+
+    await bot_module.config_reset_guides.callback(interaction)
+
+    assert interaction.response.deferred is True
+    assert interaction.followup.messages == [
+        {
+            "content": "Guide configuration reset; managed guide posts were archived.",
+            "ephemeral": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_deferred_config_failure_uses_followup() -> None:
+    """Verify that deferred interactions send error responses through the followup token."""
+    interaction = make_interaction()
+    await interaction.response.defer(ephemeral=True)
+
+    await bot_module._send_config_failure(interaction, "test deferred configuration failure")
+
+    assert interaction.followup.messages == [
         {
             "content": "The command failed. Please try again later.",
             "ephemeral": True,

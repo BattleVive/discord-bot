@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 
 from PIL import Image
 import pytest
@@ -74,8 +75,9 @@ def test_committed_map_and_emoji_images_have_expected_dimensions(
     assert len(map_paths) == 16
     assert all(Image.open(path).size == (400, 245) for path in map_paths)
 
-    emoji_dir = MAP_MANIFEST_PATH.parent.parent / "champion-emojis"
+    emoji_dir = MAP_MANIFEST_PATH.parent.parent / "emojies" / "champions"
     emoji_paths = sorted(emoji_dir.glob("*.png"))
     assert len(emoji_paths) == 28
     assert all(Image.open(path).size == (128, 128) for path in emoji_paths)
     assert all(path.stat().st_size < 256 * 1024 for path in emoji_paths)
+    assert all(re.fullmatch(r"[a-z0-9_-]+", path.stem) is not None for path in emoji_paths)

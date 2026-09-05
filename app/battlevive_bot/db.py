@@ -55,6 +55,14 @@ def get_pool() -> asyncpg.Pool:
 async def get_guild_config(
     guild_id: int,
 ) -> dict[str, int | bool | None] | None:
+    """Retrieve the persisted configuration for a guild.
+    
+    Parameters:
+    	guild_id (int): The Discord guild ID.
+    
+    Returns:
+    	dict[str, int | bool | None] | None: The guild configuration, or `None` if no configuration exists.
+    """
     pool = get_pool()
     row = await pool.fetchrow(
         """
@@ -63,6 +71,14 @@ async def get_guild_config(
                active_lobby_role_id, website_moderator_role_id,
                active_lobby_baseline_pending,
                rank_cooldown_seconds,
+               (to_jsonb(guild_config) ->> 'guide_forum_channel_id')::BIGINT
+                   AS guide_forum_channel_id,
+               (to_jsonb(guild_config) ->> 'guide_notification_role_id')::BIGINT
+                   AS guide_notification_role_id,
+               COALESCE(
+                   (to_jsonb(guild_config) ->> 'guide_auto_delete_on_removal')::BOOLEAN,
+                   FALSE
+               ) AS guide_auto_delete_on_removal,
                updated_by
         FROM guild_config
         WHERE guild_id = $1
@@ -192,6 +208,12 @@ async def get_configured_leaderboards() -> list[dict[str, int | None]]:
 
 
 async def get_configured_active_lobbies() -> list[dict[str, int | bool | None]]:
+    """
+    Retrieve guilds with configured or persisted active-lobby state.
+    
+    Returns:
+    	list[dict[str, int | bool | None]]: Guild configuration records ordered by guild ID.
+    """
     rows = await get_pool().fetch(
         """
         SELECT config.guild_id, config.active_lobby_channel_id,
@@ -223,11 +245,167 @@ async def get_configured_active_lobbies() -> list[dict[str, int | bool | None]]:
     return [dict(row) for row in rows]
 
 
+async def get_configured_guides() -> list[dict[str, int | bool | None]]:
+    """
+    Retrieve guilds with configured guide forums or stored guide threads.
+    
+    Returns:
+    	list[dict[str, int | bool | None]]: Guild configuration records containing
+    		guild_id, guide_forum_channel_id, guide_notification_role_id,
+    		guide_auto_delete_on_removal, and updated_by.
+    """
+    rows = await get_pool().fetch(
+        """
+        SELECT guild_id, guide_forum_channel_id, guide_notification_role_id,
+               guide_auto_delete_on_removal, updated_by
+        FROM guild_config
+        WHERE guide_forum_channel_id IS NOT NULL
+           OR EXISTS (SELECT 1 FROM guide_threads WHERE guide_threads.guild_id = guild_config.guild_id)
+        ORDER BY guild_id
+        """
+    )
+    return [dict(row) for row in rows]
+
+
+async def set_guide_forum_channel(guild_id: int, channel_id: int | None, updated_by: int) -> None:
+    """
+    Set or clear the guide forum channel for a guild.
+    
+    Parameters:
+        guild_id (int): The guild whose guide forum configuration is updated.
+        channel_id (int | None): The Discord channel ID to use, or None to clear the setting.
+        updated_by (int): The user ID responsible for the update.
+    """
+    await get_pool().execute(
+        """
+        INSERT INTO guild_config (guild_id, guide_forum_channel_id, updated_by)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET guide_forum_channel_id = EXCLUDED.guide_forum_channel_id,
+            updated_at = now(), updated_by = EXCLUDED.updated_by
+        """, guild_id, channel_id, updated_by,
+    )
+
+
+async def set_guide_notification_role(guild_id: int, role_id: int | None, updated_by: int) -> None:
+    """
+    Set the Discord role used for guide notifications for a guild.
+    
+    Parameters:
+    	guild_id (int): The guild identifier.
+    	role_id (int | None): The notification role identifier, or None to clear it.
+    	updated_by (int): The user identifier making the change.
+    """
+    await get_pool().execute(
+        """
+        INSERT INTO guild_config (guild_id, guide_notification_role_id, updated_by)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET guide_notification_role_id = EXCLUDED.guide_notification_role_id,
+            updated_at = now(), updated_by = EXCLUDED.updated_by
+        """, guild_id, role_id, updated_by,
+    )
+
+
+async def set_guide_auto_delete_on_removal(guild_id: int, enabled: bool, updated_by: int) -> None:
+    """
+    Configure whether removed guide threads are automatically deleted for a guild.
+    
+    Parameters:
+    	guild_id (int): The guild to configure.
+    	enabled (bool): Whether to enable automatic deletion.
+    	updated_by (int): The user making the configuration change.
+    """
+    await get_pool().execute(
+        """
+        INSERT INTO guild_config (guild_id, guide_auto_delete_on_removal, updated_by)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild_id) DO UPDATE
+        SET guide_auto_delete_on_removal = EXCLUDED.guide_auto_delete_on_removal,
+            updated_at = now(), updated_by = EXCLUDED.updated_by
+        """, guild_id, enabled, updated_by,
+    )
+
+
+async def get_guide_threads(guild_id: int) -> list[dict[str, Any]]:
+    """
+    Retrieve guide thread mappings for a guild.
+    
+    Parameters:
+    	guild_id (int): The guild whose guide thread mappings to retrieve.
+    
+    Returns:
+    	list[dict[str, Any]]: Guide thread records ordered by source guide ID.
+    """
+    rows = await get_pool().fetch(
+        """SELECT guild_id, source_guide_id, thread_id, source_updated_at, managed_message_ids
+           FROM guide_threads WHERE guild_id = $1 ORDER BY source_guide_id""", guild_id,
+    )
+    return [dict(row) for row in rows]
+
+
+async def upsert_guide_thread(
+    guild_id: int,
+    source_guide_id: str,
+    thread_id: int,
+    source_updated_at: datetime,
+    managed_message_ids: list[int],
+) -> None:
+    """
+    Create or update a guild's persisted guide-thread mapping.
+    
+    Parameters:
+    	guild_id (int): Discord guild identifier.
+    	source_guide_id (str): Identifier of the source guide.
+    	thread_id (int): Discord thread identifier.
+    	source_updated_at (datetime): Timestamp of the source guide's latest update.
+    	managed_message_ids (list[int]): Identifiers of messages managed in the thread.
+    """
+    await get_pool().execute(
+        """INSERT INTO guide_threads (guild_id, source_guide_id, thread_id, source_updated_at, managed_message_ids)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (guild_id, source_guide_id) DO UPDATE
+           SET thread_id = EXCLUDED.thread_id, source_updated_at = EXCLUDED.source_updated_at,
+             managed_message_ids = EXCLUDED.managed_message_ids""",
+        guild_id, source_guide_id, thread_id, source_updated_at, managed_message_ids,
+    )
+
+
+async def remove_guide_thread(guild_id: int, source_guide_id: str) -> None:
+    """Remove a guide-thread mapping for a guild and source guide."""
+    await get_pool().execute("DELETE FROM guide_threads WHERE guild_id = $1 AND source_guide_id = $2", guild_id, source_guide_id)
+
+
+async def reset_guide_config(guild_id: int, updated_by: int) -> None:
+    """
+    Reset a guild's guide configuration to its default values.
+    
+    Parameters:
+    	guild_id (int): The guild whose guide configuration is reset.
+    	updated_by (int): The user responsible for the change.
+    """
+    await get_pool().execute(
+        """INSERT INTO guild_config (guild_id, guide_forum_channel_id, guide_notification_role_id, guide_auto_delete_on_removal, updated_by)
+           VALUES ($1, NULL, NULL, FALSE, $2)
+           ON CONFLICT (guild_id) DO UPDATE SET guide_forum_channel_id = NULL,
+             guide_notification_role_id = NULL, guide_auto_delete_on_removal = FALSE,
+             updated_at = now(), updated_by = EXCLUDED.updated_by""", guild_id, updated_by,
+    )
+
+
 async def set_active_lobby_channel(
     guild_id: int,
     channel_id: int | None,
     updated_by: int,
 ) -> None:
+    """
+    Configure the channel used for active-lobby posts.
+    
+    Parameters:
+        guild_id (int): The guild whose configuration is updated.
+        channel_id (int | None): The destination channel ID, or `None` to disable active-lobby posts.
+        updated_by (int): The user ID responsible for the change.
+    """
     await get_pool().execute(
         """
         INSERT INTO guild_config (

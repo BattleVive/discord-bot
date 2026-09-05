@@ -1,7 +1,7 @@
 # Third-party Battlerite assets
 
-The map artwork in `maps/` and the champion portraits in
-`champion-emojis/` depict content from *Battlerite*. Battlerite names,
+The map artwork in `maps/` and the champion portraits and battlerites in
+`emojies/` depict content from *Battlerite*. Battlerite names,
 characters, maps, artwork, logos, and related trademarks are the property of
 Stunlock Studios AB and their respective rights holders.
 
@@ -20,8 +20,10 @@ Asset preparation for this repository:
   separate day and night variants.
 - The 28 supplied champion portraits were 115×69. Each upload helper was
   center-cropped to 69×69, resized to 128×128 with Lanczos filtering, and saved
-  under a lowercase, hyphenated canonical champion name. The derived files are
+  under lowercase Discord emoji names in `emojies/champions/`. The derived files are
   intended as optional Discord application-emoji upload sources.
+- The battlerite icon set is stored flat in `emojies/battlerites/`, with each
+  lowercase filename including its champion, ability, and category.
 
 Rights holders may request correction or removal through the repository's
 [issue tracker](https://github.com/voxix-dev/battlevive-bot/issues).
