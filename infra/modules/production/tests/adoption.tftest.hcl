@@ -43,23 +43,7 @@ variables {
   bootstrap_jwt              = "test-bootstrap-jwt-not-a-secret"
   bootstrap_refresh_token    = "test-bootstrap-refresh-token-not-a-secret"
   bootstrap_token_generation = 1
-  github_oidc_subjects = {
-    infrastructure_plan = [
-      "repo:voxix-dev/battlevive-bot:environment:infrastructure-plan",
-      "repo:BattleVive@325350336/discord-bot@1295590282:environment:infrastructure-plan",
-      "repo:voxix-dev@203257071/battlevive-bot@1295590282:environment:infrastructure-plan",
-    ]
-    infrastructure_apply = [
-      "repo:voxix-dev/battlevive-bot:environment:infrastructure-apply",
-      "repo:BattleVive@325350336/discord-bot@1295590282:environment:infrastructure-apply",
-      "repo:voxix-dev@203257071/battlevive-bot@1295590282:environment:infrastructure-apply",
-    ]
-    production = [
-      "repo:voxix-dev/battlevive-bot:environment:production",
-      "repo:BattleVive@325350336/discord-bot@1295590282:environment:production",
-      "repo:voxix-dev@203257071/battlevive-bot@1295590282:environment:production",
-    ]
-  }
+  github_oidc_repository     = "BattleVive@325350336/discord-bot@1295590282"
   instance_profile_name      = "battlevive-production-instance"
   instance_role_name         = "battlevive-production-instance"
   instance_type              = "t4g.micro"

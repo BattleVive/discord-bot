@@ -20,7 +20,7 @@ module "production" {
   bootstrap_refresh_token    = var.bootstrap_refresh_token
   bootstrap_token_generation = var.bootstrap_token_generation
   github_oidc_provider_arn   = var.github_oidc_provider_arn
-  github_oidc_subjects       = var.github_oidc_subjects
+  github_oidc_repository     = var.github_oidc_repository
   instance_profile_name      = var.instance.instance_profile_name
   instance_type              = var.instance.instance_type
   instance_role_name         = var.instance.iam_role_name
