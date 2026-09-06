@@ -13,29 +13,14 @@ variable "alert_email" {
   type        = string
 }
 
-variable "github_oidc_subjects" {
-  type = object({
-    infrastructure_plan  = set(string)
-    infrastructure_apply = set(string)
-    production           = set(string)
-  })
+variable "github_oidc_repository" {
+  description = "Immutable GitHub Actions OIDC repository segment."
+  type        = string
+  default     = "BattleVive@325350336/discord-bot@1295590282"
 
-  default = {
-    infrastructure_plan = [
-      "repo:voxix-dev/battlevive-bot:environment:infrastructure-plan",
-      "repo:BattleVive@325350336/discord-bot@1295590282:environment:infrastructure-plan",
-      "repo:voxix-dev@203257071/battlevive-bot@1295590282:environment:infrastructure-plan",
-    ]
-    infrastructure_apply = [
-      "repo:voxix-dev/battlevive-bot:environment:infrastructure-apply",
-      "repo:BattleVive@325350336/discord-bot@1295590282:environment:infrastructure-apply",
-      "repo:voxix-dev@203257071/battlevive-bot@1295590282:environment:infrastructure-apply",
-    ]
-    production = [
-      "repo:voxix-dev/battlevive-bot:environment:production",
-      "repo:BattleVive@325350336/discord-bot@1295590282:environment:production",
-      "repo:voxix-dev@203257071/battlevive-bot@1295590282:environment:production",
-    ]
+  validation {
+    condition     = can(regex("^[A-Za-z0-9-]+@[0-9]+/[A-Za-z0-9_.-]+@[0-9]+$", var.github_oidc_repository))
+    error_message = "Use immutable OWNER@NUMERIC_ID/REPOSITORY@NUMERIC_ID format."
   }
 }
 
