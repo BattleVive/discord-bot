@@ -7,8 +7,8 @@ import re
 from PIL import Image
 import pytest
 
-from battlevive_bot.asset_manifest import MAP_MANIFEST_PATH
-from battlevive_bot.asset_manifest import resolve_map_asset
+from battlevive_renderer.asset_manifest import MAP_MANIFEST_PATH
+from battlevive_renderer.asset_manifest import resolve_map_asset
 
 
 @pytest.fixture(scope="module")

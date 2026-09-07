@@ -1,0 +1,62 @@
+from __future__ import annotations
+
+import base64
+from io import BytesIO
+
+from PIL import Image
+
+import pytest
+
+from battlevive_renderer.renderer import render_leaderboard
+from battlevive_renderer.renderer_service import render_model
+from battlevive_renderer.renderer import render_rank
+
+
+def test_leaderboard_renderer_returns_png_with_existing_width() -> None:
+    png = render_leaderboard({"season": "Test", "entries": []})
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_leaderboard_renderer_rejects_more_than_100_rows() -> None:
+    try:
+        render_leaderboard({"season": "Test", "entries": [{}] * 101})
+    except ValueError as error:
+        assert "100" in str(error)
+    else:
+        raise AssertionError("row limit was not enforced")
+
+
+def test_leaderboard_renderer_rejects_non_mapping_rows() -> None:
+    with pytest.raises(ValueError, match="row"):
+        render_leaderboard({"entries": ["not-a-row"]})
+
+
+@pytest.mark.asyncio
+async def test_renderer_service_returns_png_and_rejects_invalid_json_models() -> None:
+    png = await render_model({"entries": [], "season": "Test"}, lambda _: b"\x89PNG\r\n\x1a\n")
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+    with pytest.raises(ValueError, match="object"):
+        await render_model(["not-a-model"], render_leaderboard)
+
+
+def test_rank_renderer_accepts_the_discord_avatar_bytes_used_by_the_original_card() -> None:
+    avatar = Image.new("RGB", (8, 8), "red")
+    encoded = BytesIO()
+    avatar.save(encoded, format="PNG")
+
+    png = render_rank({
+        "username": "Alpha", "rank_current": "Gold", "rank_next": "Platinum",
+        "mmr_current": 2000, "mmr_required": 3500, "wins": 4, "losses": 1,
+        "avatar_png_base64": base64.b64encode(encoded.getvalue()).decode(),
+    })
+
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_rank_renderer_rejects_a_malformed_avatar_payload() -> None:
+    with pytest.raises(ValueError, match="avatar"):
+        render_rank({
+            "username": "Alpha", "rank_current": "Gold", "rank_next": "Platinum",
+            "mmr_current": 2000, "mmr_required": 3500, "wins": 4, "losses": 1,
+            "avatar_png_base64": "not base64",
+        })

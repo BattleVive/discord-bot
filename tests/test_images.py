@@ -10,29 +10,29 @@ from PIL import ImageDraw
 from PIL import ImageFont
 import pytest
 
-from battlevive_bot.images import _ellipsize
-from battlevive_bot.images import _load_fonts
-from battlevive_bot.images import _rank_icon
-from battlevive_bot.images import _text_width
-from battlevive_bot.images import CARD_H
-from battlevive_bot.images import CARD_W
-from battlevive_bot.images import LEADERBOARD_ENTRY_H
-from battlevive_bot.images import LEADERBOARD_HEADER_H
-from battlevive_bot.images import LEADERBOARD_NAME_X
-from battlevive_bot.images import LEADERBOARD_NAME_WIDTH
-from battlevive_bot.images import LEADERBOARD_RANK_X
-from battlevive_bot.images import LEADERBOARD_STATS_X
-from battlevive_bot.images import LEADERBOARD_W
-from battlevive_bot.images import C_BG
-from battlevive_bot.images import C_CRIMSON
-from battlevive_bot.images import C_PANEL_EDGE
-from battlevive_bot.images import FONT_BOLD
-from battlevive_bot.images import FONT_REGULAR
-from battlevive_bot.images import RANK_ICON_DIR
-from battlevive_bot.images import RANK_STYLES
-from battlevive_bot.images import build_card
-from battlevive_bot.images import build_leaderboard_png
-from battlevive_bot.images import LeaderboardEntry
+from battlevive_renderer.images import _ellipsize
+from battlevive_renderer.images import _load_fonts
+from battlevive_renderer.images import _rank_icon
+from battlevive_renderer.images import _text_width
+from battlevive_renderer.images import CARD_H
+from battlevive_renderer.images import CARD_W
+from battlevive_renderer.images import LEADERBOARD_ENTRY_H
+from battlevive_renderer.images import LEADERBOARD_HEADER_H
+from battlevive_renderer.images import LEADERBOARD_NAME_X
+from battlevive_renderer.images import LEADERBOARD_NAME_WIDTH
+from battlevive_renderer.images import LEADERBOARD_RANK_X
+from battlevive_renderer.images import LEADERBOARD_STATS_X
+from battlevive_renderer.images import LEADERBOARD_W
+from battlevive_renderer.images import C_BG
+from battlevive_renderer.images import C_CRIMSON
+from battlevive_renderer.images import C_PANEL_EDGE
+from battlevive_renderer.images import FONT_BOLD
+from battlevive_renderer.images import FONT_REGULAR
+from battlevive_renderer.images import RANK_ICON_DIR
+from battlevive_renderer.images import RANK_STYLES
+from battlevive_renderer.images import build_card
+from battlevive_renderer.images import build_leaderboard_png
+from battlevive_renderer.images import LeaderboardEntry
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -45,6 +45,22 @@ EXPECTED_RANK_STYLES = {
     "Diamond": ("Diamond.png", "#31C9F0"),
     "BATTLEVIVE": ("Grand Champion.png", "#FF4F8B"),
 }
+
+
+def test_explicit_asset_directory_does_not_evaluate_container_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The container path is shallower than the repository package path."""
+    monkeypatch.setenv("BATTLEVIVE_ASSETS_DIR", str(ROOT_DIR / "assets"))
+    source = (ROOT_DIR / "services" / "image-renderer" / "app" / "battlevive_renderer" / "images.py").read_text()
+    namespace = {
+        "__file__": "/app/battlevive_renderer/images.py",
+        "__name__": "battlevive_renderer.images",
+    }
+
+    exec(compile(source, namespace["__file__"], "exec"), namespace)
+
+    assert namespace["ASSETS_DIR"] == ROOT_DIR / "assets"
 
 
 def make_card(**overrides: object) -> bytes:
