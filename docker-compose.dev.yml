@@ -17,3 +17,7 @@ services:
   postgres:
     ports:
       - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_PASSWORD_FILE: null
+    secrets: []

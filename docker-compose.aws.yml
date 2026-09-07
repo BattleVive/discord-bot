@@ -7,10 +7,11 @@ x-aws-logging: &aws-logging
     tag: "{{.Name}}"
 
 services:
-  db:
+  postgres:
     environment:
       POSTGRES_PASSWORD: null
       POSTGRES_PASSWORD_FILE: /run/battlevive/postgres-password
+    secrets: []
     volumes:
       - ${BATTLEVIVE_POSTGRES_DATA_PATH:-/var/lib/battlevive/postgresql}:/var/lib/postgresql:Z
       - /run/battlevive:/run/battlevive:ro
@@ -24,24 +25,18 @@ services:
       - /run/battlevive:/run/battlevive:ro
     logging: *aws-logging
 
-  bot:
+  gateway:
     environment:
       DATABASE_URL: null
       DATABASE_URL_FILE: /run/battlevive/database-url
       DISCORD_TOKEN: null
       DISCORD_TOKEN_FILE: /run/battlevive/discord-token
-      SUPABASE_API_KEY: null
-      SUPABASE_API_KEY_FILE: /run/battlevive/supabase-api-key
-      SUPABASE_URL: ${SUPABASE_URL:?}
-      BOOTSTRAP_JWT: null
-      BOOTSTRAP_JWT_FILE: /run/battlevive/bootstrap-jwt
-      BOOTSTRAP_REFRESH_TOKEN: null
-      BOOTSTRAP_REFRESH_TOKEN_FILE: /run/battlevive/bootstrap-refresh-token
-      BATTLEVIVE_TOKEN_STORE: ssm
-      BATTLEVIVE_TOKEN_SSM_PARAMETER: ${BATTLEVIVE_TOKEN_SSM_PARAMETER:-/battlevive/production/tokens}
-      AWS_REGION: ${AWS_REGION:-eu-north-1}
-      BATTLEVIVE_URL: "https://battlevive.com"
     volumes:
-      - ${BATTLEVIVE_BOT_DATA_PATH:-/var/lib/battlevive/bot}:/app/data:Z
       - /run/battlevive:/run/battlevive:ro
+    logging: *aws-logging
+
+  upstream-data:
+    logging: *aws-logging
+
+  image-renderer:
     logging: *aws-logging

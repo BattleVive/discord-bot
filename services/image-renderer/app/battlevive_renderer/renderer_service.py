@@ -11,14 +11,26 @@ from .renderer import render_rank
 
 
 _RENDER_TIMEOUT_SECONDS = 10
+_MAX_CONCURRENT_RENDERS = 2
+_render_slots = asyncio.Semaphore(_MAX_CONCURRENT_RENDERS)
 Renderer = Callable[[dict[str, Any]], bytes]
+
+
+class RenderBusy(RuntimeError):
+    """All renderer workers are occupied by active CPU-bound requests."""
 
 
 async def render_model(payload: object, renderer: Renderer) -> bytes:
     """Validate and bound one CPU-heavy renderer invocation."""
     if not isinstance(payload, dict):
         raise ValueError("render model must be an object")
-    return await asyncio.wait_for(asyncio.to_thread(renderer, payload), timeout=_RENDER_TIMEOUT_SECONDS)
+    if _render_slots.locked():
+        raise RenderBusy("renderer is busy")
+    await _render_slots.acquire()
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(renderer, payload), timeout=_RENDER_TIMEOUT_SECONDS)
+    finally:
+        _render_slots.release()
 
 
 def create_app() -> web.Application:
@@ -31,6 +43,8 @@ def create_app() -> web.Application:
             image = await render_model(payload, renderer)
         except asyncio.TimeoutError:
             return web.json_response({"error": "rendering timed out"}, status=503)
+        except RenderBusy:
+            return web.json_response({"error": "renderer is busy"}, status=503)
         except (ValueError, TypeError):
             return web.json_response({"error": "invalid render model"}, status=400)
         return web.Response(body=image, content_type="image/png")

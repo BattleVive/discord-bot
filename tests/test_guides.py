@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import inspect
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import call
+import discord
 import pytest
 
 from battlevive_gateway.guides import Guide
 from battlevive_gateway.guides import GuideReconciler
 from battlevive_gateway.guides import GuidePublication
+from battlevive_gateway.guides import DiscordGuidePublisher
+from battlevive_gateway.guides import GuideService
+from battlevive_gateway.guides import sync_configured_guides
+from battlevive_gateway.guides import retire_relocated_thread
 from battlevive_gateway.guides import champion_icon_url
 from battlevive_gateway.guides import normalize_discord_markdown
 
@@ -46,6 +55,103 @@ async def test_guide_reconciliation_creates_and_archives_removed_guides() -> Non
     assert discord.archived == [22]
     assert publications.deleted == [(7, "guide", "guide:2")]
     assert publications.saved[0][-1]["message_ids"] == [11, 12]
+
+
+@pytest.mark.asyncio
+async def test_relocated_guide_thread_is_archived_before_its_replacement_is_created() -> None:
+    thread = type("Thread", (), {"parent_id": 10, "edit": pytest.importorskip("unittest.mock").AsyncMock()})()
+
+    moved = await retire_relocated_thread(thread, forum_id=20, delete_on_removal=False)
+
+    assert moved is True
+    thread.edit.assert_awaited_once_with(  # type: ignore[attr-defined]
+        archived=True, reason="Guide forum channel changed"
+    )
+
+
+@pytest.mark.asyncio
+async def test_guide_service_reconciles_every_configured_guild(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Connection:
+        async def fetch(self, query: str) -> list[dict[str, int]]:
+            assert "guide_forum_channel_id" in query
+            return [{"guild_id": 7}, {"guild_id": 9}]
+
+    class Acquire:
+        async def __aenter__(self) -> Connection: return Connection()
+        async def __aexit__(self, *_: object) -> None: return None
+
+    pool = SimpleNamespace(acquire=lambda: Acquire())
+    sync = AsyncMock(return_value=True)
+    monkeypatch.setattr("battlevive_gateway.guides.sync_configured_guides", sync)
+
+    await GuideService(object(), pool, object()).reconcile_all()
+
+    assert [call.args[3] for call in sync.await_args_list] == [7, 9]
+
+
+@pytest.mark.asyncio
+async def test_guide_sync_uses_catalog_revision_without_refetching_unchanged_markdown() -> None:
+    class Connection:
+        async def fetchrow(self, query: str, guild_id: int) -> dict[str, object]:
+            assert "guild_config" in query
+            assert guild_id == 7
+            return {"guide_forum_channel_id": 10}
+
+        async def fetch(self, query: str, *_: object) -> list[dict[str, object]]:
+            assert "discord_publications" in query
+            return [{
+                "publication_key": "guide:1",
+                "channel_id": 11,
+                "message_id": None,
+                "thread_id": 12,
+                "fingerprint": "guide-revision-2026-09-07T20:00:00Z",
+                "metadata": {"message_ids": [13]},
+            }]
+
+    class Acquire:
+        async def __aenter__(self) -> Connection: return Connection()
+        async def __aexit__(self, *_: object) -> None: return None
+
+    class Upstream:
+        def __init__(self) -> None:
+            self.paths: list[str] = []
+
+        async def get_result(self, path: str, *, require_fresh: bool) -> SimpleNamespace:
+            assert require_fresh is True
+            self.paths.append(path)
+            if path == "/guides":
+                return SimpleNamespace(data={"guides": [{
+                    "number": 1, "title": "One", "updated_at": "2026-09-07T20:00:00Z",
+                }]})
+            raise AssertionError(f"unexpected Markdown request: {path}")
+
+    upstream = Upstream()
+
+    assert await sync_configured_guides(SimpleNamespace(emojis=[]), SimpleNamespace(acquire=lambda: Acquire()), upstream, 7)
+    assert upstream.paths == ["/guides"]
+
+
+@pytest.mark.asyncio
+async def test_missing_guide_message_metadata_archives_and_replaces_the_thread() -> None:
+    old_thread = MagicMock(spec=discord.Thread)
+    old_thread.id, old_thread.parent_id, old_thread.edit = 22, 10, AsyncMock()
+    new_thread = SimpleNamespace(id=33, send=AsyncMock())
+    forum = MagicMock(spec=discord.ForumChannel)
+    forum.id = 10
+    forum.create_thread = AsyncMock(return_value=SimpleNamespace(thread=new_thread, message=SimpleNamespace(id=34)))
+    guild = SimpleNamespace(get_channel=lambda _: forum, get_thread=lambda _: old_thread)
+    bot = SimpleNamespace(get_guild=lambda _: guild)
+    publisher = DiscordGuidePublisher(bot, 7, 10)
+
+    publication = await publisher.create_or_update(
+        Guide(1, "One", "# One"), {"thread_id": 22, "metadata": {}}
+    )
+
+    assert publication == GuidePublication(33, (34,))
+    old_thread.edit.assert_has_awaits([
+        call(name="One", archived=False),
+        call(archived=True, reason="Guide publication metadata is missing"),
+    ])
 
 
 def test_guide_markdown_keeps_code_and_replaces_battlerite_images_with_emojis() -> None:

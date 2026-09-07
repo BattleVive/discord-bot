@@ -16,7 +16,8 @@ This project is under active development.
 
 ```bash
 cp .env.example .env
-# Fill the replacement values; do not commit .env.
+# Fill the replacement values, including the same database password in
+# POSTGRES_PASSWORD and DATABASE_URL; do not commit .env.
 podman compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 

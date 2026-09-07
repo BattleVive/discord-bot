@@ -90,3 +90,36 @@ async def test_upstream_diagnostics_include_each_catalogued_guide() -> None:
         "/queue", "/stats", "/guides", "/guides/4", "/guides/4/markdown",
         "/leaderboard", "/players/42", "/active-matches", "/recent-matches",
     ]
+
+
+@pytest.mark.asyncio
+async def test_upstream_diagnostics_caps_detail_expansion_and_reports_omitted_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import battlevive_gateway.diagnostics as diagnostics
+
+    monkeypatch.setattr(diagnostics, "_MAX_GUIDE_EXPANSIONS", 1)
+    monkeypatch.setattr(diagnostics, "_MAX_PLAYER_EXPANSIONS", 1)
+    calls: list[str] = []
+
+    class Result:
+        freshness = "fresh"
+        age_seconds = 0
+
+        def __init__(self, data: dict[str, object]) -> None:
+            self.data = data
+
+    class Upstream:
+        async def get_result(self, path: str, *, require_fresh: bool) -> Result:
+            calls.append(path)
+            if path == "/guides":
+                return Result({"guides": [{"number": 1}, {"number": 2}]})
+            if path == "/leaderboard":
+                return Result({"leaderboard": [{"member_number": 3}, {"member_number": 4}]})
+            return Result({"path": path})
+
+    snapshot = await diagnostics.upstream_snapshot(Upstream())
+
+    assert "/guides/1" in calls and "/guides/2" not in calls
+    assert "/players/3" in calls and "/players/4" not in calls
+    assert snapshot["truncated"] == {"guides": 1, "players": 1}

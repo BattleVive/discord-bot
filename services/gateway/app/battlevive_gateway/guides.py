@@ -1,6 +1,7 @@
 """Guide-thread reconciliation using the original Discord guide presentation."""
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 import re
@@ -9,6 +10,8 @@ from urllib.parse import quote
 from urllib.parse import urlparse
 
 import discord
+
+from .logs import logger
 
 
 DISCORD_MESSAGE_LIMIT = 2_000
@@ -88,19 +91,37 @@ def champion_icon_url(champion: str | None) -> str | None:
     return f"{CHAMPION_ICON_BASE_URL}/{quote(asset_name, safe='')}.png"
 
 
+def guide_fingerprint(record: Mapping[str, object]) -> str | None:
+    """Return the upstream change marker when the catalog provides one.
+
+    Without a source marker a body-only edit cannot safely be detected from
+    the catalog, so that guide continues to fetch its Markdown.
+    """
+    for field in ("updated_at", "updatedAt", "last_modified", "lastModified"):
+        value = record.get(field)
+        if isinstance(value, str) and value.strip():
+            return f"guide-revision-{value.strip()}"
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class Guide:
     number: int
     title: str
-    markdown: str
+    markdown: str | None
     champion: str | None = None
     url: str | None = None
+    fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class GuidePublication:
     thread_id: int
     message_ids: tuple[int, ...]
+
+
+class GuidePublicationMetadataMissing(RuntimeError):
+    """A legacy tracked thread has no safe set of bot-managed messages."""
 
 
 class GuideReconciler:
@@ -113,9 +134,13 @@ class GuideReconciler:
         desired = {f"guide:{guide.number}": guide for guide in guides}
         for key, guide in desired.items():
             previous = existing.pop(key, None)
+            if guide.fingerprint is not None and previous is not None and previous.get("fingerprint") == guide.fingerprint:
+                continue
+            if guide.markdown is None:
+                raise RuntimeError("changed guide is missing Markdown")
             publication = await self._discord.create_or_update(guide, previous)
             await self._publications.upsert(
-                guild_id, "guide", key, publication.thread_id, None, publication.thread_id, None,
+                guild_id, "guide", key, publication.thread_id, None, publication.thread_id, guide.fingerprint,
                 {"title": guide.title, "message_ids": list(publication.message_ids)},
             )
         for key, publication in existing.items():
@@ -143,6 +168,8 @@ class DiscordGuidePublisher:
         forum = guild.get_channel(self._forum_channel_id)
         if not isinstance(forum, discord.ForumChannel):
             raise RuntimeError("configured guide forum is unavailable")
+        if guide.markdown is None:
+            raise RuntimeError("changed guide is missing Markdown")
         content = _guide_chunks(normalize_discord_markdown(guide.markdown, self._emoji_lookup))
         embed = self._guide_embed(guide)
         prior_thread_id = prior.get("thread_id") if prior is not None else None
@@ -158,7 +185,12 @@ class DiscordGuidePublisher:
                 await thread.edit(name=guide.title[:100], archived=False)
                 stored = prior.get("metadata", {}) if prior is not None else {}
                 message_ids = stored.get("message_ids", []) if isinstance(stored, dict) else []
-                return await self._replace(thread, content, embed, message_ids)
+                try:
+                    return await self._replace(thread, content, embed, message_ids)
+                except GuidePublicationMetadataMissing:
+                    await thread.edit(archived=True, reason="Guide publication metadata is missing")
+            if thread is not None:
+                await retire_relocated_thread(thread, forum.id, delete_on_removal=self._delete_on_removal)
         created = await forum.create_thread(
             name=guide.title[:100], content=content[0], embed=embed,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -173,7 +205,7 @@ class DiscordGuidePublisher:
                        stored_ids: object) -> GuidePublication:
         ids = [message_id for message_id in stored_ids if isinstance(message_id, int)] if isinstance(stored_ids, list) else []
         if not ids:
-            raise RuntimeError("guide publication metadata is missing")
+            raise GuidePublicationMetadataMissing("guide publication metadata is missing")
         managed = [thread.get_partial_message(message_id) for message_id in ids]
         updated: list[int] = []
         try:
@@ -222,6 +254,17 @@ class DiscordGuidePublisher:
             await channel.edit(archived=True, reason="Guide removed upstream")
 
 
+async def retire_relocated_thread(thread: Any, forum_id: int, *, delete_on_removal: bool) -> bool:
+    """Retire a tracked guide thread before replacing it in another forum."""
+    if getattr(thread, "parent_id", None) == forum_id:
+        return False
+    if delete_on_removal:
+        await thread.delete(reason="Guide forum channel changed")
+    else:
+        await thread.edit(archived=True, reason="Guide forum channel changed")
+    return True
+
+
 def _guide_chunks(markdown: str, *, limit: int = 2_000) -> list[str]:
     if not markdown:
         return [""]
@@ -261,6 +304,11 @@ async def sync_configured_guides(bot: discord.Client, pool: Any, upstream: Any, 
         records = catalog.data.get("guides")
         if not isinstance(records, list):
             raise RuntimeError("upstream guide catalog was invalid")
+        publications = PublicationRepository(connection)
+        existing = {
+            str(publication["publication_key"]): publication
+            for publication in await publications.list_for_feature(guild_id, "guide")
+        }
         guides: list[Guide] = []
         for record in records:
             if not isinstance(record, dict):
@@ -269,20 +317,85 @@ async def sync_configured_guides(bot: discord.Client, pool: Any, upstream: Any, 
             title = record.get("title")
             if isinstance(number, bool) or not isinstance(number, int) or number <= 0 or not isinstance(title, str) or not title.strip():
                 raise RuntimeError("upstream guide catalog was invalid")
-            markdown = record.get("markdown")
-            if not isinstance(markdown, str):
-                markdown = (await upstream.get_result(f"/guides/{number}/markdown", require_fresh=True)).data.get("markdown")
-            if not isinstance(markdown, str):
-                raise RuntimeError("upstream guide Markdown was invalid")
             champion = record.get("champion")
             url = record.get("url")
+            fingerprint = guide_fingerprint(record)
+            previous = existing.get(f"guide:{number}")
+            changed = fingerprint is None or previous is None or previous.get("fingerprint") != fingerprint
+            markdown: str | None = None
+            if changed:
+                markdown = record.get("markdown")
+                if not isinstance(markdown, str):
+                    markdown = (await upstream.get_result(f"/guides/{number}/markdown", require_fresh=True)).data.get("markdown")
+                if not isinstance(markdown, str):
+                    raise RuntimeError("upstream guide Markdown was invalid")
             guides.append(Guide(
                 number, title.strip(), markdown,
                 champion=champion.strip() if isinstance(champion, str) and champion.strip() else None,
                 url=url.strip() if isinstance(url, str) and url.strip() else None,
+                fingerprint=fingerprint,
             ))
         publisher = DiscordGuidePublisher(bot, guild_id, config["guide_forum_channel_id"],
                                           delete_on_removal=bool(config.get("guide_auto_delete_on_removal")),
                                           emoji_lookup=await application_emoji_lookup(bot))
-        await GuideReconciler(PublicationRepository(connection), publisher).reconcile(guild_id, guides)
+        await GuideReconciler(publications, publisher).reconcile(guild_id, guides)
     return True
+
+
+class GuideService:
+    """Periodically reconcile every configured guide forum without persistent jobs."""
+
+    def __init__(self, bot: discord.Client, pool: Any, upstream: Any, *, interval: float = 300.0) -> None:
+        self._bot, self._pool, self._upstream, self._interval = bot, pool, upstream, interval
+        self._requested = asyncio.Event()
+        self._lock = asyncio.Lock()
+        self._task: asyncio.Task[None] | None = None
+
+    def start(self) -> None:
+        if self._task is None:
+            self._task = asyncio.create_task(self._run(), name="guide-publisher")
+            self.request_reconciliation()
+
+    async def stop(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+            self._task = None
+
+    def request_reconciliation(self) -> None:
+        self._requested.set()
+
+    async def reconcile_guild(self, guild_id: int) -> bool:
+        async with self._lock:
+            return await sync_configured_guides(self._bot, self._pool, self._upstream, guild_id)
+
+    async def reconcile_all(self) -> None:
+        from .repositories import GuildConfigRepository
+
+        async with self._lock:
+            async with self._pool.acquire() as connection:
+                configs = await GuildConfigRepository(connection).configured_guides()
+            for config in configs:
+                guild_id = config.get("guild_id")
+                if not isinstance(guild_id, int):
+                    continue
+                try:
+                    await sync_configured_guides(self._bot, self._pool, self._upstream, guild_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Guide reconciliation failed for guild %s", guild_id)
+
+    async def _run(self) -> None:
+        while True:
+            try:
+                await asyncio.wait_for(self._requested.wait(), timeout=self._interval)
+            except TimeoutError:
+                pass
+            self._requested.clear()
+            try:
+                await self.reconcile_all()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Guide reconciliation pass failed")

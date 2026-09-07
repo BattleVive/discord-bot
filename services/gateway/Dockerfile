@@ -4,5 +4,6 @@ RUN addgroup -g 10001 -S battlevive && adduser -u 10001 -S -D -H -G battlevive b
 COPY services/gateway/requirements.lock /tmp/requirements.lock
 RUN python -m pip install --require-hashes --no-cache-dir -r /tmp/requirements.lock
 COPY services/gateway/app /app
+COPY init-db /app/init-db
 USER 10001:10001
 CMD ["python3", "-m", "battlevive_gateway.gateway"]

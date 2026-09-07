@@ -22,6 +22,12 @@ class FakeConnection:
     async def fetchval(self, _query: str, *_args: object) -> object:
         return None
 
+    def transaction(self) -> object:
+        class Transaction:
+            async def __aenter__(self) -> None: return None
+            async def __aexit__(self, *_: object) -> None: return None
+        return Transaction()
+
 
 @pytest.mark.asyncio
 async def test_configuration_update_is_version_checked_and_atomic() -> None:
@@ -52,6 +58,8 @@ async def test_identity_binding_uses_both_unique_columns() -> None:
     query, args = connection.calls[-1]
     assert "ON CONFLICT(member_number)" in query
     assert args == (100, 200, "manual")
+    lock_calls = [call for call in connection.calls if "pg_advisory_xact_lock" in call[0]]
+    assert [call[1] for call in lock_calls] == [(100,), (200,)]
 
 
 @pytest.mark.asyncio
@@ -86,3 +94,17 @@ async def test_publication_reads_include_fingerprint_for_idempotent_reconciliati
     await PublicationRepository(connection).list_for_feature(7, "leaderboard")
 
     assert "fingerprint" in connection.fetch.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_publication_reads_decode_json_metadata_for_guide_reconciliation() -> None:
+    connection = FakeConnection()
+    connection.fetch = __import__("unittest.mock").mock.AsyncMock(return_value=[{
+        "publication_key": "guide:4", "channel_id": 10, "message_id": None,
+        "thread_id": 11, "fingerprint": None,
+        "metadata": '{"message_ids":[12,13]}',
+    }])
+
+    rows = await PublicationRepository(connection).list_for_feature(7, "guide")
+
+    assert rows[0]["metadata"] == {"message_ids": [12, 13]}

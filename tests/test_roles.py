@@ -46,23 +46,27 @@ async def test_create_roles_records_required_roles_with_their_ownership_purpose(
         return role
 
     guild.create_role = create_role
-    claims: list[tuple[object, ...]] = []
-    ownership = SimpleNamespace(claim=lambda *args: claims.append(args))
+    made, existing, blocked = await create_required_roles(guild)
 
-    async def claim(*args: object) -> None:
-        claims.append(args)
-
-    ownership.claim = claim
-    made, existing = await create_required_roles(guild, ownership)
-
-    assert made == ["Guide Updates", "BATTLEVIVE", "Diamond", "Platinum", "Gold", "Silver", "Bronze"]
+    assert [role.name for role in made] == ["Guide Updates", "BATTLEVIVE", "Diamond", "Platinum", "Gold", "Silver", "Bronze"]
     assert existing == []
-    assert claims == [
-        (7, "guide_updates", "guide updates", 1),
-        (7, "rank", "battlevive", 2),
-        (7, "rank", "diamond", 3),
-        (7, "rank", "platinum", 4),
-        (7, "rank", "gold", 5),
-        (7, "rank", "silver", 6),
-        (7, "rank", "bronze", 7),
-    ]
+    assert blocked == []
+
+
+@pytest.mark.asyncio
+async def test_create_roles_reports_a_same_name_role_that_is_unsafe_to_manage() -> None:
+    unsafe = SimpleNamespace(
+        name="Gold", managed=True, permissions=SimpleNamespace(value=0), position=1,
+    )
+    guild = SimpleNamespace(id=7, roles=[unsafe], me=SimpleNamespace(
+        guild_permissions=SimpleNamespace(manage_roles=True), top_role=SimpleNamespace(position=10),
+    ))
+
+    async def create_role(**kwargs: object) -> object:
+        return SimpleNamespace(id=100, name=kwargs["name"], managed=False,
+                               permissions=SimpleNamespace(value=0), position=1)
+
+    guild.create_role = create_role
+    _, _, blocked = await create_required_roles(guild)
+
+    assert blocked == ["Gold"]

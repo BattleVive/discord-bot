@@ -138,4 +138,9 @@ class LeaderboardService:
             except TimeoutError:
                 pass
             self._requested.clear()
-            await self.reconcile_all()
+            try:
+                await self.reconcile_all()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Leaderboard reconciliation pass failed")

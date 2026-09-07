@@ -48,10 +48,14 @@ async def test_repositories_persist_rules_roles_publications_and_identity_unique
     assert await roles.is_owned(9_001, 800)
 
     publications = PublicationRepository(connection)
-    await publications.upsert(9_001, "guide", "guide:4", 700, 900, 901, "fingerprint", {"title": "Guide"})
-    assert (await publications.list_for_feature(9_001, "guide"))[0]["thread_id"] == 901
+    await publications.upsert(
+        9_001, "guide", "guide:4", 700, 900, 901, "fingerprint",
+        {"title": "Guide", "message_ids": [900]},
+    )
+    publication = (await publications.list_for_feature(9_001, "guide"))[0]
+    assert publication["thread_id"] == 901
+    assert publication["metadata"] == {"title": "Guide", "message_ids": [900]}
 
     identities = IdentityRepository(connection)
     await identities.bind(11, 12, "manual")
-    with pytest.raises(asyncpg.UniqueViolationError):
-        await identities.bind(13, 12, "manual")
+    assert not await identities.bind(13, 12, "manual")

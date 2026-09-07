@@ -9,6 +9,7 @@ from battlevive_upstream.client import ApiError
 from battlevive_upstream.client import BattleViveClient
 from battlevive_upstream.client import Freshness
 from battlevive_upstream.client import UpstreamResponse
+from battlevive_upstream.service import create_app
 from battlevive_upstream.service import route_table
 
 
@@ -34,6 +35,21 @@ async def test_feature_request_uses_bearer_and_exact_user_agent_without_prefligh
             },
         )
     ]
+
+
+def test_client_rejects_a_cleartext_upstream_url_before_any_request() -> None:
+    async def send(_: str, __: dict[str, str]) -> UpstreamResponse:
+        raise AssertionError("cleartext upstream request must not be attempted")
+
+    with pytest.raises(ValueError, match="HTTPS"):
+        BattleViveClient("http://example.test", "secret-value", send=send)
+
+
+def test_service_rejects_a_cleartext_environment_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BATTLEVIVE_API_BASE_URL", "http://example.test")
+
+    with pytest.raises(ValueError, match="HTTPS"):
+        create_app()
 
 
 @pytest.mark.asyncio

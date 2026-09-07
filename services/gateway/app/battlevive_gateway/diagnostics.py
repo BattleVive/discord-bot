@@ -16,11 +16,14 @@ FEATURE_PATHS = (
     "/recent-matches",
 )
 _MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
+_MAX_GUIDE_EXPANSIONS = 20
+_MAX_PLAYER_EXPANSIONS = 20
 
 
 async def upstream_snapshot(upstream: Any) -> dict[str, object]:
     """Return only validated internal results and credential-safe failures."""
     routes: dict[str, object] = {}
+    truncated: dict[str, int] = {}
 
     async def collect(path: str) -> dict[str, Any] | None:
         try:
@@ -51,20 +54,27 @@ async def upstream_snapshot(upstream: Any) -> dict[str, object]:
             guides = data.get("guides")
             if not isinstance(guides, list):
                 continue
-            for guide in guides:
-                number = guide.get("number") if isinstance(guide, dict) else None
-                if isinstance(number, int) and number > 0:
-                    await collect(f"/guides/{number}")
-                    await collect(f"/guides/{number}/markdown")
+            guide_numbers = [guide.get("number") for guide in guides if isinstance(guide, dict)]
+            valid_numbers = [number for number in guide_numbers if isinstance(number, int) and number > 0]
+            if len(valid_numbers) > _MAX_GUIDE_EXPANSIONS:
+                truncated["guides"] = len(valid_numbers) - _MAX_GUIDE_EXPANSIONS
+            for number in valid_numbers[:_MAX_GUIDE_EXPANSIONS]:
+                await collect(f"/guides/{number}")
+                await collect(f"/guides/{number}/markdown")
         elif path == "/leaderboard":
             leaderboard = data.get("leaderboard")
             if not isinstance(leaderboard, list):
                 continue
-            for entry in leaderboard:
-                member_number = entry.get("member_number") if isinstance(entry, dict) else None
-                if isinstance(member_number, int) and member_number > 0:
-                    await collect(f"/players/{member_number}")
-    return {"routes": routes}
+            member_numbers = [entry.get("member_number") for entry in leaderboard if isinstance(entry, dict)]
+            valid_numbers = [number for number in member_numbers if isinstance(number, int) and number > 0]
+            if len(valid_numbers) > _MAX_PLAYER_EXPANSIONS:
+                truncated["players"] = len(valid_numbers) - _MAX_PLAYER_EXPANSIONS
+            for member_number in valid_numbers[:_MAX_PLAYER_EXPANSIONS]:
+                await collect(f"/players/{member_number}")
+    snapshot: dict[str, object] = {"routes": routes}
+    if truncated:
+        snapshot["truncated"] = truncated
+    return snapshot
 
 
 def snapshot_attachment(snapshot: dict[str, object]) -> bytes:

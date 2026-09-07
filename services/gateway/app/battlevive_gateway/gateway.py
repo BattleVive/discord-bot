@@ -6,6 +6,7 @@ are represented as unavailable integrations rather than process failures.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import time
 
 import aiohttp
@@ -23,6 +24,16 @@ def validate_settings() -> None:
         raise RuntimeError("Gateway must not receive BATTLEVIVE_API_KEY")
 
 
+def load_file_settings() -> None:
+    """Load deployment secrets mounted as ``<SETTING>_FILE`` exactly once."""
+    for name in ("DISCORD_TOKEN", "DATABASE_URL"):
+        if os.environ.get(name, "").strip():
+            continue
+        path = os.environ.get(f"{name}_FILE", "").strip()
+        if path:
+            os.environ[name] = Path(path).read_text().strip()
+
+
 def command_guild_id() -> int | None:
     value = os.environ.get("DISCORD_COMMAND_GUILD_ID", "").strip()
     if not value:
@@ -33,6 +44,7 @@ def command_guild_id() -> int | None:
 
 
 def main() -> None:
+    load_file_settings()
     validate_settings()
     from .gateway_bot import create_bot
     while True:

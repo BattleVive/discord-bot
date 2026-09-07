@@ -49,13 +49,14 @@ async def reconcile_member_rank(member: Any, player: dict[str, Any]) -> bool:
     return bool(old or target not in getattr(member, "roles", ()))
 
 
-async def create_required_roles(guild: Any, ownership: Any) -> tuple[list[str], list[str]]:
+async def create_required_roles(guild: Any) -> tuple[list[Any], list[str], list[str]]:
     """Create the v1-compatible safe roles needed by supported gateway features."""
     bot_member = getattr(guild, "me", None)
     if bot_member is None or not getattr(getattr(bot_member, "guild_permissions", None), "manage_roles", False):
         raise RuntimeError("the bot requires Manage Roles")
-    created: list[str] = []
+    created: list[Any] = []
     existing: list[str] = []
+    blocked: list[str] = []
     for name in REQUIRED_ROLE_NAMES:
         role = _safe_role(guild, name)
         if role is not None:
@@ -63,12 +64,11 @@ async def create_required_roles(guild: Any, ownership: Any) -> tuple[list[str], 
             continue
         collision = next((item for item in getattr(guild, "roles", ()) if getattr(item, "name", None) == name), None)
         if collision is not None:
+            blocked.append(name)
             continue
         role = await guild.create_role(
             name=name, permissions=discord.Permissions.none(), mentionable=False,
             reason="BattleVive role setup",
         )
-        purpose = "guide_updates" if name == GUIDE_UPDATES_ROLE else "rank"
-        await ownership.claim(guild.id, purpose, name.casefold(), role.id)
-        created.append(name)
-    return created, existing
+        created.append(role)
+    return created, existing, blocked

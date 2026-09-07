@@ -22,13 +22,15 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: battlevive
-      POSTGRES_PASSWORD: battlevive
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: battlevive
+    secrets:
+      - postgres_password
     volumes:
       - ${BATTLEVIVE_POSTGRES_DATA_PATH:-./app/data/postgresql}:/var/lib/postgresql:Z
       - ./init-db:/docker-entrypoint-initdb.d:ro,Z
     networks:
-      - private
+      - database
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U battlevive -d battlevive"]
       interval: 5s
@@ -43,12 +45,28 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
     networks:
-      - private
+      - renderer
       - egress
     environment:
       BATTLEVIVE_API_BASE_URL: ${BATTLEVIVE_API_BASE_URL:-https://battlevive.com}
       BATTLEVIVE_API_KEY: ${BATTLEVIVE_API_KEY}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    restart: unless-stopped
+
+  migration:
+    image: ${GATEWAY_IMAGE:-voxix/battlevive-gateway:latest}
+    command: ["python3", "-m", "battlevive_gateway.migrations"]
+    <<: *runtime-security
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    networks:
+      - database
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    restart: "no"
 
   gateway:
     image: ${GATEWAY_IMAGE:-voxix/battlevive-gateway:latest}
@@ -58,11 +76,12 @@ services:
       - /tmp:rw,noexec,nosuid,nodev,size=64m
     stop_grace_period: 30s
     networks:
-      - private
+      - database
+      - renderer
       - egress
     depends_on:
-      postgres:
-        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
     environment:
       DISCORD_TOKEN: ${DISCORD_TOKEN}
       DATABASE_URL: ${DATABASE_URL}
@@ -75,11 +94,19 @@ services:
   image-renderer:
     image: ${IMAGE_RENDERER_IMAGE:-voxix/battlevive-image-renderer:latest}
     <<: *runtime-security
-    networks: [private]
+    networks: [renderer]
+    restart: unless-stopped
 
 networks:
-  private:
+  database:
+    driver: bridge
+    internal: true
+  renderer:
     driver: bridge
     internal: true
   egress:
     driver: bridge
+
+secrets:
+  postgres_password:
+    environment: POSTGRES_PASSWORD

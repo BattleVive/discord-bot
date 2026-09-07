@@ -9,6 +9,7 @@ import pytest
 
 from battlevive_renderer.renderer import render_leaderboard
 from battlevive_renderer.renderer_service import render_model
+from battlevive_renderer.renderer_service import RenderBusy
 from battlevive_renderer.renderer import render_rank
 
 
@@ -60,3 +61,28 @@ def test_rank_renderer_rejects_a_malformed_avatar_payload() -> None:
             "mmr_current": 2000, "mmr_required": 3500, "wins": 4, "losses": 1,
             "avatar_png_base64": "not base64",
         })
+
+
+def test_rank_renderer_rejects_an_avatar_with_excessive_pixel_dimensions() -> None:
+    avatar = Image.new("RGB", (4_097, 1), "red")
+    encoded = BytesIO()
+    avatar.save(encoded, format="PNG")
+
+    with pytest.raises(ValueError, match="avatar"):
+        render_rank({
+            "username": "Alpha", "rank_current": "Gold", "rank_next": "Platinum",
+            "mmr_current": 2000, "mmr_required": 3500, "wins": 4, "losses": 1,
+            "avatar_png_base64": base64.b64encode(encoded.getvalue()).decode(),
+        })
+
+
+@pytest.mark.asyncio
+async def test_renderer_rejects_a_request_when_all_render_slots_are_busy(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    import battlevive_renderer.renderer_service as renderer_service
+
+    monkeypatch.setattr(renderer_service, "_render_slots", asyncio.Semaphore(0))
+
+    with pytest.raises(RenderBusy):
+        await render_model({}, lambda _: b"png")

@@ -10,6 +10,7 @@ import random
 import re
 from time import monotonic
 from typing import Any
+from urllib.parse import urlparse
 
 USER_AGENT = "BattleViveBot/1.0 (+https://battlevive.com/)"
 logger = logging.getLogger("battlevive.upstream")
@@ -60,6 +61,9 @@ class BattleViveClient:
     def __init__(self, base_url: str, api_key: str, *, send: Send,
                  retries: int = 3, clock: Callable[[], float] = monotonic,
                  sleep: Sleep = asyncio.sleep) -> None:
+        parsed = urlparse(base_url)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError("BattleVive upstream URL must use HTTPS")
         self.base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._send = send

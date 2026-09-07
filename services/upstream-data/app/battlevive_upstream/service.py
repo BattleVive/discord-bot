@@ -4,6 +4,7 @@ import os
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import urlparse
 
 from aiohttp import ClientSession
 from aiohttp import ClientTimeout
@@ -96,6 +97,9 @@ def _positive_number(request: web.Request) -> int | None:
 def create_app(client: BattleViveClient | None = None) -> web.Application:
     key = os.environ.get("BATTLEVIVE_API_KEY", "")
     base_url = os.environ.get("BATTLEVIVE_API_BASE_URL", "https://battlevive.com")
+    parsed = urlparse(base_url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ValueError("BATTLEVIVE_API_BASE_URL must use HTTPS")
     if client is None:
         async def send(path: str, headers: dict[str, str]) -> UpstreamResponse:
             return await aiohttp_sender(base_url, path, headers)

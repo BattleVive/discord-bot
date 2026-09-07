@@ -66,9 +66,12 @@ def _rank_avatar(model: Mapping[str, Any]) -> Image.Image:
     try:
         raw = base64.b64decode(encoded, validate=True)
         with Image.open(BytesIO(raw)) as source:
+            width, height = source.size
+            if width > MAX_IMAGE_WIDTH or height > MAX_IMAGE_HEIGHT:
+                raise ValueError("avatar payload is invalid")
             source.load()
             return source.convert("RGB")
-    except (binascii.Error, OSError, ValueError) as error:
+    except (binascii.Error, OSError, ValueError, Image.DecompressionBombError) as error:
         raise ValueError("avatar payload is invalid") from error
 
 

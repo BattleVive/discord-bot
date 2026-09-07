@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from battlevive_gateway.leaderboards import GuildLeaderboardPublisher
+from battlevive_gateway.leaderboards import LeaderboardService
 
 
 @pytest.mark.asyncio
@@ -58,3 +59,22 @@ async def test_automatic_leaderboard_renders_and_publishes_a_configured_channel(
     assert changed is True
     assert rendered == [{"season": "Season 3", "entries": [{"place": 1, "username": "Alpha", "rank": "Gold", "mmr": 1200, "wins": 4, "losses": 1, "win_rate": 80}]}]
     assert saved[0][2:6] == ("slot:0", 20, 55, None)
+
+
+@pytest.mark.asyncio
+async def test_leaderboard_worker_recovers_after_a_failed_cycle() -> None:
+    service = LeaderboardService(object(), object(), object(), object(), interval=0.001)
+    calls = 0
+
+    async def reconcile() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ConnectionError("temporary database outage")
+
+    service.reconcile_all = reconcile  # type: ignore[method-assign]
+    service.start()
+    await __import__("asyncio").sleep(0.01)
+    await service.stop()
+
+    assert calls >= 2

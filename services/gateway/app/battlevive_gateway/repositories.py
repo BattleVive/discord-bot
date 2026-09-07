@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
 from typing import Any
 
 
@@ -70,7 +71,7 @@ class PublicationRepository:
             ON CONFLICT(guild_id,feature,publication_key) DO UPDATE SET channel_id=EXCLUDED.channel_id,
             message_id=EXCLUDED.message_id,thread_id=EXCLUDED.thread_id,fingerprint=EXCLUDED.fingerprint,
             metadata=EXCLUDED.metadata,version=discord_publications.version+1,updated_at=NOW()""",
-            guild_id, feature, publication_key, channel_id, message_id, thread_id, fingerprint, __import__("json").dumps(metadata),
+            guild_id, feature, publication_key, channel_id, message_id, thread_id, fingerprint, json.dumps(metadata),
         )
 
     async def list_for_feature(self, guild_id: int, feature: str) -> list[dict[str, object]]:
@@ -78,7 +79,18 @@ class PublicationRepository:
             "SELECT publication_key, channel_id, message_id, thread_id, fingerprint, metadata FROM discord_publications WHERE guild_id=$1 AND feature=$2",
             guild_id, feature,
         )
-        return [dict(row) for row in rows]
+        publications: list[dict[str, object]] = []
+        for row in rows:
+            publication = dict(row)
+            metadata = publication.get("metadata")
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except json.JSONDecodeError:
+                    metadata = {}
+            publication["metadata"] = metadata if isinstance(metadata, dict) else {}
+            publications.append(publication)
+        return publications
 
     async def delete(self, guild_id: int, feature: str, publication_key: str) -> None:
         await self._connection.execute(
@@ -94,17 +106,20 @@ class IdentityRepository:
     async def bind(self, member_number: int, discord_id: int, provenance: str) -> bool:
         if member_number <= 0 or discord_id <= 0 or not provenance:
             raise ValueError("identity binding values must be positive and have provenance")
-        owner = await self._connection.fetchval(
-            "SELECT member_number FROM identity_links WHERE discord_id=$1", discord_id
-        )
-        if owner is not None and int(owner) != member_number:
-            return False
-        result = await self._connection.execute(
-            """INSERT INTO identity_links(member_number,discord_id,provenance) VALUES($1,$2,$3)
-            ON CONFLICT(member_number) DO UPDATE SET discord_id=EXCLUDED.discord_id,
-            provenance=EXCLUDED.provenance,updated_at=NOW()""",
-            member_number, discord_id, provenance,
-        )
+        async with self._connection.transaction():
+            for lock_id in sorted((member_number, discord_id)):
+                await self._connection.execute("SELECT pg_advisory_xact_lock($1)", lock_id)
+            owner = await self._connection.fetchval(
+                "SELECT member_number FROM identity_links WHERE discord_id=$1", discord_id
+            )
+            if owner is not None and int(owner) != member_number:
+                return False
+            result = await self._connection.execute(
+                """INSERT INTO identity_links(member_number,discord_id,provenance) VALUES($1,$2,$3)
+                ON CONFLICT(member_number) DO UPDATE SET discord_id=EXCLUDED.discord_id,
+                provenance=EXCLUDED.provenance,updated_at=NOW()""",
+                member_number, discord_id, provenance,
+            )
         return result in {"INSERT 0 1", "UPDATE 1"}
 
     async def discord_ids(self, member_numbers: list[int]) -> dict[int, int]:

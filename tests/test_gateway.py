@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
+from unittest.mock import Mock
 from unittest.mock import AsyncMock
 
+import discord
 import pytest
 
 import battlevive_gateway.gateway as gateway
@@ -10,6 +13,8 @@ from battlevive_gateway.gateway import TEMPORARILY_UNAVAILABLE
 from battlevive_gateway.gateway import command_guild_id
 from battlevive_gateway.gateway import validate_settings
 from battlevive_gateway.gateway_bot import bypasses_channel_rules
+from battlevive_gateway.gateway_bot import can_publish_guides
+from battlevive_gateway.gateway_bot import can_publish_leaderboard
 from battlevive_gateway.gateway_bot import create_bot
 
 
@@ -25,6 +30,23 @@ def test_administrator_diagnostics_bypass_channel_rules() -> None:
     assert bypasses_channel_rules("config guide-forum") is True
     assert bypasses_channel_rules("debug upstream") is True
     assert bypasses_channel_rules("refresh") is False
+
+
+def test_publication_channel_validators_require_the_bot_permissions() -> None:
+    guild = SimpleNamespace(me=object())
+    permissions = SimpleNamespace(
+        view_channel=True, send_messages=True, attach_files=True, read_message_history=True,
+        send_messages_in_threads=True, manage_threads=True,
+    )
+    text = Mock(spec=discord.TextChannel)
+    text.permissions_for.return_value = permissions
+    forum = Mock(spec=discord.ForumChannel)
+    forum.permissions_for.return_value = permissions
+
+    assert can_publish_leaderboard(guild, text)
+    assert can_publish_guides(guild, forum)
+    permissions.attach_files = False
+    assert not can_publish_leaderboard(guild, text)
 
 
 def test_gateway_rejects_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -68,7 +90,8 @@ async def test_refresh_defers_before_running_integrations() -> None:
     refresh = next(command for command in bot.tree.get_commands() if command.name == "refresh")
 
     interaction = type("Interaction", (), {
-        "guild_id": None,
+        "guild_id": 1,
+        "user": type("Member", (), {"guild_permissions": type("Permissions", (), {"manage_guild": True})()})(),
         "response": type("Response", (), {"defer": AsyncMock()})(),
         "followup": type("Followup", (), {"send": AsyncMock()})(),
     })()
@@ -77,6 +100,57 @@ async def test_refresh_defers_before_running_integrations() -> None:
 
     interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
     interaction.followup.send.assert_awaited_once_with("No integrations configured.", ephemeral=True)
+
+
+@pytest.mark.asyncio
+async def test_refresh_requires_manage_server_before_starting_work() -> None:
+    bot = create_bot()
+    refresh = next(command for command in bot.tree.get_commands() if command.name == "refresh")
+    interaction = type("Interaction", (), {
+        "guild_id": 1,
+        "user": type("Member", (), {"guild_permissions": type("Permissions", (), {"manage_guild": False})()})(),
+        "response": type("Response", (), {"defer": AsyncMock(), "send_message": AsyncMock()})(),
+    })()
+
+    await refresh.callback(interaction)
+
+    interaction.response.defer.assert_not_awaited()
+    interaction.response.send_message.assert_awaited_once_with(  # type: ignore[attr-defined]
+        "Manage Server permission is required.", ephemeral=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_refresh_enforces_a_ten_second_cooldown_per_guild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bot = create_bot()
+    refresh = next(command for command in bot.tree.get_commands() if command.name == "refresh")
+    monkeypatch.setattr("battlevive_gateway.gateway_bot.time.monotonic", lambda: 100.0)
+
+    def interaction(guild_id: int) -> object:
+        return type("Interaction", (), {
+            "guild_id": guild_id,
+            "user": type("Member", (), {"guild_permissions": type("Permissions", (), {"manage_guild": True})()})(),
+            "response": type("Response", (), {
+                "defer": AsyncMock(),
+                "send_message": AsyncMock(),
+            })(),
+            "followup": type("Followup", (), {"send": AsyncMock()})(),
+        })()
+
+    first, repeated, other_guild = interaction(1), interaction(1), interaction(2)
+
+    await refresh.callback(first)
+    await refresh.callback(repeated)
+    await refresh.callback(other_guild)
+
+    first.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)  # type: ignore[attr-defined]
+    repeated.response.defer.assert_not_awaited()  # type: ignore[attr-defined]
+    repeated.response.send_message.assert_awaited_once_with(  # type: ignore[attr-defined]
+        "Please wait before refreshing this server again.", ephemeral=True
+    )
+    other_guild.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio

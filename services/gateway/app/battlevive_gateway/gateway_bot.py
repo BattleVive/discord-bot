@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 from io import BytesIO
 import time
 
@@ -16,7 +17,7 @@ from .diagnostics import upstream_snapshot
 from .gateway import TEMPORARILY_UNAVAILABLE
 from .integrations import ImageRendererClient
 from .integrations import UpstreamDataClient
-from .guides import sync_configured_guides
+from .guides import GuideService
 from .logs import logger
 from .leaderboards import LeaderboardService
 from .refresh import RefreshCoordinator
@@ -33,6 +34,27 @@ def bypasses_channel_rules(command_name: str) -> bool:
     return command_name == "config" or command_name.startswith("config ") or command_name == "debug" or command_name.startswith("debug ")
 
 
+def _has_channel_permissions(channel: object, member: object | None, *names: str) -> bool:
+    permissions_for = getattr(channel, "permissions_for", None)
+    if member is None or not callable(permissions_for):
+        return False
+    permissions = permissions_for(member)
+    return all(bool(getattr(permissions, name, False)) for name in names)
+
+
+def can_publish_leaderboard(guild: object | None, channel: object) -> bool:
+    return isinstance(channel, discord.TextChannel) and _has_channel_permissions(
+        channel, getattr(guild, "me", None), "view_channel", "send_messages", "attach_files", "read_message_history"
+    )
+
+
+def can_publish_guides(guild: object | None, channel: object) -> bool:
+    return isinstance(channel, discord.ForumChannel) and _has_channel_permissions(
+        channel, getattr(guild, "me", None), "view_channel", "send_messages", "send_messages_in_threads",
+        "read_message_history", "manage_threads",
+    )
+
+
 class GatewayBot(commands.Bot):
     def __init__(self, *args: object, database_url: str | None = None,
                  command_guild_id: int | None = None, upstream_data_url: str | None = None,
@@ -44,7 +66,10 @@ class GatewayBot(commands.Bot):
         self.upstream = UpstreamDataClient(upstream_data_url) if upstream_data_url else None
         self.renderer = ImageRendererClient(image_renderer_url) if image_renderer_url else None
         self.leaderboard_service: LeaderboardService | None = None
+        self.guide_service: GuideService | None = None
         self.rank_cooldowns: dict[tuple[int, int], float] = {}
+        self.refresh_cooldowns: dict[int, float] = {}
+        self.refresh_lock = asyncio.Lock()
         self._health_runner: web.AppRunner | None = None
 
     async def setup_hook(self) -> None:
@@ -54,6 +79,9 @@ class GatewayBot(commands.Bot):
         if self.pool is not None and self.upstream is not None and self.renderer is not None:
             self.leaderboard_service = LeaderboardService(self, self.pool, self.upstream, self.renderer)
             self.leaderboard_service.start()
+        if self.pool is not None and self.upstream is not None:
+            self.guide_service = GuideService(self, self.pool, self.upstream)
+            self.guide_service.start()
         if self.command_guild_id is None:
             await self.tree.sync()
         else:
@@ -66,6 +94,9 @@ class GatewayBot(commands.Bot):
         if self._health_runner is not None:
             await self._health_runner.cleanup()
         if self.pool is not None:
+            if self.guide_service is not None:
+                await self.guide_service.stop()
+                self.guide_service = None
             if self.leaderboard_service is not None:
                 await self.leaderboard_service.stop()
                 self.leaderboard_service = None
@@ -138,9 +169,15 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
         await interaction.response.send_message("Leaderboard limit updated.", ephemeral=True)
 
     @config.command(name="leaderboard-channel", description="Set the automatic leaderboard channel")
-    async def leaderboard_channel(interaction: discord.Interaction, channel: discord.abc.GuildChannel) -> None:
+    async def leaderboard_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
         context = await configuration(interaction)
         if context is None:
+            return
+        if not can_publish_leaderboard(interaction.guild, channel):
+            await interaction.response.send_message(
+                "Leaderboard channel requires View Channel, Send Messages, Attach Files, and Read Message History.",
+                ephemeral=True,
+            )
             return
         guild_id, version = context
         async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
@@ -154,9 +191,17 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
         context = await configuration(interaction)
         if context is None:
             return
+        if not can_publish_guides(interaction.guild, channel):
+            await interaction.response.send_message(
+                "Guide forum requires View Channel, Send Messages, Send Messages in Threads, Read Message History, and Manage Threads.",
+                ephemeral=True,
+            )
+            return
         guild_id, version = context
         async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
             await GuildConfigRepository(connection).update(guild_id, version, {"guide_forum_channel_id": channel.id}, updated_by=interaction.user.id)
+        if bot.guide_service is not None:
+            bot.guide_service.request_reconciliation()
         await interaction.response.send_message("Guide forum updated.", ephemeral=True)
 
     @config.command(name="channel-rule", description="Allow or block a command in a channel")
@@ -296,30 +341,43 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
         if bot.pool is None:
             await interaction.response.send_message("Configuration storage is temporarily unavailable.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True, thinking=True)
         async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
             await GuildConfigRepository(connection).ensure(interaction.guild.id, interaction.user.id)
-            try:
-                repository = GuildConfigRepository(connection)
-                current = await repository.get(interaction.guild.id)
-                created, existing = await create_required_roles(interaction.guild, RoleRepository(connection))
-                guide_role = next((role for role in interaction.guild.roles if role.name == GUIDE_UPDATES_ROLE), None)
-                if (guide_role is not None and current is not None
-                        and current.get("guide_notification_role_id") is None):
-                    await repository.update(
-                        interaction.guild.id,
-                        current["version"],
-                        {"guide_notification_role_id": guide_role.id},
-                        updated_by=interaction.user.id,
-                    )
-            except RuntimeError as error:
-                await interaction.response.send_message(str(error), ephemeral=True)
-                return
+            current = await GuildConfigRepository(connection).get(interaction.guild.id)
+        try:
+            created, existing, blocked = await create_required_roles(interaction.guild)
+        except RuntimeError as error:
+            await interaction.followup.send(str(error), ephemeral=True)
+            return
+        except discord.HTTPException:
+            logger.exception("role setup failed for guild %s", interaction.guild.id)
+            await interaction.followup.send(
+                "Role setup failed. Check the bot role position and permissions.", ephemeral=True
+            )
+            return
+        async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
+            ownership = RoleRepository(connection)
+            for role in created:
+                purpose = "guide_updates" if role.name == GUIDE_UPDATES_ROLE else "rank"
+                await ownership.claim(interaction.guild.id, purpose, role.name.casefold(), role.id)
+            guide_role = next((role for role in interaction.guild.roles if role.name == GUIDE_UPDATES_ROLE), None)
+            if (guide_role is not None and current is not None
+                    and current.get("guide_notification_role_id") is None):
+                await GuildConfigRepository(connection).update(
+                    interaction.guild.id,
+                    current["version"],
+                    {"guide_notification_role_id": guide_role.id},
+                    updated_by=interaction.user.id,
+                )
         summary = []
         if created:
-            summary.append("Created: " + ", ".join(created))
+            summary.append("Created: " + ", ".join(role.name for role in created))
         if existing:
             summary.append("Already configured: " + ", ".join(existing))
-        await interaction.response.send_message("; ".join(summary) or "No roles changed.", ephemeral=True)
+        if blocked:
+            summary.append("Skipped unsafe existing roles: " + ", ".join(blocked))
+        await interaction.followup.send("; ".join(summary) or "No roles changed.", ephemeral=True)
 
     debug = app_commands.Group(name="debug", description="Administrator diagnostics")
 
@@ -368,26 +426,49 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @bot.tree.command(name="refresh", description="Refresh supported BattleVive integrations")
     async def refresh(interaction: discord.Interaction) -> None:
+        guild_id = interaction.guild_id
+        member = interaction.user
+        if guild_id is None:
+            await interaction.response.send_message("This command must be used in a server.", ephemeral=True)
+            return
+        if not bool(getattr(getattr(member, "guild_permissions", None), "manage_guild", False)):
+            await interaction.response.send_message("Manage Server permission is required.", ephemeral=True)
+            return
+        now = time.monotonic()
+        previous = bot.refresh_cooldowns.get(guild_id)
+        if previous is not None and now - previous < 10:
+            await interaction.response.send_message(
+                "Please wait before refreshing this server again.", ephemeral=True
+            )
+            return
+        if bot.refresh_lock.locked():
+            await interaction.response.send_message("A refresh is already in progress.", ephemeral=True)
+            return
+        await bot.refresh_lock.acquire()
+        bot.refresh_cooldowns[guild_id] = now
         # Guide reconciliation performs several upstream reads and Discord API
         # mutations. Acknowledge before it can exceed Discord's three-second
         # interaction response deadline.
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        operations = {}
-        if bot.upstream is not None:
-            async def check_upstream() -> None:
-                await bot.upstream.get_result("/guides", require_fresh=True)
-            operations["upstream-data"] = check_upstream
-            if bot.pool is not None and interaction.guild_id is not None:
-                async def sync_guides() -> None:
-                    await sync_configured_guides(bot, bot.pool, bot.upstream, interaction.guild_id)
-                operations["guides"] = sync_guides
-        if bot.renderer is not None:
-            operations["image-renderer"] = bot.renderer.ready
-        if bot.leaderboard_service is not None:
-            operations["leaderboard"] = bot.leaderboard_service.reconcile_all
-        report = await RefreshCoordinator(operations).run()
-        logger.info("refresh completed=%s unavailable=%s failed=%s", report.completed, report.unavailable, report.failed)
-        await interaction.followup.send(report.message(), ephemeral=True)
+        try:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            operations = {}
+            if bot.upstream is not None:
+                async def check_upstream() -> None:
+                    await bot.upstream.get_result("/guides", require_fresh=True)
+                operations["upstream-data"] = check_upstream
+                if bot.guide_service is not None:
+                    async def sync_guides() -> None:
+                        await bot.guide_service.reconcile_guild(guild_id)
+                    operations["guides"] = sync_guides
+            if bot.renderer is not None:
+                operations["image-renderer"] = bot.renderer.ready
+            if bot.leaderboard_service is not None:
+                operations["leaderboard"] = bot.leaderboard_service.reconcile_all
+            report = await RefreshCoordinator(operations).run()
+            logger.info("refresh completed=%s unavailable=%s failed=%s", report.completed, report.unavailable, report.failed)
+            await interaction.followup.send(report.message(), ephemeral=True)
+        finally:
+            bot.refresh_lock.release()
 
     @bot.tree.command(name="rank", description="Show your BattleVive rank")
     async def rank(interaction: discord.Interaction) -> None:
