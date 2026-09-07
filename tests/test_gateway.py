@@ -84,6 +84,62 @@ def test_gateway_keeps_incomplete_commands_registered_as_unavailable() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_roles_uses_the_latest_config_and_handles_a_concurrent_link_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import battlevive_gateway.gateway_bot as gateway_bot
+
+    class Member:
+        guild_permissions = SimpleNamespace(manage_roles=True)
+        id = 99
+
+    class Connection:
+        def __init__(self, version: int) -> None:
+            self.version = version
+            self.update_versions: list[int] = []
+
+        async def fetchrow(self, query: str, *_: object) -> dict[str, int] | None:
+            return {"version": self.version, "guide_notification_role_id": None} if "SELECT" in query else None
+
+        async def execute(self, query: str, *args: object) -> str:
+            if query.startswith("UPDATE guild_config"):
+                self.update_versions.append(int(args[1]))
+                return "UPDATE 0"
+            return "INSERT 0 1"
+
+    class Acquire:
+        def __init__(self, connection: Connection) -> None:
+            self.connection = connection
+
+        async def __aenter__(self) -> Connection:
+            return self.connection
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+    initial, current = Connection(1), Connection(2)
+    connections = [initial, current]
+    bot = create_bot()
+    bot.pool = type("Pool", (), {"acquire": lambda _: Acquire(connections.pop(0))})()
+    guide_role = SimpleNamespace(id=123, name="Guide Updates")
+    guild = SimpleNamespace(id=7, roles=[guide_role])
+    interaction = SimpleNamespace(
+        guild=guild,
+        user=Member(),
+        response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
+    monkeypatch.setattr(gateway_bot.discord, "Member", Member)
+    monkeypatch.setattr(gateway_bot, "create_required_roles", AsyncMock(return_value=([], [], [])))
+
+    command = next(command for command in bot.tree.get_commands() if command.name == "create_roles")
+    await command.callback(interaction)
+
+    assert current.update_versions == [2]
+    interaction.followup.send.assert_awaited_once_with("No roles changed.", ephemeral=True)
+
+
+@pytest.mark.asyncio
 async def test_refresh_defers_before_running_integrations() -> None:
     """Guide synchronization can exceed Discord's three-second initial response window."""
     bot = create_bot()

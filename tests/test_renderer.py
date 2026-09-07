@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 from io import BytesIO
+from threading import Event
 
 from PIL import Image
 
@@ -78,11 +80,37 @@ def test_rank_renderer_rejects_an_avatar_with_excessive_pixel_dimensions() -> No
 
 @pytest.mark.asyncio
 async def test_renderer_rejects_a_request_when_all_render_slots_are_busy(monkeypatch: pytest.MonkeyPatch) -> None:
-    import asyncio
-
     import battlevive_renderer.renderer_service as renderer_service
 
     monkeypatch.setattr(renderer_service, "_render_slots", asyncio.Semaphore(0))
 
     with pytest.raises(RenderBusy):
         await render_model({}, lambda _: b"png")
+
+
+@pytest.mark.asyncio
+async def test_renderer_keeps_a_slot_while_a_timed_out_worker_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
+    import battlevive_renderer.renderer_service as renderer_service
+
+    monkeypatch.setattr(renderer_service, "_render_slots", asyncio.Semaphore(1))
+    monkeypatch.setattr(renderer_service, "_RENDER_TIMEOUT_SECONDS", 0.01)
+    started, release = Event(), Event()
+
+    def slow_renderer(_: dict[str, object]) -> bytes:
+        started.set()
+        release.wait()
+        return b"png"
+
+    try:
+        with pytest.raises(asyncio.TimeoutError):
+            await render_model({}, slow_renderer)
+        assert started.is_set()
+        with pytest.raises(RenderBusy):
+            await render_model({}, lambda _: b"png")
+    finally:
+        release.set()
+    for _ in range(20):
+        if not renderer_service._render_slots.locked():
+            break
+        await asyncio.sleep(0.01)
+    assert await render_model({}, lambda _: b"png") == b"png"

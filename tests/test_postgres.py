@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import asyncpg
 import pytest
@@ -13,12 +14,16 @@ from battlevive_gateway.repositories import RoleRepository
 from battlevive_gateway.repositories import RuleRepository
 
 
+SCHEMA = Path(__file__).resolve().parents[1] / "init-db" / "01_schema.sql"
+
+
 @pytest.fixture
 async def connection() -> asyncpg.Connection:
     url = os.environ.get("TEST_DATABASE_URL")
     if not url:
         pytest.skip("TEST_DATABASE_URL is required for PostgreSQL integration tests")
     connection = await asyncpg.connect(url)
+    await connection.execute(SCHEMA.read_text())
     transaction = connection.transaction()
     await transaction.start()
     try:

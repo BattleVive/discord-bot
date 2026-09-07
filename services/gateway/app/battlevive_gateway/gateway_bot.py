@@ -25,8 +25,9 @@ from .rank import rank_render_model
 from .roles import GUIDE_UPDATES_ROLE
 from .roles import create_required_roles
 from .roles import reconcile_member_rank
-from .repositories import RoleRepository
+from .repositories import ConcurrentUpdateError
 from .repositories import GuildConfigRepository
+from .repositories import RoleRepository
 from .repositories import RuleRepository
 
 
@@ -344,7 +345,6 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
             await GuildConfigRepository(connection).ensure(interaction.guild.id, interaction.user.id)
-            current = await GuildConfigRepository(connection).get(interaction.guild.id)
         try:
             created, existing, blocked = await create_required_roles(interaction.guild)
         except RuntimeError as error:
@@ -362,14 +362,18 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
                 purpose = "guide_updates" if role.name == GUIDE_UPDATES_ROLE else "rank"
                 await ownership.claim(interaction.guild.id, purpose, role.name.casefold(), role.id)
             guide_role = next((role for role in interaction.guild.roles if role.name == GUIDE_UPDATES_ROLE), None)
+            current = await GuildConfigRepository(connection).get(interaction.guild.id)
             if (guide_role is not None and current is not None
                     and current.get("guide_notification_role_id") is None):
-                await GuildConfigRepository(connection).update(
-                    interaction.guild.id,
-                    current["version"],
-                    {"guide_notification_role_id": guide_role.id},
-                    updated_by=interaction.user.id,
-                )
+                try:
+                    await GuildConfigRepository(connection).update(
+                        interaction.guild.id,
+                        current["version"],
+                        {"guide_notification_role_id": guide_role.id},
+                        updated_by=interaction.user.id,
+                    )
+                except ConcurrentUpdateError:
+                    logger.warning("guide role link skipped for guild %s", interaction.guild.id)
         summary = []
         if created:
             summary.append("Created: " + ", ".join(role.name for role in created))

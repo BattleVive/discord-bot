@@ -24,13 +24,26 @@ async def render_model(payload: object, renderer: Renderer) -> bytes:
     """Validate and bound one CPU-heavy renderer invocation."""
     if not isinstance(payload, dict):
         raise ValueError("render model must be an object")
-    if _render_slots.locked():
+    slots = _render_slots
+    if slots.locked():
         raise RenderBusy("renderer is busy")
-    await _render_slots.acquire()
+    await slots.acquire()
+    worker = asyncio.create_task(asyncio.to_thread(renderer, payload))
+
+    def release_slot(completed: asyncio.Task[bytes]) -> None:
+        try:
+            completed.exception()
+        except asyncio.CancelledError:
+            pass
+        slots.release()
+
     try:
-        return await asyncio.wait_for(asyncio.to_thread(renderer, payload), timeout=_RENDER_TIMEOUT_SECONDS)
+        return await asyncio.wait_for(asyncio.shield(worker), timeout=_RENDER_TIMEOUT_SECONDS)
     finally:
-        _render_slots.release()
+        if worker.done():
+            slots.release()
+        else:
+            worker.add_done_callback(release_slot)
 
 
 def create_app() -> web.Application:
