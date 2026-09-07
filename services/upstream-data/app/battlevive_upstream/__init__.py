@@ -1,0 +1,1 @@
+"""Typed BattleVive API boundary."""

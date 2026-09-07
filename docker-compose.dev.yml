@@ -1,18 +1,19 @@
 services:
-  bot:
-    image: battlevive-bot:local
+  gateway:
     build:
       context: .
-    env_file:
-      - path: ${BATTLEVIVE_ENV_FILE:-utils/.env}
-        required: false
-    volumes:
-      - ${BATTLEVIVE_BOT_DATA_PATH:-./app/data/bot}:/app/data:Z,U
-  migration:
-    image: battlevive-bot:local
-    env_file:
-      - path: ${BATTLEVIVE_ENV_FILE:-utils/.env}
-        required: false
-  db:
+      dockerfile: services/gateway/Dockerfile
+
+  upstream-data:
+    build:
+      context: .
+      dockerfile: services/upstream-data/Dockerfile
+
+  image-renderer:
+    build:
+      context: .
+      dockerfile: services/image-renderer/Dockerfile
+
+  postgres:
     ports:
       - "127.0.0.1:5432:5432"

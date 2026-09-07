@@ -1,4 +1,0 @@
-gcc
-musl-dev
-zlib-dev
-jpeg-dev
