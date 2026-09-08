@@ -72,7 +72,7 @@ async def test_active_lobby_publisher_posts_live_match_details_and_disputed_rece
     assert live_embed["url"] == active["url"]
     assert live_embed["description"] == "Open · Seasonal · 3v3 · EU"
     assert {field["name"]: field["value"] for field in live_embed["fields"]} == {
-        "Team One": "Team One", "Team Two": "Team Two", "Created": "2026-09-06T14:25:10.923668+00:00",
+        "Team One": "Team One", "Team Two": "Team Two",
     }
     assert disputed_embed["description"] == "⚠️ Disputed · Seasonal · 3v3 · EU"
     assert {field["name"]: field["value"] for field in disputed_embed["fields"]}["Duration"] == "1m 30s"

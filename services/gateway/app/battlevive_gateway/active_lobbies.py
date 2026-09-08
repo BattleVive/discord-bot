@@ -46,18 +46,12 @@ def _match_embed(record: dict[str, object]) -> tuple[discord.Embed, str]:
         embed.url = url
     embed.add_field(name="Team One", value=_text(record, "teamOne"), inline=True)
     embed.add_field(name="Team Two", value=_text(record, "teamTwo"), inline=True)
-    created = record.get("createdAt")
-    if isinstance(created, str) and created:
-        embed.add_field(name="Created", value=_text(record, "createdAt", limit=_MAX_OPTIONAL_FIELD_VALUE), inline=False)
     winner = record.get("winner")
     if isinstance(winner, str) and winner.strip():
         embed.add_field(name="Winner", value=_text(record, "winner", limit=_MAX_OPTIONAL_FIELD_VALUE), inline=True)
     duration = _duration(record.get("durationSeconds"))
     if duration is not None:
         embed.add_field(name="Duration", value=duration, inline=True)
-    ended = record.get("endedAt")
-    if isinstance(ended, str) and ended:
-        embed.add_field(name="Ended", value=_text(record, "endedAt", limit=_MAX_OPTIONAL_FIELD_VALUE), inline=False)
     fingerprint = hashlib.sha256(json.dumps(embed.to_dict(), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return embed, fingerprint
 
