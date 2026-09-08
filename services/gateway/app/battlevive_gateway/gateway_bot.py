@@ -11,6 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 from aiohttp import web
 
+from .active_lobbies import ActiveLobbyService
 from .database import connect_and_verify
 from .diagnostics import snapshot_attachment
 from .diagnostics import upstream_snapshot
@@ -49,6 +50,12 @@ def can_publish_leaderboard(guild: object | None, channel: object) -> bool:
     )
 
 
+def can_publish_active_lobbies(guild: object | None, channel: object) -> bool:
+    return isinstance(channel, discord.TextChannel) and _has_channel_permissions(
+        channel, getattr(guild, "me", None), "view_channel", "send_messages", "read_message_history"
+    )
+
+
 def can_publish_guides(guild: object | None, channel: object) -> bool:
     return isinstance(channel, discord.ForumChannel) and _has_channel_permissions(
         channel, getattr(guild, "me", None), "view_channel", "send_messages", "send_messages_in_threads",
@@ -67,6 +74,7 @@ class GatewayBot(commands.Bot):
         self.upstream = UpstreamDataClient(upstream_data_url) if upstream_data_url else None
         self.renderer = ImageRendererClient(image_renderer_url) if image_renderer_url else None
         self.leaderboard_service: LeaderboardService | None = None
+        self.active_lobby_service: ActiveLobbyService | None = None
         self.guide_service: GuideService | None = None
         self.rank_cooldowns: dict[tuple[int, int], float] = {}
         self.refresh_cooldowns: dict[int, float] = {}
@@ -80,6 +88,9 @@ class GatewayBot(commands.Bot):
         if self.pool is not None and self.upstream is not None and self.renderer is not None:
             self.leaderboard_service = LeaderboardService(self, self.pool, self.upstream, self.renderer)
             self.leaderboard_service.start()
+        if self.pool is not None and self.upstream is not None:
+            self.active_lobby_service = ActiveLobbyService(self, self.pool, self.upstream)
+            self.active_lobby_service.start()
         if self.pool is not None and self.upstream is not None:
             self.guide_service = GuideService(self, self.pool, self.upstream)
             self.guide_service.start()
@@ -101,6 +112,9 @@ class GatewayBot(commands.Bot):
             if self.leaderboard_service is not None:
                 await self.leaderboard_service.stop()
                 self.leaderboard_service = None
+            if self.active_lobby_service is not None:
+                await self.active_lobby_service.stop()
+                self.active_lobby_service = None
             await self.pool.close()  # type: ignore[union-attr]
         await super().close()
 
@@ -186,6 +200,24 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
         if bot.leaderboard_service is not None:
             bot.leaderboard_service.request_reconciliation()
         await interaction.response.send_message("Automatic leaderboard channel updated.", ephemeral=True)
+
+    @config.command(name="active-lobby-channel", description="Set the automatic active-lobby channel")
+    async def active_lobby_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+        context = await configuration(interaction)
+        if context is None:
+            return
+        if not can_publish_active_lobbies(interaction.guild, channel):
+            await interaction.response.send_message(
+                "Active-lobby channel requires View Channel, Send Messages, and Read Message History.",
+                ephemeral=True,
+            )
+            return
+        guild_id, version = context
+        async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
+            await GuildConfigRepository(connection).update(guild_id, version, {"active_lobby_channel_id": channel.id}, updated_by=interaction.user.id)
+        if bot.active_lobby_service is not None:
+            bot.active_lobby_service.request_reconciliation()
+        await interaction.response.send_message("Automatic active-lobby channel updated.", ephemeral=True)
 
     @config.command(name="guide-forum", description="Set the forum used for guide publication")
     async def guide_forum(interaction: discord.Interaction, channel: discord.ForumChannel) -> None:
@@ -468,6 +500,8 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
                 operations["image-renderer"] = bot.renderer.ready
             if bot.leaderboard_service is not None:
                 operations["leaderboard"] = bot.leaderboard_service.reconcile_all
+            if bot.active_lobby_service is not None:
+                operations["active-lobbies"] = bot.active_lobby_service.reconcile_all
             report = await RefreshCoordinator(operations).run()
             logger.info("refresh completed=%s unavailable=%s failed=%s", report.completed, report.unavailable, report.failed)
             await interaction.followup.send(report.message(), ephemeral=True)

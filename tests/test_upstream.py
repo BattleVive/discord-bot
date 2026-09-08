@@ -158,6 +158,21 @@ def test_live_bot_contract_wrappers_normalize_guides_and_leaderboard() -> None:
     assert leaderboard["leaderboard"] == [{"memberNumber": 4, "member_number": 4, "rank": "Gold"}]
 
 
+def test_live_active_match_contract_preserves_the_complete_match_record() -> None:
+    active = BattleViveClient._normalize(
+        "/api/bot/matches/active",
+        {"ok": True, "matches": [{
+            "id": 197, "title": "Seasonal 3v3", "status": "open", "type": "seasonal", "size": 3,
+            "region": "EU", "teamOne": "Team One", "teamTwo": "Team Two", "winner": None,
+            "durationSeconds": None, "endedAt": None, "createdAt": "2026-09-06T14:25:10.923668+00:00",
+            "url": "https://battlevive.com/matchmaking/2026/season-3/MATCH-24",
+        }]},
+    )
+
+    assert active["matches"][0]["url"].endswith("MATCH-24")
+    assert active["matches"][0]["teamOne"] == "Team One"
+
+
 def test_internal_gateway_exposes_only_fixed_feature_routes_and_probes() -> None:
     paths = {route.path for route in route_table()}
     assert {"/health", "/ready", "/queue", "/stats", "/guides", "/guides/{number}",

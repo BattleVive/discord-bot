@@ -57,6 +57,12 @@ class GuildConfigRepository:
         )
         return [dict(row) for row in rows]
 
+    async def configured_active_lobbies(self) -> list[dict[str, object]]:
+        rows = await self._connection.fetch(
+            "SELECT * FROM guild_config WHERE active_lobby_channel_id IS NOT NULL"
+        )
+        return [dict(row) for row in rows]
+
 
 class PublicationRepository:
     def __init__(self, connection: Any) -> None:

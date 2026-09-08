@@ -13,6 +13,7 @@ from battlevive_gateway.gateway import TEMPORARILY_UNAVAILABLE
 from battlevive_gateway.gateway import command_guild_id
 from battlevive_gateway.gateway import validate_settings
 from battlevive_gateway.gateway_bot import bypasses_channel_rules
+from battlevive_gateway.gateway_bot import can_publish_active_lobbies
 from battlevive_gateway.gateway_bot import can_publish_guides
 from battlevive_gateway.gateway_bot import can_publish_leaderboard
 from battlevive_gateway.gateway_bot import create_bot
@@ -44,9 +45,11 @@ def test_publication_channel_validators_require_the_bot_permissions() -> None:
     forum.permissions_for.return_value = permissions
 
     assert can_publish_leaderboard(guild, text)
+    assert can_publish_active_lobbies(guild, text)
     assert can_publish_guides(guild, forum)
     permissions.attach_files = False
     assert not can_publish_leaderboard(guild, text)
+    assert can_publish_active_lobbies(guild, text)
 
 
 def test_gateway_rejects_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -74,7 +77,7 @@ def test_gateway_keeps_incomplete_commands_registered_as_unavailable() -> None:
     assert "active_lobbies" not in names
     assert "captains" not in names
     config = next(command for command in bot.tree.get_commands() if command.name == "config")
-    assert {"rank-cooldown", "show", "command-whitelist", "command-blacklist"} <= {
+    assert {"rank-cooldown", "show", "command-whitelist", "command-blacklist", "active-lobby-channel"} <= {
         command.name for command in config.commands
     }
     commands_group = next(command for command in config.commands if command.name == "commands")
