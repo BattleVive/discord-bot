@@ -120,10 +120,6 @@ class GuidePublication:
     message_ids: tuple[int, ...]
 
 
-class GuidePublicationMetadataMissing(RuntimeError):
-    """A legacy tracked thread has no safe set of bot-managed messages."""
-
-
 class GuideReconciler:
     def __init__(self, publications: Any, discord: Any) -> None:
         self._publications = publications
@@ -185,10 +181,7 @@ class DiscordGuidePublisher:
                 await thread.edit(name=guide.title[:100], archived=False)
                 stored = prior.get("metadata", {}) if prior is not None else {}
                 message_ids = stored.get("message_ids", []) if isinstance(stored, dict) else []
-                try:
-                    return await self._replace(thread, content, embed, message_ids)
-                except GuidePublicationMetadataMissing:
-                    await thread.edit(archived=True, reason="Guide publication metadata is missing")
+                return await self._replace(thread, content, embed, message_ids)
             if thread is not None:
                 await retire_relocated_thread(thread, forum.id, delete_on_removal=self._delete_on_removal)
         created = await forum.create_thread(
@@ -204,8 +197,6 @@ class DiscordGuidePublisher:
     async def _replace(self, thread: discord.Thread, chunks: list[str], embed: discord.Embed,
                        stored_ids: object) -> GuidePublication:
         ids = [message_id for message_id in stored_ids if isinstance(message_id, int)] if isinstance(stored_ids, list) else []
-        if not ids:
-            raise GuidePublicationMetadataMissing("guide publication metadata is missing")
         managed = [thread.get_partial_message(message_id) for message_id in ids]
         updated: list[int] = []
         try:

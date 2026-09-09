@@ -52,7 +52,7 @@ def can_publish_leaderboard(guild: object | None, channel: object) -> bool:
 
 def can_publish_active_lobbies(guild: object | None, channel: object) -> bool:
     return isinstance(channel, discord.TextChannel) and _has_channel_permissions(
-        channel, getattr(guild, "me", None), "view_channel", "send_messages", "read_message_history"
+        channel, getattr(guild, "me", None), "view_channel", "send_messages", "embed_links", "read_message_history"
     )
 
 
@@ -208,7 +208,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
             return
         if not can_publish_active_lobbies(interaction.guild, channel):
             await interaction.response.send_message(
-                "Active-lobby channel requires View Channel, Send Messages, and Read Message History.",
+                "Active-lobby channel requires View Channel, Send Messages, Embed Links, and Read Message History.",
                 ephemeral=True,
             )
             return

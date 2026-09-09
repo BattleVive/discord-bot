@@ -132,13 +132,12 @@ async def test_guide_sync_uses_catalog_revision_without_refetching_unchanged_mar
 
 
 @pytest.mark.asyncio
-async def test_missing_guide_message_metadata_archives_and_replaces_the_thread() -> None:
+async def test_missing_guide_message_metadata_republishes_in_the_existing_thread() -> None:
     old_thread = MagicMock(spec=discord.Thread)
     old_thread.id, old_thread.parent_id, old_thread.edit = 22, 10, AsyncMock()
-    new_thread = SimpleNamespace(id=33, send=AsyncMock())
+    old_thread.send = AsyncMock(return_value=SimpleNamespace(id=34))
     forum = MagicMock(spec=discord.ForumChannel)
     forum.id = 10
-    forum.create_thread = AsyncMock(return_value=SimpleNamespace(thread=new_thread, message=SimpleNamespace(id=34)))
     guild = SimpleNamespace(get_channel=lambda _: forum, get_thread=lambda _: old_thread)
     bot = SimpleNamespace(get_guild=lambda _: guild)
     publisher = DiscordGuidePublisher(bot, 7, 10)
@@ -147,11 +146,10 @@ async def test_missing_guide_message_metadata_archives_and_replaces_the_thread()
         Guide(1, "One", "# One"), {"thread_id": 22, "metadata": {}}
     )
 
-    assert publication == GuidePublication(33, (34,))
-    old_thread.edit.assert_has_awaits([
-        call(name="One", archived=False),
-        call(archived=True, reason="Guide publication metadata is missing"),
-    ])
+    assert publication == GuidePublication(22, (34,))
+    old_thread.edit.assert_awaited_once_with(name="One", archived=False)
+    old_thread.send.assert_awaited_once()
+    forum.create_thread.assert_not_called()
 
 
 def test_guide_markdown_keeps_code_and_replaces_battlerite_images_with_emojis() -> None:
@@ -175,4 +173,4 @@ def test_guide_champion_thumbnail_preserves_special_champion_spelling() -> None:
 def test_fresh_guide_installation_requires_tracked_publications() -> None:
     source = inspect.getsource(__import__("battlevive_gateway.guides", fromlist=["DiscordGuidePublisher"]).DiscordGuidePublisher._replace)
     assert "history" not in source
-    assert "metadata is missing" in source
+    assert "thread.send" in source

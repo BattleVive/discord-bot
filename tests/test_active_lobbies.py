@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from battlevive_gateway.active_lobbies import ActiveLobbyPublisher
+from battlevive_gateway.active_lobbies import ActiveLobbyService
 
 
 def match(**overrides: object) -> dict[str, object]:
@@ -163,6 +165,71 @@ async def test_active_lobby_publisher_moves_a_post_when_the_configured_channel_c
 
     old_message.delete.assert_awaited_once()
     assert len(new_messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_active_lobby_publisher_deletes_a_new_message_when_publication_upsert_fails() -> None:
+    class Upstream:
+        async def get_result(self, path: str, *, require_fresh: bool) -> object:
+            return SimpleNamespace(data={"matches": [match()] if path == "/active-matches" else []})
+
+    class Publications:
+        async def list_for_feature(self, *_: object) -> list[dict[str, object]]:
+            return []
+
+        async def upsert(self, *_: object) -> None:
+            raise RuntimeError("database unavailable")
+
+    message = SimpleNamespace(id=55, delete=AsyncMock())
+    channel = SimpleNamespace(send=AsyncMock(return_value=message))
+    guild = SimpleNamespace(id=10, get_channel=lambda _: channel)
+    bot = SimpleNamespace(get_guild=lambda _: guild)
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await ActiveLobbyPublisher(bot, Upstream(), Publications()).reconcile_guild(
+            {"guild_id": 10, "active_lobby_channel_id": 20}
+        )
+
+    message.delete.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_active_lobby_service_serializes_concurrent_reconciliation(monkeypatch: pytest.MonkeyPatch) -> None:
+    import battlevive_gateway.active_lobbies as active_lobbies
+
+    class Connection:
+        async def fetch(self, *_: object) -> list[dict[str, int]]:
+            return [{"guild_id": 10, "active_lobby_channel_id": 20}]
+
+    class Acquire:
+        async def __aenter__(self) -> Connection:
+            return Connection()
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+    active, max_active = 0, 0
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def reconcile_guild(_: object, __: object) -> bool:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        entered.set()
+        await release.wait()
+        active -= 1
+        return False
+
+    monkeypatch.setattr(active_lobbies.ActiveLobbyPublisher, "reconcile_guild", reconcile_guild)
+    service = ActiveLobbyService(SimpleNamespace(), SimpleNamespace(acquire=lambda: Acquire()), SimpleNamespace())
+    first = asyncio.create_task(service.reconcile_all())
+    await entered.wait()
+    second = asyncio.create_task(service.reconcile_all())
+    await asyncio.sleep(0)
+    assert max_active == 1
+    release.set()
+    await asyncio.gather(first, second)
 
 
 @pytest.mark.asyncio

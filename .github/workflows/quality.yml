@@ -20,6 +20,20 @@ jobs:
     name: Unit tests (Python 3.14)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18.6-alpine3.24@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941
+        env:
+          POSTGRES_DB: battlevive_test
+          POSTGRES_PASSWORD: battlevive_test
+          POSTGRES_USER: battlevive_test
+        options: >-
+          --health-cmd "pg_isready -U battlevive_test -d battlevive_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+        ports:
+          - 5432:5432
     steps:
       - name: Check out exact revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,4 +55,6 @@ jobs:
         run: python -m compileall services/gateway/app services/upstream-data/app services/image-renderer/app scripts
 
       - name: Run unit tests
-        run: pytest -q --ignore=tests/test_postgres.py
+        env:
+          TEST_DATABASE_URL: postgresql://battlevive_test:battlevive_test@127.0.0.1:5432/battlevive_test
+        run: pytest -q

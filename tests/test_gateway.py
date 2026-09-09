@@ -36,7 +36,7 @@ def test_administrator_diagnostics_bypass_channel_rules() -> None:
 def test_publication_channel_validators_require_the_bot_permissions() -> None:
     guild = SimpleNamespace(me=object())
     permissions = SimpleNamespace(
-        view_channel=True, send_messages=True, attach_files=True, read_message_history=True,
+        view_channel=True, send_messages=True, attach_files=True, embed_links=True, read_message_history=True,
         send_messages_in_threads=True, manage_threads=True,
     )
     text = Mock(spec=discord.TextChannel)
@@ -47,6 +47,9 @@ def test_publication_channel_validators_require_the_bot_permissions() -> None:
     assert can_publish_leaderboard(guild, text)
     assert can_publish_active_lobbies(guild, text)
     assert can_publish_guides(guild, forum)
+    permissions.embed_links = False
+    assert not can_publish_active_lobbies(guild, text)
+    permissions.embed_links = True
     permissions.attach_files = False
     assert not can_publish_leaderboard(guild, text)
     assert can_publish_active_lobbies(guild, text)

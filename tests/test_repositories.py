@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
+import asyncpg
 import pytest
 
 from battlevive_gateway.repositories import ConcurrentUpdateError
@@ -60,6 +63,14 @@ async def test_identity_binding_uses_both_unique_columns() -> None:
     assert args == (100, 200, "manual")
     lock_calls = [call for call in connection.calls if "pg_advisory_xact_lock" in call[0]]
     assert [call[1] for call in lock_calls] == [(100,), (200,)]
+
+
+@pytest.mark.asyncio
+async def test_identity_binding_returns_false_when_discord_id_unique_constraint_races() -> None:
+    connection = FakeConnection()
+    connection.execute = AsyncMock(side_effect=["SELECT 1", "SELECT 1", asyncpg.UniqueViolationError()])
+
+    assert not await IdentityRepository(connection).bind(100, 200, "manual")
 
 
 @pytest.mark.asyncio

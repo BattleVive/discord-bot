@@ -110,12 +110,21 @@ class ActiveLobbyPublisher:
                     await self._delete_message(old_channel, previous)
                 previous = None
             message = await self._existing_message(channel, previous)
+            created = message is None
             if message is None:
                 message = await channel.send(embed=embed)
             else:
                 await message.edit(embed=embed)
-            await self._publications.upsert(guild_id, "active-lobbies", key, channel_id, int(message.id), None, fingerprint,
-                                            {"source": "api/bot/matches/active", "status": _text(record, "status")})
+            try:
+                await self._publications.upsert(guild_id, "active-lobbies", key, channel_id, int(message.id), None, fingerprint,
+                                                {"source": "api/bot/matches/active", "status": _text(record, "status")})
+            except Exception:
+                if created:
+                    try:
+                        await message.delete()
+                    except discord.NotFound:
+                        pass
+                raise
             changed = True
         for key, previous in existing.items():
             await self._delete_message(channel, previous)
@@ -148,6 +157,7 @@ class ActiveLobbyService:
     def __init__(self, bot: discord.Client, pool: Any, upstream: Any, *, interval: float = 15.0) -> None:
         self._bot, self._pool, self._upstream, self._interval = bot, pool, upstream, interval
         self._requested = asyncio.Event()
+        self._reconcile_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -166,14 +176,15 @@ class ActiveLobbyService:
 
     async def reconcile_all(self) -> None:
         from .repositories import GuildConfigRepository, PublicationRepository
-        async with self._pool.acquire() as connection:
-            configs = await GuildConfigRepository(connection).configured_active_lobbies()
-            publisher = ActiveLobbyPublisher(self._bot, self._upstream, PublicationRepository(connection))
-            for config in configs:
-                try:
-                    await publisher.reconcile_guild(config)
-                except Exception:
-                    logger.exception("Active-lobby reconciliation failed for guild %s", config.get("guild_id"))
+        async with self._reconcile_lock:
+            async with self._pool.acquire() as connection:
+                configs = await GuildConfigRepository(connection).configured_active_lobbies()
+                publisher = ActiveLobbyPublisher(self._bot, self._upstream, PublicationRepository(connection))
+                for config in configs:
+                    try:
+                        await publisher.reconcile_guild(config)
+                    except Exception:
+                        logger.exception("Active-lobby reconciliation failed for guild %s", config.get("guild_id"))
 
     async def _run(self) -> None:
         while True:

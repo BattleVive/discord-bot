@@ -109,8 +109,9 @@ async def test_renderer_keeps_a_slot_while_a_timed_out_worker_finishes(monkeypat
             await render_model({}, lambda _: b"png")
     finally:
         release.set()
-    for _ in range(20):
-        if not renderer_service._render_slots.locked():
-            break
-        await asyncio.sleep(0.01)
+    async def wait_for_slot_release() -> None:
+        while renderer_service._render_slots.locked():
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(wait_for_slot_release(), timeout=1)
     assert not renderer_service._render_slots.locked()
