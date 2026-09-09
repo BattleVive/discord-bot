@@ -1,3 +1,5 @@
+"""Tests for schema verification and database bootstrap migrations."""
+
 from __future__ import annotations
 
 import pytest

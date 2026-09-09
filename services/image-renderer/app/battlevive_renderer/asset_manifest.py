@@ -1,3 +1,5 @@
+"""Load and resolve map artwork entries from the renderer asset manifest."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

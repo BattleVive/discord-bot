@@ -1,3 +1,5 @@
+"""Tests for coordinated manual refresh reporting and failure isolation."""
+
 from __future__ import annotations
 
 import pytest

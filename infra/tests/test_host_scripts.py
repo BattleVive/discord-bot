@@ -1,3 +1,5 @@
+"""Integration tests for deployment and host-management shell scripts."""
+
 from __future__ import annotations
 
 import fcntl

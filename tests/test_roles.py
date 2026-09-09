@@ -1,3 +1,5 @@
+"""Tests for safe creation and reconciliation of managed Discord roles."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace

@@ -1,3 +1,5 @@
+"""Resilient, cached client for the public BattleVive API."""
+
 from __future__ import annotations
 
 import asyncio

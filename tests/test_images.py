@@ -1,3 +1,5 @@
+"""Visual-contract tests for generated rank cards and leaderboards."""
+
 from __future__ import annotations
 
 from io import BytesIO

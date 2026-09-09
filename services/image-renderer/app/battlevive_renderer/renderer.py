@@ -1,3 +1,5 @@
+"""Validate renderer models and convert them into PNG image payloads."""
+
 from __future__ import annotations
 
 import base64

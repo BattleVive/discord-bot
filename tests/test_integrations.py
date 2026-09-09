@@ -1,3 +1,5 @@
+"""Tests for gateway clients and internal service-boundary diagnostics."""
+
 from __future__ import annotations
 
 import pytest

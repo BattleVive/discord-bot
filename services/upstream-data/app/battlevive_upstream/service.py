@@ -1,3 +1,5 @@
+"""Private HTTP gateway exposing allowlisted BattleVive API routes."""
+
 from __future__ import annotations
 
 import os
