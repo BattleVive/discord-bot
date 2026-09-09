@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Shared stdout logging configuration for gateway processes."""
+
 import logging
 import os
 import sys

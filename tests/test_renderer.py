@@ -1,3 +1,5 @@
+"""Tests for renderer input validation, HTTP responses, and concurrency."""
+
 from __future__ import annotations
 
 import base64

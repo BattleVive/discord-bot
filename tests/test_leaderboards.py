@@ -1,3 +1,5 @@
+"""Tests for automatic Discord leaderboard rendering and publication."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace

@@ -1,3 +1,5 @@
+"""Compose BattleVive rank cards and leaderboard images from local assets."""
+
 from __future__ import annotations
 
 from collections.abc import Collection

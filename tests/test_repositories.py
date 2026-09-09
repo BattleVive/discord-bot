@@ -1,3 +1,5 @@
+"""Unit tests for versioned, guild-scoped repository persistence."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock

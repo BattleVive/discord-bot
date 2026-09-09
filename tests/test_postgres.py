@@ -1,3 +1,5 @@
+"""PostgreSQL integration tests for persistent gateway repositories."""
+
 from __future__ import annotations
 
 import os

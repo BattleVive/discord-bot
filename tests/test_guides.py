@@ -1,3 +1,5 @@
+"""Tests for Discord guide formatting, publication, and reconciliation."""
+
 from __future__ import annotations
 
 import inspect

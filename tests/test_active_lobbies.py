@@ -1,3 +1,5 @@
+"""Tests for active-lobby publication and reconciliation behavior."""
+
 from __future__ import annotations
 
 import asyncio

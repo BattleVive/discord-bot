@@ -1,3 +1,5 @@
+"""Tests for renderer asset-manifest resolution and bundled artwork."""
+
 from __future__ import annotations
 
 import json

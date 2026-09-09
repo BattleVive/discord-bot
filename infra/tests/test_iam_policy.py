@@ -1,3 +1,5 @@
+"""Tests for least-privilege properties of generated AWS IAM policies."""
+
 from __future__ import annotations
 
 from pathlib import Path

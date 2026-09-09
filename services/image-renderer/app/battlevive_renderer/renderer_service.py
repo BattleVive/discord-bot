@@ -1,3 +1,5 @@
+"""HTTP service exposing bounded, asynchronous BattleVive image rendering."""
+
 from __future__ import annotations
 
 import asyncio

@@ -1,3 +1,5 @@
+"""Tests for converting upstream player data into rank-renderer models."""
+
 from __future__ import annotations
 
 from battlevive_gateway.rank import rank_render_model

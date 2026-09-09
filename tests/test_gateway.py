@@ -1,3 +1,5 @@
+"""Tests for gateway configuration, commands, and publication permissions."""
+
 from __future__ import annotations
 
 import os
