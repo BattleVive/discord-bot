@@ -13,6 +13,7 @@ SERVICES = {"gateway-service", "upstream-service", "image-renderer"}
 
 
 def validate(item: dict) -> None:
+    """Validate the structure and digests of a release manifest."""
     if set(item.get("services", {})) != SERVICES:
         raise ValueError("manifest must name exactly the three service images")
     if not SHA.fullmatch(item.get("bundle_checksum", "")):
@@ -27,6 +28,7 @@ def validate(item: dict) -> None:
 
 
 def main() -> None:
+    """Run the release manifest command-line entry point."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--validate", action="store_true")
     args = parser.parse_args()

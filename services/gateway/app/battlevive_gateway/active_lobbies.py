@@ -18,12 +18,14 @@ _MAX_OPTIONAL_FIELD_VALUE = 512
 
 
 def _text(record: dict[str, object], key: str, default: str = "Unknown", *, limit: int = _MAX_FIELD_VALUE) -> str:
+    """Return a normalized text value."""
     value = record.get(key)
     text = value.strip() if isinstance(value, str) and value.strip() else default
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
 def _duration(seconds: object) -> str | None:
+    """Format a match duration for display."""
     if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 0:
         return None
     minutes, remainder = divmod(seconds, 60)
@@ -31,6 +33,7 @@ def _duration(seconds: object) -> str | None:
 
 
 def _match_embed(record: dict[str, object]) -> tuple[discord.Embed, str]:
+    """Build the Discord embed for a match."""
     status = _text(record, "status", "active", limit=_MAX_DESCRIPTION_PART).replace("_", " ").title()
     if status.casefold() == "disputed":
         status = "⚠️ Disputed"
@@ -57,6 +60,7 @@ def _match_embed(record: dict[str, object]) -> tuple[discord.Embed, str]:
 
 
 def _eligible(records: object, *, disputed_only: bool) -> list[dict[str, object]]:
+    """Return whether a match is eligible for publication."""
     if not isinstance(records, list):
         raise RuntimeError("upstream match collection was invalid")
     result: list[dict[str, object]] = []
@@ -76,9 +80,11 @@ class ActiveLobbyPublisher:
     """Reconcile active matches and unresolved disputes into one guild channel."""
 
     def __init__(self, bot: discord.Client, upstream: Any, publications: Any) -> None:
+        """Initialize the active lobby publisher instance."""
         self._bot, self._upstream, self._publications = bot, upstream, publications
 
     async def reconcile_guild(self, config: dict[str, object]) -> bool:
+        """Reconcile one guild's active-lobby publications."""
         guild_id, channel_id = config.get("guild_id"), config.get("active_lobby_channel_id")
         if not isinstance(guild_id, int) or not isinstance(channel_id, int):
             return False
@@ -134,6 +140,7 @@ class ActiveLobbyPublisher:
 
     @staticmethod
     async def _existing_message(channel: Any, publication: dict[str, object] | None) -> Any | None:
+        """Fetch a tracked Discord message when it still exists."""
         if publication is None or not isinstance(publication.get("message_id"), int):
             return None
         try:
@@ -143,6 +150,7 @@ class ActiveLobbyPublisher:
 
     @staticmethod
     async def _delete_message(channel: Any, publication: dict[str, object]) -> None:
+        """Delete message."""
         message = await ActiveLobbyPublisher._existing_message(channel, publication)
         if message is not None:
             try:
@@ -155,26 +163,31 @@ class ActiveLobbyService:
     """Periodic best-effort active-lobby reconciliation."""
 
     def __init__(self, bot: discord.Client, pool: Any, upstream: Any, *, interval: float = 15.0) -> None:
+        """Initialize the active lobby service instance."""
         self._bot, self._pool, self._upstream, self._interval = bot, pool, upstream, interval
         self._requested = asyncio.Event()
         self._reconcile_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
+        """Start the periodic reconciliation worker."""
         if self._task is None:
             self._task = asyncio.create_task(self._run(), name="active-lobby-publisher")
             self.request_reconciliation()
 
     async def stop(self) -> None:
+        """Stop the periodic reconciliation worker."""
         if self._task is not None:
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
             self._task = None
 
     def request_reconciliation(self) -> None:
+        """Wake the worker for an immediate reconciliation pass."""
         self._requested.set()
 
     async def reconcile_all(self) -> None:
+        """Reconcile active lobbies for every configured guild."""
         from .repositories import GuildConfigRepository, PublicationRepository
         async with self._reconcile_lock:
             async with self._pool.acquire() as connection:
@@ -187,6 +200,7 @@ class ActiveLobbyService:
                         logger.exception("Active-lobby reconciliation failed for guild %s", config.get("guild_id"))
 
     async def _run(self) -> None:
+        """Run reconciliation until the service is stopped."""
         while True:
             try:
                 await asyncio.wait_for(self._requested.wait(), timeout=self._interval)

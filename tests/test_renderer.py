@@ -18,11 +18,13 @@ from battlevive_renderer.renderer import render_rank
 
 
 def test_leaderboard_renderer_returns_png_with_existing_width() -> None:
+    """Verify that leaderboard renderer returns PNG with existing width."""
     png = render_leaderboard({"season": "Test", "entries": []})
     assert png.startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_leaderboard_renderer_rejects_more_than_100_rows() -> None:
+    """Verify that leaderboard renderer rejects more than 100 rows."""
     try:
         render_leaderboard({"season": "Test", "entries": [{}] * 101})
     except ValueError as error:
@@ -32,12 +34,14 @@ def test_leaderboard_renderer_rejects_more_than_100_rows() -> None:
 
 
 def test_leaderboard_renderer_rejects_non_mapping_rows() -> None:
+    """Verify that leaderboard renderer rejects non mapping rows."""
     with pytest.raises(ValueError, match="row"):
         render_leaderboard({"entries": ["not-a-row"]})
 
 
 @pytest.mark.asyncio
 async def test_renderer_service_returns_png_and_rejects_invalid_json_models() -> None:
+    """Verify that renderer service returns PNG and rejects invalid JSON models."""
     png = await render_model({"entries": [], "season": "Test"}, lambda _: b"\x89PNG\r\n\x1a\n")
     assert png.startswith(b"\x89PNG\r\n\x1a\n")
     with pytest.raises(ValueError, match="object"):
@@ -45,6 +49,7 @@ async def test_renderer_service_returns_png_and_rejects_invalid_json_models() ->
 
 
 def test_rank_renderer_accepts_the_discord_avatar_bytes_used_by_the_original_card() -> None:
+    """Verify that rank renderer accepts the Discord avatar bytes used by the original card."""
     avatar = Image.new("RGB", (8, 8), "red")
     encoded = BytesIO()
     avatar.save(encoded, format="PNG")
@@ -59,6 +64,7 @@ def test_rank_renderer_accepts_the_discord_avatar_bytes_used_by_the_original_car
 
 
 def test_rank_renderer_rejects_a_malformed_avatar_payload() -> None:
+    """Verify that rank renderer rejects a malformed avatar payload."""
     with pytest.raises(ValueError, match="avatar"):
         render_rank({
             "username": "Alpha", "rank_current": "Gold", "rank_next": "Platinum",
@@ -68,6 +74,7 @@ def test_rank_renderer_rejects_a_malformed_avatar_payload() -> None:
 
 
 def test_rank_renderer_rejects_an_avatar_with_excessive_pixel_dimensions() -> None:
+    """Verify that rank renderer rejects an avatar with excessive pixel dimensions."""
     avatar = Image.new("RGB", (4_097, 1), "red")
     encoded = BytesIO()
     avatar.save(encoded, format="PNG")
@@ -82,6 +89,7 @@ def test_rank_renderer_rejects_an_avatar_with_excessive_pixel_dimensions() -> No
 
 @pytest.mark.asyncio
 async def test_renderer_rejects_a_request_when_all_render_slots_are_busy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that renderer rejects a request when all render slots are busy."""
     import battlevive_renderer.renderer_service as renderer_service
 
     monkeypatch.setattr(renderer_service, "_render_slots", asyncio.Semaphore(0))
@@ -92,6 +100,7 @@ async def test_renderer_rejects_a_request_when_all_render_slots_are_busy(monkeyp
 
 @pytest.mark.asyncio
 async def test_renderer_keeps_a_slot_while_a_timed_out_worker_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that renderer keeps a slot while a timed out worker finishes."""
     import battlevive_renderer.renderer_service as renderer_service
 
     monkeypatch.setattr(renderer_service, "_render_slots", asyncio.Semaphore(1))
@@ -99,6 +108,7 @@ async def test_renderer_keeps_a_slot_while_a_timed_out_worker_finishes(monkeypat
     started, release = Event(), Event()
 
     def slow_renderer(_: dict[str, object]) -> bytes:
+        """Simulate a renderer that outlives the request timeout."""
         started.set()
         release.wait()
         return b"png"
@@ -112,6 +122,7 @@ async def test_renderer_keeps_a_slot_while_a_timed_out_worker_finishes(monkeypat
     finally:
         release.set()
     async def wait_for_slot_release() -> None:
+        """Wait until the timed-out renderer releases its slot."""
         while renderer_service._render_slots.locked():
             await asyncio.sleep(0.01)
 

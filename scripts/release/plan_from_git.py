@@ -15,10 +15,12 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def git(*args: str) -> str:
+    """Run Git and return its standard output."""
     return subprocess.check_output(["git", *args], cwd=ROOT, text=True).strip()
 
 
 def version_at(revision: str, service: str) -> str:
+    """Read a service version at a Git revision."""
     path = SERVICES[service][0] + "VERSION"
     try:
         return subprocess.check_output(
@@ -29,6 +31,7 @@ def version_at(revision: str, service: str) -> str:
 
 
 def main() -> None:
+    """Run the plan from git command-line entry point."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", default="HEAD")

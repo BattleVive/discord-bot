@@ -21,10 +21,13 @@ _CONFIG_COLUMNS = frozenset({
 
 
 class GuildConfigRepository:
+    """Provide persistence operations for guild config data."""
     def __init__(self, connection: Any) -> None:
+        """Initialize the guild config repository instance."""
         self._connection = connection
 
     async def update(self, guild_id: int, version: int, changes: Mapping[str, object], *, updated_by: int) -> int:
+        """Apply a version-checked update to a guild configuration."""
         if not changes or not set(changes) <= _CONFIG_COLUMNS:
             raise ValueError("changes must contain supported configuration fields")
         assignments = ", ".join(f"{name} = ${index}" for index, name in enumerate(changes, start=3))
@@ -38,28 +41,33 @@ class GuildConfigRepository:
         return version + 1
 
     async def ensure(self, guild_id: int, updated_by: int) -> None:
+        """Ensure that a guild has an initial configuration row."""
         await self._connection.execute(
             "INSERT INTO guild_config(guild_id, updated_by) VALUES($1, $2) ON CONFLICT(guild_id) DO NOTHING",
             guild_id, updated_by,
         )
 
     async def get(self, guild_id: int) -> dict[str, object] | None:
+        """Fetch one guild's current configuration."""
         row = await self._connection.fetchrow("SELECT * FROM guild_config WHERE guild_id=$1", guild_id)
         return None if row is None else dict(row)
 
     async def configured_guides(self) -> list[dict[str, object]]:
+        """Return guilds configured for guide publication."""
         rows = await self._connection.fetch(
             "SELECT * FROM guild_config WHERE guide_forum_channel_id IS NOT NULL"
         )
         return [dict(row) for row in rows]
 
     async def configured_leaderboards(self) -> list[dict[str, object]]:
+        """Return guilds configured for leaderboard publication."""
         rows = await self._connection.fetch(
             "SELECT * FROM guild_config WHERE leaderboard_channel_id IS NOT NULL"
         )
         return [dict(row) for row in rows]
 
     async def configured_active_lobbies(self) -> list[dict[str, object]]:
+        """Return guilds configured for active-lobby publication."""
         rows = await self._connection.fetch(
             "SELECT * FROM guild_config WHERE active_lobby_channel_id IS NOT NULL"
         )
@@ -67,12 +75,15 @@ class GuildConfigRepository:
 
 
 class PublicationRepository:
+    """Provide persistence operations for publication data."""
     def __init__(self, connection: Any) -> None:
+        """Initialize the publication repository instance."""
         self._connection = connection
 
     async def upsert(self, guild_id: int, feature: str, publication_key: str, channel_id: int,
                      message_id: int | None, thread_id: int | None, fingerprint: str | None,
                      metadata: Mapping[str, object]) -> None:
+        """Create or update tracked publication state."""
         await self._connection.execute(
             """INSERT INTO discord_publications(guild_id,feature,publication_key,channel_id,message_id,thread_id,fingerprint,metadata)
             VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
@@ -83,6 +94,7 @@ class PublicationRepository:
         )
 
     async def list_for_feature(self, guild_id: int, feature: str) -> list[dict[str, object]]:
+        """List a guild's tracked publications for one feature."""
         rows = await self._connection.fetch(
             "SELECT publication_key, channel_id, message_id, thread_id, fingerprint, metadata FROM discord_publications WHERE guild_id=$1 AND feature=$2",
             guild_id, feature,
@@ -101,6 +113,7 @@ class PublicationRepository:
         return publications
 
     async def delete(self, guild_id: int, feature: str, publication_key: str) -> None:
+        """Delete tracked publication state."""
         await self._connection.execute(
             "DELETE FROM discord_publications WHERE guild_id=$1 AND feature=$2 AND publication_key=$3",
             guild_id, feature, publication_key,
@@ -108,10 +121,13 @@ class PublicationRepository:
 
 
 class IdentityRepository:
+    """Provide persistence operations for identity data."""
     def __init__(self, connection: Any) -> None:
+        """Initialize the identity repository instance."""
         self._connection = connection
 
     async def bind(self, member_number: int, discord_id: int, provenance: str) -> bool:
+        """Bind a Discord member to one BattleVive member number."""
         if member_number <= 0 or discord_id <= 0 or not provenance:
             raise ValueError("identity binding values must be positive and have provenance")
         try:
@@ -134,6 +150,7 @@ class IdentityRepository:
         return result in {"INSERT 0 1", "UPDATE 1"}
 
     async def discord_ids(self, member_numbers: list[int]) -> dict[int, int]:
+        """Return Discord IDs linked within a guild."""
         if not member_numbers:
             return {}
         rows = await self._connection.fetch(
@@ -143,6 +160,7 @@ class IdentityRepository:
         return {int(row["member_number"]): int(row["discord_id"]) for row in rows}
 
     async def member_number_for_discord_id(self, discord_id: int) -> int | None:
+        """Return the BattleVive member number linked to a Discord ID."""
         value = await self._connection.fetchval(
             "SELECT member_number FROM identity_links WHERE discord_id=$1", discord_id
         )
@@ -150,10 +168,13 @@ class IdentityRepository:
 
 
 class RuleRepository:
+    """Provide persistence operations for rule data."""
     def __init__(self, connection: Any) -> None:
+        """Initialize the rule repository instance."""
         self._connection = connection
 
     async def set(self, guild_id: int, command_name: str, channel_id: int, allowed: bool) -> None:
+        """Set a guild's channel rule for a command scope."""
         await self._connection.execute(
             """INSERT INTO command_channel_rules(guild_id,command_name,channel_id,allowed) VALUES($1,$2,$3,$4)
             ON CONFLICT(guild_id,command_name,channel_id) DO UPDATE SET allowed=EXCLUDED.allowed""",
@@ -161,12 +182,14 @@ class RuleRepository:
         )
 
     async def remove(self, guild_id: int, command_name: str, channel_id: int) -> None:
+        """Remove a guild's channel rule for a command scope."""
         await self._connection.execute(
             "DELETE FROM command_channel_rules WHERE guild_id=$1 AND command_name=$2 AND channel_id=$3",
             guild_id, command_name, channel_id,
         )
 
     async def list(self, guild_id: int) -> list[dict[str, object]]:
+        """List a guild's configured command-channel rules."""
         rows = await self._connection.fetch(
             "SELECT command_name, channel_id, allowed FROM command_channel_rules WHERE guild_id=$1 ORDER BY command_name, channel_id",
             guild_id,
@@ -174,6 +197,7 @@ class RuleRepository:
         return [dict(row) for row in rows]
 
     async def allows(self, guild_id: int, command_name: str, channel_id: int) -> bool:
+        """Return whether command rules allow a channel."""
         value = await self._connection.fetchval(
             "SELECT allowed FROM command_channel_rules WHERE guild_id=$1 AND command_name=$2 AND channel_id=$3",
             guild_id, command_name, channel_id,
@@ -194,10 +218,13 @@ class RuleRepository:
 
 
 class RoleRepository:
+    """Provide persistence operations for role data."""
     def __init__(self, connection: Any) -> None:
+        """Initialize the role repository instance."""
         self._connection = connection
 
     async def claim(self, guild_id: int, purpose: str, logical_name: str, role_id: int) -> None:
+        """Record a role as owned by the bot for a purpose."""
         await self._connection.execute(
             """INSERT INTO created_roles(guild_id,purpose,logical_name,role_id) VALUES($1,$2,$3,$4)
             ON CONFLICT(guild_id,purpose,logical_name) DO UPDATE SET role_id=EXCLUDED.role_id,updated_at=NOW()""",
@@ -205,6 +232,7 @@ class RoleRepository:
         )
 
     async def is_owned(self, guild_id: int, role_id: int) -> bool:
+        """Return whether the bot owns a role for a purpose."""
         return bool(await self._connection.fetchval(
             "SELECT 1 FROM created_roles WHERE guild_id=$1 AND role_id=$2", guild_id, role_id
         ))

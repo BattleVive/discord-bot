@@ -111,6 +111,7 @@ class LeaderboardEntry:
 
 
 def _text_width(font: ImageFont.FreeTypeFont, text: str) -> int:
+    """Measure rendered text width with the selected font."""
     bounds = font.getbbox(text)
     return bounds[2] - bounds[0]
 
@@ -125,6 +126,7 @@ def _fit_font(text: str, max_width: int, size: int) -> ImageFont.FreeTypeFont:
 
 
 def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
+    """Shorten text to fit the available pixel width."""
     if _text_width(font, text) <= max_width:
         return text
 
@@ -144,6 +146,7 @@ def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
 
 
 def _circle_crop(img: Image.Image) -> Image.Image:
+    """Crop an image to a circular avatar."""
     total = AVATAR_SIZE + 10
     result = Image.new("RGBA", (total, total), (0, 0, 0, 0))
     fitted = ImageOps.fit(
@@ -167,6 +170,7 @@ def _circle_crop(img: Image.Image) -> Image.Image:
 
 
 def _rank_icon(rank: str, size: int) -> Image.Image | None:
+    """Load and resize the icon for a rank."""
     style = RANK_STYLES.get(rank)
     if style is None:
         return None
@@ -185,6 +189,7 @@ def _draw_rank(
     y: int,
     rank: str,
 ) -> int:
+    """Draw a rank label and its optional icon."""
     icon = _rank_icon(rank, 32)
     if icon is not None:
         card.alpha_composite(icon, (x, y + (32 - icon.height) // 2))
@@ -196,6 +201,7 @@ def _draw_rank(
 
 
 def _gradient_bar(width: int, height: int) -> Image.Image:
+    """Draw a horizontal gradient bar."""
     gradient = Image.new("RGB", (max(width, 1), height))
     pixels = gradient.load()
     start = (221, 34, 84)
@@ -220,6 +226,7 @@ def _logo_thumbnail(max_size: tuple[int, int]) -> Image.Image:
 
 
 def _png_bytes(image: Image.Image) -> bytes:
+    """Encode an image as PNG bytes."""
     output = BytesIO()
     image.convert("RGB").save(output, format="PNG")
     return output.getvalue()
@@ -452,6 +459,7 @@ def build_card(
     wins: int,
     losses: int,
 ) -> bytes:
+    """Render a player rank card as PNG bytes."""
     fonts = _load_fonts()
     total_games = wins + losses
     win_rate = round(wins / total_games * 100) if total_games > 0 else 0

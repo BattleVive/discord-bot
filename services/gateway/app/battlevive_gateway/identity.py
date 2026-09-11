@@ -6,10 +6,12 @@ from typing import Any
 
 
 def normalize_name(value: str | None) -> str:
+    """Normalize a player name for identity matching."""
     return value.strip().casefold() if value else ""
 
 
 def member_names(member: Any) -> set[str]:
+    """Return the normalized names associated with a Discord member."""
     return {
         name
         for name in (

@@ -20,6 +20,7 @@ SERVICE_SHARED_INPUTS = {
 
 
 def plan(payload: dict) -> dict:
+    """Plan which service images require a new release."""
     changed = set(payload["changed_files"])
     versions = payload["versions"]
     previous = payload.get("previous_versions", {})
@@ -43,6 +44,7 @@ def plan(payload: dict) -> dict:
 
 
 def main() -> None:
+    """Run the service plan command-line entry point."""
     json.dump(plan(json.load(sys.stdin)), sys.stdout, sort_keys=True)
 
 

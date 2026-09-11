@@ -17,9 +17,11 @@ from battlevive_upstream.service import route_table
 
 @pytest.mark.asyncio
 async def test_feature_request_uses_bearer_and_exact_user_agent_without_preflight() -> None:
+    """Verify that feature request uses bearer and exact user agent without preflight."""
     requests: list[tuple[str, dict[str, str]]] = []
 
     async def send(path: str, headers: dict[str, str]) -> UpstreamResponse:
+        """Provide send behavior for the test scenario."""
         requests.append((path, headers))
         return UpstreamResponse(200, {"ok": True, "total": 3, "color": "green", "q1": 1, "q2": 1, "q3": 1}, {})
 
@@ -40,7 +42,9 @@ async def test_feature_request_uses_bearer_and_exact_user_agent_without_prefligh
 
 
 def test_client_rejects_a_cleartext_upstream_url_before_any_request() -> None:
+    """Verify that client rejects a cleartext upstream URL before any request."""
     async def send(_: str, __: dict[str, str]) -> UpstreamResponse:
+        """Provide send behavior for the test scenario."""
         raise AssertionError("cleartext upstream request must not be attempted")
 
     with pytest.raises(ValueError, match="HTTPS"):
@@ -48,6 +52,7 @@ def test_client_rejects_a_cleartext_upstream_url_before_any_request() -> None:
 
 
 def test_service_rejects_a_cleartext_environment_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that service rejects a cleartext environment override."""
     monkeypatch.setenv("BATTLEVIVE_API_BASE_URL", "http://example.test")
 
     with pytest.raises(ValueError, match="HTTPS"):
@@ -56,9 +61,11 @@ def test_service_rejects_a_cleartext_environment_override(monkeypatch: pytest.Mo
 
 @pytest.mark.asyncio
 async def test_guide_markdown_uses_the_service_user_agent() -> None:
+    """Verify that guide markdown uses the service user agent."""
     requests: list[tuple[str, dict[str, str]]] = []
 
     async def send(path: str, headers: dict[str, str]) -> UpstreamResponse:
+        """Provide send behavior for the test scenario."""
         requests.append((path, headers))
         return UpstreamResponse(200, "# Guide", {})
 
@@ -70,10 +77,12 @@ async def test_guide_markdown_uses_the_service_user_agent() -> None:
 
 @pytest.mark.asyncio
 async def test_identical_requests_are_coalesced_and_lru_hits_are_fresh() -> None:
+    """Verify that identical requests are coalesced and LRU hits are fresh."""
     gate = asyncio.Event()
     calls = 0
 
     async def send(path: str, headers: dict[str, str]) -> UpstreamResponse:
+        """Provide send behavior for the test scenario."""
         nonlocal calls
         calls += 1
         await gate.wait()
@@ -93,7 +102,9 @@ async def test_identical_requests_are_coalesced_and_lru_hits_are_fresh() -> None
 
 @pytest.mark.asyncio
 async def test_mutation_refuses_stale_cache_and_errors_redact_credentials() -> None:
+    """Verify that mutation refuses stale cache and errors redact credentials."""
     async def send(path: str, headers: dict[str, str]) -> UpstreamResponse:
+        """Provide send behavior for the test scenario."""
         raise TimeoutError("Authorization: Bearer secret-value")
 
     client = BattleViveClient("https://example.test", "secret-value", send=send, retries=0)
@@ -105,10 +116,12 @@ async def test_mutation_refuses_stale_cache_and_errors_redact_credentials() -> N
 
 @pytest.mark.asyncio
 async def test_retries_429_with_retry_after_then_returns_normalized_stats() -> None:
+    """Verify that retries 429 with retry after then returns normalized stats."""
     attempts = 0
     sleeps: list[float] = []
 
     async def send(path: str, headers: dict[str, str]) -> UpstreamResponse:
+        """Provide send behavior for the test scenario."""
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -126,7 +139,9 @@ async def test_retries_429_with_retry_after_then_returns_normalized_stats() -> N
 
 @pytest.mark.asyncio
 async def test_schema_drift_is_rejected_without_leaking_response_or_credentials() -> None:
+    """Verify that schema drift is rejected without leaking response or credentials."""
     async def send(path: str, headers: dict[str, str]) -> UpstreamResponse:
+        """Provide send behavior for the test scenario."""
         return UpstreamResponse(200, {"ok": True, "total": "not-a-number", "color": "green", "secret": "secret"}, {})
 
     client = BattleViveClient("https://example.test", "secret", send=send, retries=0)
@@ -136,6 +151,7 @@ async def test_schema_drift_is_rejected_without_leaking_response_or_credentials(
 
 
 def test_normalizers_reject_malformed_route_models_and_normalize_known_scalar_fields() -> None:
+    """Verify that normalizers reject malformed route models and normalize known scalar fields."""
     with pytest.raises(ApiError, match="guides schema"):
         BattleViveClient._normalize("/api/bot/guides", {"ok": True, "guides": "wrong"})
     with pytest.raises(ApiError, match="player schema"):
@@ -147,6 +163,7 @@ def test_normalizers_reject_malformed_route_models_and_normalize_known_scalar_fi
 
 
 def test_live_bot_contract_wrappers_normalize_guides_and_leaderboard() -> None:
+    """Verify that live bot contract wrappers normalize guides and leaderboard."""
     guides = BattleViveClient._normalize(
         "/api/bot/guides",
         {"ok": True, "guides": [{"number": "4", "title": "Guide"}]},
@@ -161,6 +178,7 @@ def test_live_bot_contract_wrappers_normalize_guides_and_leaderboard() -> None:
 
 
 def test_live_active_match_contract_preserves_the_complete_match_record() -> None:
+    """Verify that live active match contract preserves the complete match record."""
     active = BattleViveClient._normalize(
         "/api/bot/matches/active",
         {"ok": True, "matches": [{
@@ -176,6 +194,7 @@ def test_live_active_match_contract_preserves_the_complete_match_record() -> Non
 
 
 def test_internal_gateway_exposes_only_fixed_feature_routes_and_probes() -> None:
+    """Verify that internal gateway exposes only fixed feature routes and probes."""
     paths = {route.path for route in route_table()}
     assert {"/health", "/ready", "/queue", "/stats", "/guides", "/guides/{number}",
             "/guides/{number}/markdown", "/leaderboard", "/players/{number}",
@@ -184,16 +203,19 @@ def test_internal_gateway_exposes_only_fixed_feature_routes_and_probes() -> None
 
 
 def test_route_specific_cache_defaults_cover_parameterized_feature_paths() -> None:
+    """Verify that route specific cache defaults cover parameterized feature paths."""
     assert BattleViveClient._ttl("/api/bot/guides/4/markdown", {}) == 300
     assert BattleViveClient._ttl("/api/bot/players/4", {}) == 60
 
 
 @pytest.mark.asyncio
 async def test_display_read_returns_exact_stale_age_after_transient_failure() -> None:
+    """Verify that display read returns exact stale age after transient failure."""
     now = 0.0
     responses = [UpstreamResponse(200, {"ok": True, "total": 2, "color": "green", "q1": 0, "q2": 0, "q3": 2}, {"Cache-Control": "max-age=1"})]
 
     async def send(path: str, headers: dict[str, str]) -> UpstreamResponse:
+        """Provide send behavior for the test scenario."""
         if responses:
             return responses.pop(0)
         raise TimeoutError()
@@ -208,15 +230,18 @@ async def test_display_read_returns_exact_stale_age_after_transient_failure() ->
 
 @pytest.mark.asyncio
 async def test_lru_cache_evicts_oldest_entry_after_256_entries() -> None:
+    """Verify that LRU cache evicts oldest entry after 256 entries."""
     calls: list[str] = []
     clock_value = 0.0
 
     def clock() -> float:
+        """Return the test's current monotonic time."""
         nonlocal clock_value
         clock_value += 1.0
         return clock_value
 
     async def send(path: str, headers: dict[str, str]) -> UpstreamResponse:
+        """Provide send behavior for the test scenario."""
         calls.append(path)
         return UpstreamResponse(200, {"ok": True, "player": {"memberNumber": path.rsplit("/", 1)[1], "name": "Vive"}}, {"Cache-Control": "max-age=60"})
 
@@ -229,9 +254,11 @@ async def test_lru_cache_evicts_oldest_entry_after_256_entries() -> None:
 
 @pytest.mark.asyncio
 async def test_retryable_5xx_is_retried_but_redirect_is_not() -> None:
+    """Verify that retryable 5xx is retried but redirect is not."""
     calls = 0
 
     async def flaky(path: str, headers: dict[str, str]) -> UpstreamResponse:
+        """Simulate a retryable upstream response followed by success."""
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -243,6 +270,7 @@ async def test_retryable_5xx_is_retried_but_redirect_is_not() -> None:
     assert calls == 2
 
     async def redirect(path: str, headers: dict[str, str]) -> UpstreamResponse:
+        """Simulate an upstream redirect response."""
         return UpstreamResponse(302, {}, {"Location": "https://unsafe.example"})
     with pytest.raises(ApiError, match="HTTP 302"):
         await BattleViveClient("https://example.test", "secret", send=redirect).queue_result()
@@ -252,7 +280,9 @@ async def test_retryable_5xx_is_retried_but_redirect_is_not() -> None:
 async def test_failed_upstream_requests_log_route_and_status_without_credentials(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Verify that failed upstream requests log route and status without credentials."""
     async def rejected(_: str, __: dict[str, str]) -> UpstreamResponse:
+        """Simulate a rejected upstream request."""
         return UpstreamResponse(404, {"credential": "secret-value"}, {})
 
     caplog.set_level(logging.INFO, logger="battlevive.upstream")

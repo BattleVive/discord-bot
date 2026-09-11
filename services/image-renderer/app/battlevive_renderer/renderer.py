@@ -23,6 +23,7 @@ ROW_HEIGHT = 124
 
 
 def render_leaderboard(model: dict[str, Any]) -> bytes:
+    """Validate a leaderboard model and render it as PNG bytes."""
     if not isinstance(model, Mapping):
         raise ValueError("render model must be an object")
     entries = model.get("entries")
@@ -48,6 +49,7 @@ def render_leaderboard(model: dict[str, Any]) -> bytes:
 
 
 def render_rank(model: dict[str, Any]) -> bytes:
+    """Validate a rank model and render it as PNG bytes."""
     if not isinstance(model, Mapping):
         raise ValueError("render model must be an object")
     avatar = _rank_avatar(model)
@@ -60,6 +62,7 @@ def render_rank(model: dict[str, Any]) -> bytes:
 
 
 def _rank_avatar(model: Mapping[str, Any]) -> Image.Image:
+    """Decode and validate a rank-card avatar image."""
     encoded = model.get("avatar_png_base64")
     if encoded is None:
         return Image.new("RGB", (128, 128), "#172638")
@@ -78,12 +81,14 @@ def _rank_avatar(model: Mapping[str, Any]) -> Image.Image:
 
 
 def _text(value: object, name: str) -> str:
+    """Return a normalized text value."""
     if not isinstance(value, str) or not value or len(value) > 128:
         raise ValueError(f"{name} must be a non-empty short string")
     return value
 
 
 def _nonnegative_int(value: object) -> int:
+    """Validate and return a nonnegative integer field."""
     if isinstance(value, bool):
         raise ValueError("integer required")
     parsed = int(value)
@@ -93,6 +98,7 @@ def _nonnegative_int(value: object) -> int:
 
 
 def _positive_int(value: object) -> int:
+    """Validate and return a positive integer field."""
     parsed = _nonnegative_int(value)
     if parsed == 0:
         raise ValueError("positive integer required")

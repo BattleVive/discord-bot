@@ -17,6 +17,7 @@ TEMPORARILY_UNAVAILABLE = "This feature is temporarily unavailable."
 
 
 def validate_settings() -> None:
+    """Validate the gateway's required runtime settings."""
     for name in ("DISCORD_TOKEN", "DATABASE_URL", "UPSTREAM_DATA_URL", "IMAGE_RENDERER_URL"):
         if not os.environ.get(name, "").strip():
             raise RuntimeError(f"Missing required setting: {name}")
@@ -35,6 +36,7 @@ def load_file_settings() -> None:
 
 
 def command_guild_id() -> int | None:
+    """Parse the optional development command-guild identifier."""
     value = os.environ.get("DISCORD_COMMAND_GUILD_ID", "").strip()
     if not value:
         return None
@@ -44,6 +46,7 @@ def command_guild_id() -> int | None:
 
 
 def main() -> None:
+    """Run the gateway command-line entry point."""
     load_file_settings()
     validate_settings()
     from .gateway_bot import create_bot

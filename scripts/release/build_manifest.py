@@ -11,6 +11,7 @@ from release_manifest import SERVICES, validate
 
 
 def service_argument(value: str) -> tuple[str, str, str]:
+    """Parse a service name and image digest."""
     try:
         name, version, digest = value.split("=", 2)
     except ValueError as error:
@@ -21,6 +22,7 @@ def service_argument(value: str) -> tuple[str, str, str]:
 
 
 def main() -> None:
+    """Run the build manifest command-line entry point."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--bot-version", required=True)
     parser.add_argument("--revision", required=True)

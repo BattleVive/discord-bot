@@ -18,6 +18,7 @@ from .client import UpstreamResponse
 
 
 def configure_logging() -> None:
+    """Configure structured logging for the upstream service."""
     level = getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
     logging.basicConfig(
         level=level,
@@ -41,9 +42,11 @@ async def aiohttp_sender(base_url: str, path: str, headers: dict[str, str]) -> U
 
 
 def route_table() -> web.RouteTableDef:
+    """Build the upstream service's fixed HTTP route table."""
     routes = web.RouteTableDef()
 
     async def result(request: web.Request, method: str, *args: int) -> web.Response:
+        """Call one allowlisted client method and serialize its result."""
         client: BattleViveClient = request.app["client"]
         try:
             kwargs = {"require_fresh": True} if request.query.get("fresh") == "1" else {}
@@ -55,40 +58,58 @@ def route_table() -> web.RouteTableDef:
 
     @routes.get("/health")
     async def health(_: web.Request) -> web.Response:
+        """Report upstream service process health."""
         return web.json_response({"status": "ok"})
 
     @routes.get("/ready")
     async def ready(request: web.Request) -> web.Response:
+        """Report whether upstream credentials are configured."""
         return web.json_response({"status": "ready" if request.app["ready"] else "not_ready"}, status=200 if request.app["ready"] else 503)
 
     @routes.get("/queue")
-    async def queue(request: web.Request) -> web.Response: return await result(request, "queue_result")
+    async def queue(request: web.Request) -> web.Response:
+        """Return current queue data."""
+        return await result(request, "queue_result")
     @routes.get("/stats")
-    async def stats(request: web.Request) -> web.Response: return await result(request, "stats")
+    async def stats(request: web.Request) -> web.Response:
+        """Return current BattleVive statistics."""
+        return await result(request, "stats")
     @routes.get("/guides")
-    async def guides(request: web.Request) -> web.Response: return await result(request, "guides")
+    async def guides(request: web.Request) -> web.Response:
+        """Return the current guide catalog."""
+        return await result(request, "guides")
     @routes.get("/guides/{number}")
     async def guide(request: web.Request) -> web.Response:
+        """Return one guide by number."""
         number = _positive_number(request)
         return web.json_response({"error": "guide number must be positive"}, status=400) if number is None else await result(request, "guide", number)
     @routes.get("/guides/{number}/markdown")
     async def markdown(request: web.Request) -> web.Response:
+        """Return one guide's Markdown by number."""
         number = _positive_number(request)
         return web.json_response({"error": "guide number must be positive"}, status=400) if number is None else await result(request, "guide_markdown", number)
     @routes.get("/leaderboard")
-    async def leaderboard(request: web.Request) -> web.Response: return await result(request, "leaderboard")
+    async def leaderboard(request: web.Request) -> web.Response:
+        """Return the current leaderboard."""
+        return await result(request, "leaderboard")
     @routes.get("/players/{number}")
     async def player(request: web.Request) -> web.Response:
+        """Return one player by number."""
         number = _positive_number(request)
         return web.json_response({"error": "player number must be positive"}, status=400) if number is None else await result(request, "player", number)
     @routes.get("/active-matches")
-    async def active(request: web.Request) -> web.Response: return await result(request, "active_matches")
+    async def active(request: web.Request) -> web.Response:
+        """Return current active matches."""
+        return await result(request, "active_matches")
     @routes.get("/recent-matches")
-    async def recent(request: web.Request) -> web.Response: return await result(request, "recent_matches")
+    async def recent(request: web.Request) -> web.Response:
+        """Return recent matches."""
+        return await result(request, "recent_matches")
     return routes
 
 
 def _positive_number(request: web.Request) -> int | None:
+    """Validate and return a positive numeric setting."""
     try:
         number = int(request.match_info["number"])
     except ValueError:
@@ -97,6 +118,7 @@ def _positive_number(request: web.Request) -> int | None:
 
 
 def create_app(client: BattleViveClient | None = None) -> web.Application:
+    """Create the allowlisted upstream-data HTTP application."""
     key = os.environ.get("BATTLEVIVE_API_KEY", "")
     base_url = os.environ.get("BATTLEVIVE_API_BASE_URL", "https://battlevive.com")
     parsed = urlparse(base_url)
@@ -104,6 +126,7 @@ def create_app(client: BattleViveClient | None = None) -> web.Application:
         raise ValueError("BATTLEVIVE_API_BASE_URL must use HTTPS")
     if client is None:
         async def send(path: str, headers: dict[str, str]) -> UpstreamResponse:
+            """Send one request to the configured BattleVive API."""
             return await aiohttp_sender(base_url, path, headers)
         client = BattleViveClient(base_url, key, send=send)
     app = web.Application(client_max_size=64 * 1024)
@@ -114,6 +137,7 @@ def create_app(client: BattleViveClient | None = None) -> web.Application:
 
 
 def main() -> None:
+    """Run the service command-line entry point."""
     configure_logging()
     web.run_app(create_app(), host="0.0.0.0", port=8081)
 

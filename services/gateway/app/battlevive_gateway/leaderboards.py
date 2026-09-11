@@ -14,10 +14,12 @@ from .identity import save_guild_identity_links
 
 
 def _win_rate(wins: int, losses: int) -> int:
+    """Calculate a leaderboard entry's win rate."""
     return round(wins * 100 / (wins + losses)) if wins + losses else 0
 
 
 def _entry(record: dict[str, Any], place: int) -> dict[str, object] | None:
+    """Convert an upstream leaderboard row to a render model."""
     player, rank = record.get("player"), record.get("rank")
     mmr, wins, losses = record.get("mmr"), record.get("wins"), record.get("losses")
     if not isinstance(player, str) or not isinstance(rank, str):
@@ -32,6 +34,7 @@ class GuildLeaderboardPublisher:
     """Use the renderer HTTP service and persistent publication state, never a shared volume."""
 
     def __init__(self, bot: discord.Client, upstream: Any, renderer: Any, publications: Any, identities: Any | None = None) -> None:
+        """Initialize the guild leaderboard publisher instance."""
         self._bot = bot
         self._upstream = upstream
         self._renderer = renderer
@@ -39,6 +42,7 @@ class GuildLeaderboardPublisher:
         self._identities = identities
 
     async def reconcile_guild(self, config: dict[str, object]) -> bool:
+        """Reconcile one guild's automatic leaderboard publication."""
         guild_id, channel_id = config.get("guild_id"), config.get("leaderboard_channel_id")
         if not isinstance(guild_id, int) or not isinstance(channel_id, int):
             return False
@@ -88,6 +92,7 @@ class GuildLeaderboardPublisher:
 
     @staticmethod
     async def _existing_message(channel: Any, publication: dict[str, object] | None) -> Any | None:
+        """Fetch a tracked Discord message when it still exists."""
         if publication is None or not isinstance(publication.get("message_id"), int):
             return None
         try:
@@ -100,25 +105,30 @@ class LeaderboardService:
     """Periodic best-effort automatic reconciliation; private service loss is non-fatal."""
 
     def __init__(self, bot: discord.Client, pool: Any, upstream: Any, renderer: Any, *, interval: float = 60.0) -> None:
+        """Initialize the leaderboard service instance."""
         self._bot, self._pool, self._upstream, self._renderer, self._interval = bot, pool, upstream, renderer, interval
         self._requested = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
+        """Start the periodic leaderboard reconciliation worker."""
         if self._task is None:
             self._task = asyncio.create_task(self._run(), name="leaderboard-publisher")
             self.request_reconciliation()
 
     async def stop(self) -> None:
+        """Stop the periodic leaderboard reconciliation worker."""
         if self._task is not None:
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
             self._task = None
 
     def request_reconciliation(self) -> None:
+        """Wake the worker for an immediate reconciliation pass."""
         self._requested.set()
 
     async def reconcile_all(self) -> None:
+        """Reconcile leaderboards for every configured guild."""
         from .repositories import GuildConfigRepository, IdentityRepository, PublicationRepository
         async with self._pool.acquire() as connection:
             configs = await GuildConfigRepository(connection).configured_leaderboards()
@@ -132,6 +142,7 @@ class LeaderboardService:
                     logger.exception("Leaderboard reconciliation failed for guild %s", config.get("guild_id"))
 
     async def _run(self) -> None:
+        """Run reconciliation until the service is stopped."""
         while True:
             try:
                 await asyncio.wait_for(self._requested.wait(), timeout=self._interval)

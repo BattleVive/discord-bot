@@ -9,10 +9,12 @@ EXPECTED_TABLES = frozenset({"guild_config", "command_channel_rules", "created_r
 
 
 class SchemaError(RuntimeError):
+    """Report schema failures."""
     pass
 
 
 async def verify_schema(connection: Any) -> None:
+    """Verify that the database contains every required table."""
     rows = await connection.fetch(
         "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
     )
@@ -23,6 +25,7 @@ async def verify_schema(connection: Any) -> None:
 
 
 async def connect_and_verify(dsn: str) -> asyncpg.Pool:
+    """Create a connection pool and verify its schema."""
     pool = await asyncpg.create_pool(dsn, min_size=1, max_size=5, command_timeout=10)
     try:
         async with pool.acquire() as connection:

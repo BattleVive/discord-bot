@@ -33,10 +33,12 @@ from .repositories import RuleRepository
 
 
 def bypasses_channel_rules(command_name: str) -> bool:
+    """Return whether a command bypasses publication-channel rules."""
     return command_name == "config" or command_name.startswith("config ") or command_name == "debug" or command_name.startswith("debug ")
 
 
 def _has_channel_permissions(channel: object, member: object | None, *names: str) -> bool:
+    """Return whether a member has every required channel permission."""
     permissions_for = getattr(channel, "permissions_for", None)
     if member is None or not callable(permissions_for):
         return False
@@ -45,18 +47,21 @@ def _has_channel_permissions(channel: object, member: object | None, *names: str
 
 
 def can_publish_leaderboard(guild: object | None, channel: object) -> bool:
+    """Return whether the bot can publish a leaderboard in the channel."""
     return isinstance(channel, discord.TextChannel) and _has_channel_permissions(
         channel, getattr(guild, "me", None), "view_channel", "send_messages", "attach_files", "read_message_history"
     )
 
 
 def can_publish_active_lobbies(guild: object | None, channel: object) -> bool:
+    """Return whether the bot can publish active lobbies in the channel."""
     return isinstance(channel, discord.TextChannel) and _has_channel_permissions(
         channel, getattr(guild, "me", None), "view_channel", "send_messages", "embed_links", "read_message_history"
     )
 
 
 def can_publish_guides(guild: object | None, channel: object) -> bool:
+    """Return whether the bot can publish guides in the forum."""
     return isinstance(channel, discord.ForumChannel) and _has_channel_permissions(
         channel, getattr(guild, "me", None), "view_channel", "send_messages", "send_messages_in_threads",
         "read_message_history", "manage_threads",
@@ -64,9 +69,11 @@ def can_publish_guides(guild: object | None, channel: object) -> bool:
 
 
 class GatewayBot(commands.Bot):
+    """Coordinate the gateway Discord bot and its services."""
     def __init__(self, *args: object, database_url: str | None = None,
                  command_guild_id: int | None = None, upstream_data_url: str | None = None,
                  image_renderer_url: str | None = None, **kwargs: object) -> None:
+        """Initialize the gateway bot instance."""
         super().__init__(*args, **kwargs)
         self.database_url = database_url
         self.command_guild_id = command_guild_id
@@ -82,6 +89,7 @@ class GatewayBot(commands.Bot):
         self._health_runner: web.AppRunner | None = None
 
     async def setup_hook(self) -> None:
+        """Initialize private services and synchronize application commands."""
         if self.database_url is not None:
             self.pool = await connect_and_verify(self.database_url)
         await self._start_health_server()
@@ -103,6 +111,7 @@ class GatewayBot(commands.Bot):
         logger.info("gateway setup complete database_ready=%s development_guild=%s", self.pool is not None, self.command_guild_id is not None)
 
     async def close(self) -> None:
+        """Stop background services and close the bot cleanly."""
         if self._health_runner is not None:
             await self._health_runner.cleanup()
         if self.pool is not None:
@@ -119,10 +128,13 @@ class GatewayBot(commands.Bot):
         await super().close()
 
     async def _start_health_server(self) -> None:
+        """Start the gateway health and readiness server."""
         app = web.Application()
         async def health(_: web.Request) -> web.Response:
+            """Report gateway process health."""
             return web.json_response({"status": "ok"})
         async def ready(_: web.Request) -> web.Response:
+            """Report whether the gateway database is ready."""
             is_ready = self.pool is not None
             return web.json_response({"status": "ready" if is_ready else "not_ready"}, status=200 if is_ready else 503)
         app.router.add_get("/health", health)
@@ -132,6 +144,7 @@ class GatewayBot(commands.Bot):
         await web.TCPSite(self._health_runner, "0.0.0.0", 8080).start()
 
     async def command_allowed(self, guild_id: int, command_name: str, channel_id: int | None) -> bool:
+        """Return whether a command is allowed in the selected channel."""
         if channel_id is None or self.pool is None:
             return False
         async with self.pool.acquire() as connection:  # type: ignore[union-attr]
@@ -140,6 +153,7 @@ class GatewayBot(commands.Bot):
 
 def create_bot(*, database_url: str | None = None, command_guild_id: int | None = None,
                upstream_data_url: str | None = None, image_renderer_url: str | None = None) -> GatewayBot:
+    """Create and configure the Discord gateway bot."""
     intents = discord.Intents.default()
     intents.members = True
     bot = GatewayBot(command_prefix=(), intents=intents, database_url=database_url,
@@ -154,6 +168,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
     )
 
     async def configuration(interaction: discord.Interaction) -> tuple[int, int] | None:
+        """Validate the interaction and load its guild configuration version."""
         if interaction.guild_id is None or interaction.user is None:
             await interaction.response.send_message("This command must be used in a server.", ephemeral=True)
             return None
@@ -175,6 +190,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @config.command(name="leaderboard-limit", description="Set leaderboard entry limit")
     async def leaderboard_limit(interaction: discord.Interaction, limit: app_commands.Range[int, 1, 100]) -> None:
+        """Set the guild's automatic leaderboard entry limit."""
         context = await configuration(interaction)
         if context is None:
             return
@@ -185,6 +201,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @config.command(name="leaderboard-channel", description="Set the automatic leaderboard channel")
     async def leaderboard_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+        """Set the guild's automatic leaderboard channel."""
         context = await configuration(interaction)
         if context is None:
             return
@@ -203,6 +220,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @config.command(name="active-lobby-channel", description="Set the automatic active-lobby channel")
     async def active_lobby_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+        """Set the guild's automatic active-lobby channel."""
         context = await configuration(interaction)
         if context is None:
             return
@@ -221,6 +239,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @config.command(name="guide-forum", description="Set the forum used for guide publication")
     async def guide_forum(interaction: discord.Interaction, channel: discord.ForumChannel) -> None:
+        """Set the guild's guide publication forum."""
         context = await configuration(interaction)
         if context is None:
             return
@@ -239,6 +258,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @config.command(name="channel-rule", description="Allow or block a command in a channel")
     async def channel_rule(interaction: discord.Interaction, command_name: str, channel: discord.abc.GuildChannel, allowed: bool) -> None:
+        """Set the guild's allow or deny rule for a command channel."""
         context = await configuration(interaction)
         if context is None:
             return
@@ -250,6 +270,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
     @config.command(name="command-whitelist", description="Allow a command in a channel")
     async def command_whitelist(interaction: discord.Interaction, command_name: str,
                                 channel: discord.abc.GuildChannel) -> None:
+        """Allow one command in a selected channel."""
         context = await configuration(interaction)
         if context is None:
             return
@@ -261,6 +282,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
     @config.command(name="command-blacklist", description="Block a command in a channel")
     async def command_blacklist(interaction: discord.Interaction, command_name: str,
                                 channel: discord.abc.GuildChannel) -> None:
+        """Deny one command in a selected channel."""
         context = await configuration(interaction)
         if context is None:
             return
@@ -272,6 +294,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
     @config_commands.command(name="whitelist", description="Allow public commands in a channel")
     async def commands_whitelist(interaction: discord.Interaction,
                                  channel: discord.abc.GuildChannel) -> None:
+        """Allow public commands in a selected channel."""
         context = await configuration(interaction)
         if context is None:
             return
@@ -283,6 +306,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
     @config_commands.command(name="blacklist", description="Block public commands in a channel")
     async def commands_blacklist(interaction: discord.Interaction,
                                  channel: discord.abc.GuildChannel) -> None:
+        """Deny public commands in a selected channel."""
         context = await configuration(interaction)
         if context is None:
             return
@@ -294,6 +318,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
     @config_commands.command(name="remove", description="Remove a public-command channel rule")
     async def commands_remove(interaction: discord.Interaction,
                               channel: discord.abc.GuildChannel) -> None:
+        """Remove the guild's rule for a command channel."""
         context = await configuration(interaction)
         if context is None:
             return
@@ -304,6 +329,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @config.command(name="rank-cooldown", description="Set the /rank cooldown in seconds")
     async def rank_cooldown(interaction: discord.Interaction, seconds: app_commands.Range[int, 0, 3600]) -> None:
+        """Set the guild's rank-command cooldown."""
         context = await configuration(interaction)
         if context is None:
             return
@@ -317,6 +343,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @config.command(name="show", description="Show this server's bot configuration")
     async def config_show(interaction: discord.Interaction) -> None:
+        """Show the guild's current gateway configuration."""
         context = await configuration(interaction)
         if context is None:
             return
@@ -352,6 +379,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @config.command(name="debug", description="Enable or disable administrator diagnostics")
     async def debug_enabled(interaction: discord.Interaction, enabled: bool) -> None:
+        """Enable or disable guild diagnostic commands."""
         context = await configuration(interaction)
         if context is None:
             return
@@ -368,6 +396,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @bot.tree.command(name="create_roles", description="Create BattleVive rank roles")
     async def create_roles(interaction: discord.Interaction) -> None:
+        """Create and track the guild's required managed roles."""
         if interaction.guild is None or not isinstance(interaction.user, discord.Member) or not interaction.user.guild_permissions.manage_roles:
             await interaction.response.send_message("Manage Roles permission is required.", ephemeral=True)
             return
@@ -419,6 +448,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @debug.command(name="upstream", description="Download validated upstream feature data")
     async def debug_upstream(interaction: discord.Interaction) -> None:
+        """Return a credential-safe snapshot of upstream service state."""
         if interaction.guild_id is None or bot.pool is None or bot.upstream is None:
             await interaction.response.send_message("Upstream diagnostics are temporarily unavailable.", ephemeral=True)
             return
@@ -446,6 +476,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
     bot.tree.add_command(debug)
 
     async def channel_access(interaction: discord.Interaction) -> bool:
+        """Report whether the current command is allowed in this channel."""
         command = interaction.command
         name = command.qualified_name if command is not None else ""
         if bypasses_channel_rules(name):
@@ -462,6 +493,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @bot.tree.command(name="refresh", description="Refresh supported BattleVive integrations")
     async def refresh(interaction: discord.Interaction) -> None:
+        """Refresh the guild's supported upstream-backed features."""
         guild_id = interaction.guild_id
         member = interaction.user
         if guild_id is None:
@@ -490,10 +522,12 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
             operations = {}
             if bot.upstream is not None:
                 async def check_upstream() -> None:
+                    """Check whether the private upstream service is ready."""
                     await bot.upstream.get_result("/guides", require_fresh=True)
                 operations["upstream-data"] = check_upstream
                 if bot.guide_service is not None:
                     async def sync_guides() -> None:
+                        """Synchronize guides."""
                         await bot.guide_service.reconcile_guild(guild_id)
                     operations["guides"] = sync_guides
             if bot.renderer is not None:
@@ -510,6 +544,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @bot.tree.command(name="rank", description="Show your BattleVive rank")
     async def rank(interaction: discord.Interaction) -> None:
+        """Render the invoking member's current rank card."""
         if interaction.guild_id is None or bot.pool is None or bot.upstream is None or bot.renderer is None:
             await interaction.response.send_message(TEMPORARILY_UNAVAILABLE, ephemeral=True)
             return
@@ -551,6 +586,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @bot.event
     async def on_member_join(member: discord.Member) -> None:
+        """Reconcile identity and rank roles for a joining member."""
         if bot.leaderboard_service is not None:
             bot.leaderboard_service.request_reconciliation()
         if bot.pool is None or bot.upstream is None:
@@ -569,6 +605,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @bot.event
     async def on_member_remove(_member: discord.Member) -> None:
+        """Remove saved identity data for a departing member."""
         if bot.leaderboard_service is not None:
             bot.leaderboard_service.request_reconciliation()
     return bot

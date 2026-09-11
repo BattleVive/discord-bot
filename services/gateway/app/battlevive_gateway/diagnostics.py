@@ -26,6 +26,7 @@ async def upstream_snapshot(upstream: Any) -> dict[str, object]:
     truncated: dict[str, int] = {}
 
     async def collect(path: str) -> dict[str, Any] | None:
+        """Collect one credential-safe upstream diagnostic result."""
         try:
             result = await upstream.get_result(path, require_fresh=True)
         except IntegrationUnavailable:

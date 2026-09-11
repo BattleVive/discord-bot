@@ -10,6 +10,7 @@ import asyncpg
 
 
 def _schema_path() -> Path:
+    """Return the path to the bundled idempotent schema."""
     installed = Path("/app/init-db/01_schema.sql")
     if installed.is_file():
         return installed
@@ -31,6 +32,7 @@ async def migrate(dsn: str) -> None:
 
 
 def main() -> None:
+    """Run the migrations command-line entry point."""
     dsn = os.environ.get("DATABASE_URL", "").strip()
     if not dsn:
         path = os.environ.get("DATABASE_URL_FILE", "").strip()

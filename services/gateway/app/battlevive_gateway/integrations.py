@@ -19,20 +19,25 @@ RenderRequest = Callable[[str, dict[str, object]], Awaitable[tuple[str, bytes]]]
 
 @dataclass(frozen=True, slots=True)
 class InternalResult:
+    """Carry validated private-service data and its freshness metadata."""
     data: dict[str, Any]
     freshness: str
     age_seconds: int
 
 
 class UpstreamDataClient:
+    """Provide access to the upstream data service."""
     def __init__(self, base_url: str, *, request: Request | None = None) -> None:
+        """Initialize the upstream data client instance."""
         self._base_url = base_url.rstrip("/")
         self._request = request or self._http_request
 
     async def get(self, path: str) -> dict[str, Any]:
+        """Fetch data from a fixed upstream service path."""
         return (await self.get_result(path)).data
 
     async def get_result(self, path: str, *, require_fresh: bool = False) -> InternalResult:
+        """Fetch and validate data plus its freshness metadata."""
         if require_fresh:
             separator = "&" if "?" in path else "?"
             path = f"{path}{separator}fresh=1"
@@ -51,6 +56,7 @@ class UpstreamDataClient:
         return InternalResult(response["data"], freshness, age_seconds)
 
     async def _http_request(self, path: str) -> object:
+        """Perform one bounded HTTP request to the upstream service."""
         timeout = aiohttp.ClientTimeout(total=5)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(self._base_url + path) as response:
@@ -63,10 +69,12 @@ class ImageRendererClient:
     """Small fixed-purpose client for the isolated renderer."""
 
     def __init__(self, base_url: str, *, render_request: RenderRequest | None = None) -> None:
+        """Initialize the image renderer client instance."""
         self._base_url = base_url.rstrip("/")
         self._render_request = render_request or self._http_render
 
     async def ready(self) -> None:
+        """Require a successful renderer readiness response."""
         timeout = aiohttp.ClientTimeout(total=5)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -82,12 +90,15 @@ class ImageRendererClient:
             raise IntegrationUnavailable("Image renderer returned an invalid response.")
 
     async def render_rank(self, model: dict[str, object]) -> bytes:
+        """Render a rank-card model as PNG bytes."""
         return await self._render("/render/rank", model)
 
     async def render_leaderboard(self, model: dict[str, object]) -> bytes:
+        """Render a leaderboard model as PNG bytes."""
         return await self._render("/render/leaderboard", model)
 
     async def _render(self, path: str, model: dict[str, object]) -> bytes:
+        """Render and validate a PNG through a fixed renderer path."""
         try:
             content_type, image = await self._render_request(path, model)
         except Exception as error:
@@ -97,6 +108,7 @@ class ImageRendererClient:
         return image
 
     async def _http_render(self, path: str, model: dict[str, object]) -> tuple[str, bytes]:
+        """Send one bounded render request to the image service."""
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(self._base_url + path, json=model) as response:

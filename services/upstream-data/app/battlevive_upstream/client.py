@@ -28,12 +28,14 @@ class ApiError(RuntimeError):
 
 
 class Freshness(StrEnum):
+    """Describe whether an upstream result came from current or stale data."""
     FRESH = "fresh"
     STALE = "stale"
 
 
 @dataclass(frozen=True, slots=True)
 class UpstreamResponse:
+    """Carry the status, body, and headers returned by the upstream API."""
     status: int
     body: Any
     headers: Mapping[str, str]
@@ -41,6 +43,7 @@ class UpstreamResponse:
 
 @dataclass(frozen=True, slots=True)
 class ApiResult:
+    """Carry normalized API data and its cache freshness."""
     data: dict[str, Any]
     freshness: Freshness
     age_seconds: int
@@ -48,6 +51,7 @@ class ApiResult:
 
 @dataclass(slots=True)
 class _Cached:
+    """Store one cached response and its freshness timestamps."""
     data: dict[str, Any]
     created: float
     expires: float
@@ -63,6 +67,7 @@ class BattleViveClient:
     def __init__(self, base_url: str, api_key: str, *, send: Send,
                  retries: int = 3, clock: Callable[[], float] = monotonic,
                  sleep: Sleep = asyncio.sleep) -> None:
+        """Initialize the BattleVive client instance."""
         parsed = urlparse(base_url)
         if parsed.scheme != "https" or not parsed.netloc:
             raise ValueError("BattleVive upstream URL must use HTTPS")
@@ -78,21 +83,40 @@ class BattleViveClient:
         self._lock = asyncio.Lock()
 
     async def queue(self) -> dict[str, Any]:
+        """Fetch current queue data."""
         return (await self.queue_result()).data
 
     async def queue_result(self, *, require_fresh: bool = False) -> ApiResult:
+        """Fetch queue data with freshness metadata."""
         return await self._get("/api/bot/queue", require_fresh=require_fresh)
 
-    async def stats(self, *, require_fresh: bool = False) -> ApiResult: return await self._get("/api/bot/stats", require_fresh=require_fresh)
-    async def leaderboard(self, *, require_fresh: bool = False) -> ApiResult: return await self._get("/api/bot/leaderboard", require_fresh=require_fresh)
-    async def guides(self, *, require_fresh: bool = False) -> ApiResult: return await self._get("/api/bot/guides", require_fresh=require_fresh)
-    async def guide(self, number: int, *, require_fresh: bool = False) -> ApiResult: return await self._get(f"/api/bot/guides/{number}", require_fresh=require_fresh)
-    async def guide_markdown(self, number: int, *, require_fresh: bool = False) -> ApiResult: return await self._get(f"/api/bot/guides/{number}/markdown", require_fresh=require_fresh)
-    async def player(self, number: int, *, require_fresh: bool = False) -> ApiResult: return await self._get(f"/api/bot/players/{number}", require_fresh=require_fresh)
-    async def active_matches(self, *, require_fresh: bool = False) -> ApiResult: return await self._get("/api/bot/matches/active", require_fresh=require_fresh)
-    async def recent_matches(self, *, require_fresh: bool = False) -> ApiResult: return await self._get("/api/bot/matches/recent", require_fresh=require_fresh)
+    async def stats(self, *, require_fresh: bool = False) -> ApiResult:
+        """Fetch statistics with freshness metadata."""
+        return await self._get("/api/bot/stats", require_fresh=require_fresh)
+    async def leaderboard(self, *, require_fresh: bool = False) -> ApiResult:
+        """Fetch leaderboard data with freshness metadata."""
+        return await self._get("/api/bot/leaderboard", require_fresh=require_fresh)
+    async def guides(self, *, require_fresh: bool = False) -> ApiResult:
+        """Fetch the guide catalog with freshness metadata."""
+        return await self._get("/api/bot/guides", require_fresh=require_fresh)
+    async def guide(self, number: int, *, require_fresh: bool = False) -> ApiResult:
+        """Fetch one guide with freshness metadata."""
+        return await self._get(f"/api/bot/guides/{number}", require_fresh=require_fresh)
+    async def guide_markdown(self, number: int, *, require_fresh: bool = False) -> ApiResult:
+        """Fetch one guide's Markdown with freshness metadata."""
+        return await self._get(f"/api/bot/guides/{number}/markdown", require_fresh=require_fresh)
+    async def player(self, number: int, *, require_fresh: bool = False) -> ApiResult:
+        """Fetch one player with freshness metadata."""
+        return await self._get(f"/api/bot/players/{number}", require_fresh=require_fresh)
+    async def active_matches(self, *, require_fresh: bool = False) -> ApiResult:
+        """Fetch active matches with freshness metadata."""
+        return await self._get("/api/bot/matches/active", require_fresh=require_fresh)
+    async def recent_matches(self, *, require_fresh: bool = False) -> ApiResult:
+        """Fetch recent matches with freshness metadata."""
+        return await self._get("/api/bot/matches/recent", require_fresh=require_fresh)
 
     async def _get(self, path: str, *, require_fresh: bool = False) -> ApiResult:
+        """Return fresh data or an eligible stale-cache fallback."""
         now = self._clock()
         cached = self._cache.get(path)
         if cached and cached.expires > now:
@@ -106,6 +130,7 @@ class BattleViveClient:
         return await self._request_coalesced(path)
 
     async def _request_coalesced(self, path: str) -> ApiResult:
+        """Coalesce concurrent requests for the same upstream path."""
         async with self._lock:
             task = self._inflight.get(path)
             if task is None:
@@ -120,6 +145,7 @@ class BattleViveClient:
                         self._inflight.pop(path, None)
 
     async def _request(self, path: str) -> ApiResult:
+        """Request, validate, cache, and retry one upstream path."""
         for attempt in range(self._retries + 1):
             await self._limit()
             try:
@@ -155,6 +181,7 @@ class BattleViveClient:
         raise ApiError("Upstream is temporarily unavailable.")
 
     async def _limit(self) -> None:
+        """Wait for capacity under the credential-wide request limit."""
         async with self._lock:
             now = self._clock()
             self._request_times[:] = [item for item in self._request_times if now - item < 60]
@@ -167,12 +194,14 @@ class BattleViveClient:
         await self._limit()
 
     async def _sleep_for(self, delay: float) -> None:
+        """Invoke the configured synchronous or asynchronous sleep hook."""
         result = self._sleep(delay)
         if result is not None:
             await result
 
     @staticmethod
     def _ttl(path: str, headers: Mapping[str, str]) -> int:
+        """Resolve a response cache lifetime from headers and route defaults."""
         match = _CACHE_CONTROL_MAX_AGE.search(headers.get("Cache-Control", ""))
         if match:
             return int(match.group(1))
@@ -183,11 +212,13 @@ class BattleViveClient:
 
     @staticmethod
     def _retry_delay(attempt: int, headers: Mapping[str, str]) -> float:
+        """Calculate a bounded server-directed or exponential retry delay."""
         try: return min(float(headers.get("Retry-After", "")), 10)
         except ValueError: return min(2 ** attempt + random.uniform(0, 0.25), 10)
 
     @staticmethod
     def _normalize(path: str, body: Any) -> dict[str, Any]:
+        """Validate and normalize a response for its fixed API route."""
         if path.endswith("/markdown"):
             if not isinstance(body, str) or not body:
                 raise ApiError("Upstream response did not match its expected guide markdown schema.")
@@ -236,6 +267,7 @@ class BattleViveClient:
 
 
 def _integer(value: Any, *, minimum: int | None = None) -> int | None:
+    """Return an integer value without accepting booleans."""
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
@@ -248,6 +280,7 @@ def _integer(value: Any, *, minimum: int | None = None) -> int | None:
 
 
 def _normalize_record(record: dict[str, Any], label: str, *, require_member: bool = False) -> None:
+    """Validate and normalize an upstream record."""
     for key in ("member_number", "memberNumber", "number", "id", "season_rating", "rating", "mmr", "position", "wins", "losses"):
         if key in record:
             value = _integer(record[key], minimum=1 if key in {"member_number", "memberNumber", "number", "id", "position"} else 0)
@@ -261,6 +294,7 @@ def _normalize_record(record: dict[str, Any], label: str, *, require_member: boo
 
 
 def _normalize_collection(record: dict[str, Any], key: str, label: str, *, alternate: str | None = None) -> None:
+    """Validate and normalize an upstream record collection."""
     actual_key = key if key in record else alternate
     values = record.get(actual_key) if actual_key is not None else None
     if not isinstance(values, list) or not all(isinstance(item, dict) for item in values):

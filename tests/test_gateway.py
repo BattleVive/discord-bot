@@ -22,20 +22,24 @@ from battlevive_gateway.gateway_bot import create_bot
 
 
 def test_unavailable_features_have_one_concise_response() -> None:
+    """Verify that unavailable features have one concise response."""
     assert TEMPORARILY_UNAVAILABLE == "This feature is temporarily unavailable."
 
 
 def test_gateway_exposes_a_configured_stdout_logger() -> None:
+    """Verify that gateway exposes a configured stdout logger."""
     assert gateway.logger.name == "bot"
 
 
 def test_administrator_diagnostics_bypass_channel_rules() -> None:
+    """Verify that administrator diagnostics bypass channel rules."""
     assert bypasses_channel_rules("config guide-forum") is True
     assert bypasses_channel_rules("debug upstream") is True
     assert bypasses_channel_rules("refresh") is False
 
 
 def test_publication_channel_validators_require_the_bot_permissions() -> None:
+    """Verify that publication channel validators require the bot permissions."""
     guild = SimpleNamespace(me=object())
     permissions = SimpleNamespace(
         view_channel=True, send_messages=True, attach_files=True, embed_links=True, read_message_history=True,
@@ -58,6 +62,7 @@ def test_publication_channel_validators_require_the_bot_permissions() -> None:
 
 
 def test_gateway_rejects_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that gateway rejects API key."""
     for name, value in {
         "DISCORD_TOKEN": "token", "DATABASE_URL": "postgresql://example",
         "UPSTREAM_DATA_URL": "http://upstream", "IMAGE_RENDERER_URL": "http://renderer",
@@ -69,12 +74,14 @@ def test_gateway_rejects_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_development_guild_id_requires_positive_snowflake(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that development guild ID requires positive snowflake."""
     monkeypatch.setenv("DISCORD_COMMAND_GUILD_ID", "not-a-snowflake")
     with pytest.raises(RuntimeError, match="positive snowflake"):
         command_guild_id()
 
 
 def test_gateway_keeps_incomplete_commands_registered_as_unavailable() -> None:
+    """Verify that gateway keeps incomplete commands registered as unavailable."""
     bot = create_bot()
     names = {command.name for command in bot.tree.get_commands()}
     assert {"refresh", "rank", "create_roles", "config", "debug"} <= names
@@ -95,34 +102,44 @@ def test_gateway_keeps_incomplete_commands_registered_as_unavailable() -> None:
 async def test_create_roles_uses_the_latest_config_and_handles_a_concurrent_link_update(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Verify that create roles uses the latest config and handles a concurrent link update."""
     import battlevive_gateway.gateway_bot as gateway_bot
 
     class Member:
+        """Provide a member test double."""
         guild_permissions = SimpleNamespace(manage_roles=True)
         id = 99
 
     class Connection:
+        """Provide a connection test double."""
         def __init__(self, version: int) -> None:
+            """Initialize the connection instance."""
             self.version = version
             self.update_versions: list[int] = []
 
         async def fetchrow(self, query: str, *_: object) -> dict[str, int] | None:
+            """Provide fetchrow behavior for the test scenario."""
             return {"version": self.version, "guide_notification_role_id": None} if "SELECT" in query else None
 
         async def execute(self, query: str, *args: object) -> str:
+            """Provide execute behavior for the test scenario."""
             if query.startswith("UPDATE guild_config"):
                 self.update_versions.append(int(args[1]))
                 return "UPDATE 0"
             return "INSERT 0 1"
 
     class Acquire:
+        """Provide a acquire test double."""
         def __init__(self, connection: Connection) -> None:
+            """Initialize the acquire instance."""
             self.connection = connection
 
         async def __aenter__(self) -> Connection:
+            """Enter the asynchronous context manager."""
             return self.connection
 
         async def __aexit__(self, *_: object) -> None:
+            """Exit the asynchronous context manager."""
             return None
 
     initial, current = Connection(1), Connection(2)
@@ -168,6 +185,7 @@ async def test_refresh_defers_before_running_integrations() -> None:
 
 @pytest.mark.asyncio
 async def test_refresh_requires_manage_server_before_starting_work() -> None:
+    """Verify that refresh requires manage server before starting work."""
     bot = create_bot()
     refresh = next(command for command in bot.tree.get_commands() if command.name == "refresh")
     interaction = type("Interaction", (), {
@@ -188,11 +206,13 @@ async def test_refresh_requires_manage_server_before_starting_work() -> None:
 async def test_refresh_enforces_a_ten_second_cooldown_per_guild(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Verify that refresh enforces a ten second cooldown per guild."""
     bot = create_bot()
     refresh = next(command for command in bot.tree.get_commands() if command.name == "refresh")
     monkeypatch.setattr("battlevive_gateway.gateway_bot.time.monotonic", lambda: 100.0)
 
     def interaction(guild_id: int) -> object:
+        """Provide interaction behavior for the test scenario."""
         return type("Interaction", (), {
             "guild_id": guild_id,
             "user": type("Member", (), {"guild_permissions": type("Permissions", (), {"manage_guild": True})()})(),
@@ -219,32 +239,45 @@ async def test_refresh_enforces_a_ten_second_cooldown_per_guild(
 
 @pytest.mark.asyncio
 async def test_rank_uses_saved_member_number_and_renderer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that rank uses saved member number and renderer."""
     bot = create_bot()
     rank = next(command for command in bot.tree.get_commands() if command.name == "rank")
 
     class Connection:
+        """Provide a connection test double."""
         async def fetchrow(self, query: str, guild_id: int) -> dict[str, int]:
+            """Provide fetchrow behavior for the test scenario."""
             assert "guild_config" in query and guild_id == 1
             return {"rank_cooldown_seconds": 0}
 
         async def fetchval(self, query: str, discord_id: int) -> int:
+            """Provide fetchval behavior for the test scenario."""
             assert "identity_links" in query and discord_id == 99
             return 7
 
     class Acquire:
-        async def __aenter__(self) -> Connection: return Connection()
-        async def __aexit__(self, *_: object) -> None: return None
+        """Provide a acquire test double."""
+        async def __aenter__(self) -> Connection:
+            """Enter the asynchronous context manager."""
+            return Connection()
+        async def __aexit__(self, *_: object) -> None:
+            """Exit the asynchronous context manager."""
+            return None
 
     bot.pool = type("Pool", (), {"acquire": lambda _: Acquire()})()
     calls: list[str] = []
 
     class Upstream:
+        """Provide a upstream test double."""
         async def get_result(self, path: str, *, require_fresh: bool) -> object:
+            """Provide get result behavior for the test scenario."""
             calls.append(path)
             return type("Result", (), {"data": {"player": {"name": "Alpha", "mmr": 2000, "rank": "Gold", "wins": 4, "losses": 1}}})()
 
     class Renderer:
+        """Provide a renderer test double."""
         async def render_rank(self, model: dict[str, object]) -> bytes:
+            """Provide render rank behavior for the test scenario."""
             assert model["rank_next"] == "Platinum"
             return b"\x89PNG\r\n\x1a\n"
 
@@ -265,17 +298,25 @@ async def test_rank_uses_saved_member_number_and_renderer(monkeypatch: pytest.Mo
 
 @pytest.mark.asyncio
 async def test_rank_enforces_the_configured_guild_cooldown() -> None:
+    """Verify that rank enforces the configured guild cooldown."""
     bot = create_bot()
     rank = next(command for command in bot.tree.get_commands() if command.name == "rank")
 
     class Connection:
+        """Provide a connection test double."""
         async def fetchrow(self, query: str, guild_id: int) -> dict[str, int]:
+            """Provide fetchrow behavior for the test scenario."""
             assert "guild_config" in query and guild_id == 1
             return {"rank_cooldown_seconds": 30}
 
     class Acquire:
-        async def __aenter__(self) -> Connection: return Connection()
-        async def __aexit__(self, *_: object) -> None: return None
+        """Provide a acquire test double."""
+        async def __aenter__(self) -> Connection:
+            """Enter the asynchronous context manager."""
+            return Connection()
+        async def __aexit__(self, *_: object) -> None:
+            """Exit the asynchronous context manager."""
+            return None
 
     bot.pool = type("Pool", (), {"acquire": lambda _: Acquire()})()
     bot.upstream, bot.renderer = object(), object()

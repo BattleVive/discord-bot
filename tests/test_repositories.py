@@ -16,26 +16,37 @@ from battlevive_gateway.repositories import PublicationRepository
 
 
 class FakeConnection:
+    """Provide a fake connection test double."""
     def __init__(self, result: str = "UPDATE 1") -> None:
+        """Initialize the fake connection instance."""
         self.result = result
         self.calls: list[tuple[str, tuple[object, ...]]] = []
 
     async def execute(self, query: str, *args: object) -> str:
+        """Provide execute behavior for the test scenario."""
         self.calls.append((query, args))
         return self.result
 
     async def fetchval(self, _query: str, *_args: object) -> object:
+        """Provide fetchval behavior for the test scenario."""
         return None
 
     def transaction(self) -> object:
+        """Provide transaction behavior for the test scenario."""
         class Transaction:
-            async def __aenter__(self) -> None: return None
-            async def __aexit__(self, *_: object) -> None: return None
+            """Provide a transaction test double."""
+            async def __aenter__(self) -> None:
+                """Enter the asynchronous context manager."""
+                return None
+            async def __aexit__(self, *_: object) -> None:
+                """Exit the asynchronous context manager."""
+                return None
         return Transaction()
 
 
 @pytest.mark.asyncio
 async def test_configuration_update_is_version_checked_and_atomic() -> None:
+    """Verify that configuration update is version checked and atomic."""
     connection = FakeConnection()
     repository = GuildConfigRepository(connection)
 
@@ -50,6 +61,7 @@ async def test_configuration_update_is_version_checked_and_atomic() -> None:
 
 @pytest.mark.asyncio
 async def test_configuration_update_reports_concurrent_write() -> None:
+    """Verify that configuration update reports concurrent write."""
     repository = GuildConfigRepository(FakeConnection("UPDATE 0"))
     with pytest.raises(ConcurrentUpdateError):
         await repository.update(42, 3, {"debug_commands_enabled": True}, updated_by=9)
@@ -57,6 +69,7 @@ async def test_configuration_update_reports_concurrent_write() -> None:
 
 @pytest.mark.asyncio
 async def test_identity_binding_uses_both_unique_columns() -> None:
+    """Verify that identity binding uses both unique columns."""
     connection = FakeConnection()
     repository = IdentityRepository(connection)
     await repository.bind(100, 200, "manual")
@@ -69,6 +82,7 @@ async def test_identity_binding_uses_both_unique_columns() -> None:
 
 @pytest.mark.asyncio
 async def test_identity_binding_returns_false_when_discord_id_unique_constraint_races() -> None:
+    """Verify that identity binding returns false when Discord ID unique constraint races."""
     connection = FakeConnection()
     connection.execute = AsyncMock(side_effect=["SELECT 1", "SELECT 1", asyncpg.UniqueViolationError()])
 
@@ -77,6 +91,7 @@ async def test_identity_binding_returns_false_when_discord_id_unique_constraint_
 
 @pytest.mark.asyncio
 async def test_command_rule_upsert_and_created_role_ownership_are_scoped_to_guild() -> None:
+    """Verify that command rule upsert and created role ownership are scoped to guild."""
     connection = FakeConnection()
     await RuleRepository(connection).set(7, "leaderboard", 8, True)
     await RoleRepository(connection).claim(7, "guide", "updates", 9)
@@ -88,8 +103,11 @@ async def test_command_rule_upsert_and_created_role_ownership_are_scoped_to_guil
 
 @pytest.mark.asyncio
 async def test_global_command_rule_applies_when_no_command_specific_rule_exists() -> None:
+    """Verify that global command rule applies when no command specific rule exists."""
     class RuleConnection(FakeConnection):
+        """Provide a rule connection test double."""
         async def fetchval(self, query: str, *_args: object) -> object:
+            """Provide fetchval behavior for the test scenario."""
             if "command_name=$2" in query:
                 return None
             if "command_name='*'" in query:
@@ -101,6 +119,7 @@ async def test_global_command_rule_applies_when_no_command_specific_rule_exists(
 
 @pytest.mark.asyncio
 async def test_publication_reads_include_fingerprint_for_idempotent_reconciliation() -> None:
+    """Verify that publication reads include fingerprint for idempotent reconciliation."""
     connection = FakeConnection()
     connection.fetch = __import__("unittest.mock").mock.AsyncMock(return_value=[])
 
@@ -111,6 +130,7 @@ async def test_publication_reads_include_fingerprint_for_idempotent_reconciliati
 
 @pytest.mark.asyncio
 async def test_publication_reads_decode_json_metadata_for_guide_reconciliation() -> None:
+    """Verify that publication reads decode JSON metadata for guide reconciliation."""
     connection = FakeConnection()
     connection.fetch = __import__("unittest.mock").mock.AsyncMock(return_value=[{
         "publication_key": "guide:4", "channel_id": 10, "message_id": None,

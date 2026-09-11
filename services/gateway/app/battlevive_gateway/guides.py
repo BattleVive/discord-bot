@@ -25,14 +25,17 @@ _INLINE_CODE = re.compile(r"(`+[^`\n]*`+)")
 
 
 def _emoji_key(value: str) -> str:
+    """Build the custom emoji key for a Battlerite image."""
     return re.sub(r"[^a-z0-9]+", "_", value.casefold()).strip("_")
 
 
 def _champion_emoji_key(value: str) -> str:
+    """Build the custom emoji key for a champion image."""
     return _emoji_key(value).replace("_", "")
 
 
 def _emoji_key_from_url(url: str) -> str | None:
+    """Extract a custom emoji key from an asset URL."""
     parts = urlparse(url).path.strip("/").split("/")
     if len(parts) == 4 and parts[:3] == ["images", "champions", "icons"]:
         return _champion_emoji_key(parts[-1].removesuffix(".png"))
@@ -42,12 +45,15 @@ def _emoji_key_from_url(url: str) -> str | None:
 
 
 def _emoji_for_url(url: str, emoji_lookup: Mapping[str, str]) -> str:
+    """Resolve an asset URL to a configured Discord emoji."""
     key = _emoji_key_from_url(url)
     return emoji_lookup.get(key, f":{key}:") if key else url
 
 
 def _rewrite_image_urls(segment: str, emoji_lookup: Mapping[str, str]) -> str:
+    """Replace known Battlerite image URLs with Discord emoji markup."""
     def replace(match: re.Match[str]) -> str:
+        """Replace a matched asset URL with its Discord representation."""
         following = segment[match.end()] if match.end() < len(segment) else ""
         separator = " " if following and not following.isspace() and following != "!" else ""
         return _emoji_for_url(match.group(1).strip("<>"), emoji_lookup) + separator
@@ -85,6 +91,7 @@ def normalize_discord_markdown(markdown: str, emoji_lookup: Mapping[str, str] | 
 
 
 def champion_icon_url(champion: str | None) -> str | None:
+    """Return the icon URL for a guide's champion."""
     if not champion:
         return None
     asset_name = CHAMPION_ICON_ASSET_NAMES.get(champion, re.sub(r"\s+", "", champion))
@@ -106,6 +113,7 @@ def guide_fingerprint(record: Mapping[str, object]) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class Guide:
+    """Represent guide data."""
     number: int
     title: str
     markdown: str | None
@@ -116,16 +124,20 @@ class Guide:
 
 @dataclass(frozen=True, slots=True)
 class GuidePublication:
+    """Represent guide publication data."""
     thread_id: int
     message_ids: tuple[int, ...]
 
 
 class GuideReconciler:
+    """Reconcile guide publications with upstream state."""
     def __init__(self, publications: Any, discord: Any) -> None:
+        """Initialize the guide reconciler instance."""
         self._publications = publications
         self._discord = discord
 
     async def reconcile(self, guild_id: int, guides: list[Guide]) -> None:
+        """Reconcile desired guides with their tracked publications."""
         existing = {str(row["publication_key"]): row for row in await self._publications.list_for_feature(guild_id, "guide")}
         desired = {f"guide:{guide.number}": guide for guide in guides}
         for key, guide in desired.items():
@@ -151,6 +163,7 @@ class DiscordGuidePublisher:
 
     def __init__(self, bot: discord.Client, guild_id: int, forum_channel_id: int,
                  *, delete_on_removal: bool = False, emoji_lookup: Mapping[str, str] | None = None) -> None:
+        """Initialize the Discord guide publisher instance."""
         self._bot = bot
         self._guild_id = guild_id
         self._forum_channel_id = forum_channel_id
@@ -158,6 +171,7 @@ class DiscordGuidePublisher:
         self._emoji_lookup = emoji_lookup or {}
 
     async def create_or_update(self, guide: Guide, prior: dict[str, object] | None) -> GuidePublication:
+        """Create a guide thread or update its existing messages."""
         guild = self._bot.get_guild(self._guild_id)
         if guild is None:
             raise RuntimeError("configured guild is unavailable")
@@ -196,6 +210,7 @@ class DiscordGuidePublisher:
 
     async def _replace(self, thread: discord.Thread, chunks: list[str], embed: discord.Embed,
                        stored_ids: object) -> GuidePublication:
+        """Replace a guide thread's tracked messages with new content."""
         ids = [message_id for message_id in stored_ids if isinstance(message_id, int)] if isinstance(stored_ids, list) else []
         managed = [thread.get_partial_message(message_id) for message_id in ids]
         updated: list[int] = []
@@ -225,6 +240,7 @@ class DiscordGuidePublisher:
         return GuidePublication(thread.id, tuple(updated))
 
     def _guide_embed(self, guide: Guide) -> discord.Embed:
+        """Build the Discord embed for a guide."""
         champion_emoji = self._emoji_lookup.get(_champion_emoji_key(guide.champion or ""))
         title = f"{champion_emoji} {guide.title}" if champion_emoji else guide.title
         embed = discord.Embed(title=title, url=guide.url)
@@ -233,6 +249,7 @@ class DiscordGuidePublisher:
         return embed
 
     async def archive(self, thread_id: int) -> None:
+        """Archive a guide's tracked Discord thread."""
         try:
             channel = await self._bot.fetch_channel(thread_id)
         except discord.NotFound:
@@ -257,6 +274,7 @@ async def retire_relocated_thread(thread: Any, forum_id: int, *, delete_on_remov
 
 
 def _guide_chunks(markdown: str, *, limit: int = 2_000) -> list[str]:
+    """Split guide Markdown into Discord-sized message chunks."""
     if not markdown:
         return [""]
     chunks: list[str] = []
@@ -337,30 +355,36 @@ class GuideService:
     """Periodically reconcile every configured guide forum without persistent jobs."""
 
     def __init__(self, bot: discord.Client, pool: Any, upstream: Any, *, interval: float = 300.0) -> None:
+        """Initialize the guide service instance."""
         self._bot, self._pool, self._upstream, self._interval = bot, pool, upstream, interval
         self._requested = asyncio.Event()
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
+        """Start the periodic guide reconciliation worker."""
         if self._task is None:
             self._task = asyncio.create_task(self._run(), name="guide-publisher")
             self.request_reconciliation()
 
     async def stop(self) -> None:
+        """Stop the periodic guide reconciliation worker."""
         if self._task is not None:
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
             self._task = None
 
     def request_reconciliation(self) -> None:
+        """Wake the worker for an immediate reconciliation pass."""
         self._requested.set()
 
     async def reconcile_guild(self, guild_id: int) -> bool:
+        """Reconcile guides for one configured guild."""
         async with self._lock:
             return await sync_configured_guides(self._bot, self._pool, self._upstream, guild_id)
 
     async def reconcile_all(self) -> None:
+        """Reconcile guides for every configured guild."""
         from .repositories import GuildConfigRepository
 
         async with self._lock:
@@ -378,6 +402,7 @@ class GuideService:
                     logger.exception("Guide reconciliation failed for guild %s", guild_id)
 
     async def _run(self) -> None:
+        """Run reconciliation until the service is stopped."""
         while True:
             try:
                 await asyncio.wait_for(self._requested.wait(), timeout=self._interval)

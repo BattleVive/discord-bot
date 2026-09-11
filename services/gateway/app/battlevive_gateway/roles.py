@@ -14,10 +14,12 @@ REQUIRED_ROLE_NAMES = (GUIDE_UPDATES_ROLE, *(name for _, name in RANKS))
 
 
 def _rank_name(mmr: int) -> str:
+    """Normalize a Battlevive rank name."""
     return next(name for threshold, name in RANKS if mmr >= threshold)
 
 
 def _safe_role(guild: Any, name: str) -> Any | None:
+    """Return whether an existing Discord role is safe for the bot to manage."""
     role = next((item for item in getattr(guild, "roles", ()) if getattr(item, "name", None) == name), None)
     bot_member = getattr(guild, "me", None)
     if role is None or bot_member is None or getattr(role, "managed", False):

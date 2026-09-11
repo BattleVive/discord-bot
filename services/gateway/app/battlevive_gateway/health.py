@@ -7,6 +7,7 @@ import sys
 def main() -> None:
     # Process liveness is supplied by container execution; this check intentionally
     # avoids network calls so an unavailable optional integration cannot kill gateway.
+    """Run the health command-line entry point."""
     sys.exit(0)
 
 

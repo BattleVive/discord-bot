@@ -12,6 +12,7 @@ from battlevive_gateway.leaderboards import LeaderboardService
 
 @pytest.mark.asyncio
 async def test_automatic_leaderboard_waits_for_discord_guild_cache() -> None:
+    """Verify that automatic leaderboard waits for Discord guild cache."""
     bot = SimpleNamespace(get_guild=lambda _: None)
     publisher = GuildLeaderboardPublisher(bot, object(), object(), object())
 
@@ -22,32 +23,41 @@ async def test_automatic_leaderboard_waits_for_discord_guild_cache() -> None:
 
 @pytest.mark.asyncio
 async def test_automatic_leaderboard_renders_and_publishes_a_configured_channel() -> None:
+    """Verify that automatic leaderboard renders and publishes a configured channel."""
     rendered: list[dict[str, object]] = []
     saved: list[tuple[object, ...]] = []
 
     class Upstream:
+        """Provide a upstream test double."""
         async def get_result(self, path: str, *, require_fresh: bool) -> object:
+            """Provide get result behavior for the test scenario."""
             assert (path, require_fresh) == ("/leaderboard", True)
             return SimpleNamespace(data={"season": "Season 3", "leaderboard": [
                 {"position": 1, "player": "Alpha", "member_number": 7, "rank": "Gold", "mmr": 1200, "wins": 4, "losses": 1},
             ]})
 
     class Renderer:
+        """Provide a renderer test double."""
         async def render_leaderboard(self, model: dict[str, object]) -> bytes:
+            """Provide render leaderboard behavior for the test scenario."""
             rendered.append(model)
             return b"\x89PNG\r\n\x1a\nrendered"
 
     class Publications:
+        """Provide a publications test double."""
         async def list_for_feature(self, *_: object) -> list[dict[str, object]]:
+            """Provide list for feature behavior for the test scenario."""
             return []
 
         async def upsert(self, *args: object) -> None:
+            """Provide upsert behavior for the test scenario."""
             saved.append(args)
 
     message = SimpleNamespace(id=55)
     channel = SimpleNamespace(send=None)
 
     async def send(*, file: object) -> object:
+        """Provide send behavior for the test scenario."""
         assert file.filename == "leaderboard.png"
         return message
 
@@ -65,10 +75,12 @@ async def test_automatic_leaderboard_renders_and_publishes_a_configured_channel(
 
 @pytest.mark.asyncio
 async def test_leaderboard_worker_recovers_after_a_failed_cycle() -> None:
+    """Verify that leaderboard worker recovers after a failed cycle."""
     service = LeaderboardService(object(), object(), object(), object(), interval=0.001)
     calls = 0
 
     async def reconcile() -> None:
+        """Provide reconcile behavior for the test scenario."""
         nonlocal calls
         calls += 1
         if calls == 1:

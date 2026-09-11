@@ -66,6 +66,7 @@ def test_explicit_asset_directory_does_not_evaluate_container_fallback(
 
 
 def make_card(**overrides: object) -> bytes:
+    """Build a rank-card test fixture."""
     arguments: dict[str, object] = {
         "avatar": AVATAR,
         "display_name": "PlayerOne",
@@ -81,6 +82,7 @@ def make_card(**overrides: object) -> bytes:
 
 
 def assert_valid_card(png: bytes) -> None:
+    """Assert that data contains a valid rank-card PNG."""
     assert png.startswith(b"\x89PNG\r\n\x1a\n")
     with Image.open(BytesIO(png)) as image:
         assert image.format == "PNG"
@@ -89,10 +91,12 @@ def assert_valid_card(png: bytes) -> None:
 
 
 def test_build_card_returns_valid_rgb_png() -> None:
+    """Verify that build card returns valid rgb PNG."""
     assert_valid_card(make_card())
 
 
 def test_card_uses_a_normal_border_without_accent_strips() -> None:
+    """Verify that card uses a normal border without accent strips."""
     with Image.open(BytesIO(make_card())) as image:
         assert image.getpixel((0, CARD_H // 2)) == ImageColor.getrgb(C_PANEL_EDGE)
         assert image.getpixel((CARD_W - 1, CARD_H // 2)) == ImageColor.getrgb(
@@ -101,11 +105,13 @@ def test_card_uses_a_normal_border_without_accent_strips() -> None:
 
 
 def test_avatar_has_only_a_crimson_border() -> None:
+    """Verify that avatar has only a crimson border."""
     with Image.open(BytesIO(make_card())) as image:
         assert image.getpixel((22, 30 + 68)) == ImageColor.getrgb(C_CRIMSON)
 
 
 def test_bundled_liberation_mono_weights_load() -> None:
+    """Verify that bundled liberation mono weights load."""
     fonts = _load_fonts()
 
     assert Path(FONT_REGULAR).name == "LiberationMono-Regular.ttf"
@@ -117,6 +123,7 @@ def test_bundled_liberation_mono_weights_load() -> None:
 
 
 def test_rank_styles_cover_every_model_rank_and_expected_icon() -> None:
+    """Verify that rank styles cover every model rank and expected icon."""
     assert RANK_STYLES == EXPECTED_RANK_STYLES
 
     for rank, (filename, _) in EXPECTED_RANK_STYLES.items():
@@ -133,6 +140,7 @@ def test_rank_styles_cover_every_model_rank_and_expected_icon() -> None:
 
 @pytest.mark.parametrize("rank", EXPECTED_RANK_STYLES)
 def test_rank_icons_preserve_aspect_ratio_and_transparency(rank: str) -> None:
+    """Verify that rank icons preserve aspect ratio and transparency."""
     source_path = RANK_ICON_DIR / EXPECTED_RANK_STYLES[rank][0]
     with Image.open(source_path) as source:
         source_ratio = source.width / source.height
@@ -146,6 +154,7 @@ def test_rank_icons_preserve_aspect_ratio_and_transparency(rank: str) -> None:
 
 
 def test_unknown_future_rank_renders_without_an_icon() -> None:
+    """Verify that unknown future rank renders without an icon."""
     assert _rank_icon("Mythic", 32) is None
     assert_valid_card(make_card(rank_current="Mythic", rank_next="Ascendant"))
 
@@ -168,10 +177,12 @@ def test_unknown_future_rank_renders_without_an_icon() -> None:
     ],
 )
 def test_edge_case_cards_render(overrides: dict[str, object]) -> None:
+    """Verify that edge case cards render."""
     assert_valid_card(make_card(**overrides))
 
 
 def test_long_names_are_ellipsized_to_the_available_width() -> None:
+    """Verify that long names are ellipsized to the available width."""
     font = _load_fonts()["name"]
     result = _ellipsize("Player name " * 20, font, 315)
 
@@ -180,6 +191,7 @@ def test_long_names_are_ellipsized_to_the_available_width() -> None:
 
 
 def make_leaderboard_entry(**overrides: object) -> LeaderboardEntry:
+    """Build a leaderboard-entry test fixture."""
     values: dict[str, object] = {
         "place": 1,
         "username": "PlayerOne",
@@ -194,6 +206,7 @@ def make_leaderboard_entry(**overrides: object) -> LeaderboardEntry:
 
 
 def assert_valid_leaderboard_png(png: bytes, size: tuple[int, int]) -> None:
+    """Assert that data contains a valid leaderboard PNG."""
     assert png.startswith(b"\x89PNG\r\n\x1a\n")
     with Image.open(BytesIO(png)) as image:
         assert image.format == "PNG"
@@ -203,6 +216,7 @@ def assert_valid_leaderboard_png(png: bytes, size: tuple[int, int]) -> None:
 
 @pytest.mark.parametrize("count", [0, 1, 50])
 def test_leaderboard_is_one_wide_png_with_a_fixed_row_height(count: int) -> None:
+    """Verify that leaderboard is one wide PNG with a fixed row height."""
     entries = [make_leaderboard_entry(place=index + 1) for index in range(count)]
 
     rendered = build_leaderboard_png(entries, "Spring 2026")
@@ -217,6 +231,7 @@ def test_leaderboard_is_one_wide_png_with_a_fixed_row_height(count: int) -> None
 
 
 def test_leaderboard_uses_fixed_name_rank_and_stat_regions() -> None:
+    """Verify that leaderboard uses fixed name rank and stat regions."""
     entry = make_leaderboard_entry(
         username="A very long username that must be clipped before the rank column",
         rank="BATTLEVIVE",
@@ -241,6 +256,7 @@ def test_leaderboard_uses_fixed_name_rank_and_stat_regions() -> None:
 def test_username_and_rank_labels_share_the_same_baseline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Verify that username and rank labels share the same baseline."""
     positions: dict[str, tuple[tuple[int, int], object]] = {}
     composites: list[tuple[tuple[int, int], tuple[int, int]]] = []
     original_text = ImageDraw.ImageDraw.text
@@ -253,6 +269,7 @@ def test_username_and_rank_labels_share_the_same_baseline(
         *args: object,
         **kwargs: object,
     ) -> None:
+        """Capture text drawing calls for layout assertions."""
         if text in {"1.", "PlayerOne", "Silver", "MMR", "1,500"}:
             positions[text] = (position, kwargs.get("anchor"))
         original_text(draw, position, text, *args, **kwargs)
@@ -263,6 +280,7 @@ def test_username_and_rank_labels_share_the_same_baseline(
         destination: tuple[int, int] = (0, 0),
         source_box: tuple[int, int] = (0, 0),
     ) -> None:
+        """Capture image compositing calls for layout assertions."""
         if destination[0] >= LEADERBOARD_RANK_X:
             composites.append((destination, source.size))
         original_composite(image, source, destination, source_box)
@@ -287,6 +305,7 @@ def test_username_and_rank_labels_share_the_same_baseline(
 
 
 def test_leaderboard_has_one_rounded_outer_frame_and_square_row_separators() -> None:
+    """Verify that leaderboard has one rounded outer frame and square row separators."""
     rendered = build_leaderboard_png(
         [
             make_leaderboard_entry(place=1),
@@ -318,6 +337,7 @@ def test_leaderboard_has_one_rounded_outer_frame_and_square_row_separators() -> 
 
 @pytest.mark.parametrize("rank", [*EXPECTED_RANK_STYLES, "Mythic"])
 def test_wide_leaderboard_supports_known_and_unknown_ranks(rank: str) -> None:
+    """Verify that wide leaderboard supports known and unknown ranks."""
     rendered = build_leaderboard_png([make_leaderboard_entry(rank=rank)], "Season 1")
 
     assert_valid_leaderboard_png(
@@ -327,6 +347,7 @@ def test_wide_leaderboard_supports_known_and_unknown_ranks(rank: str) -> None:
 
 
 def test_wide_leaderboard_fits_long_values_and_zero_matches() -> None:
+    """Verify that wide leaderboard fits long values and zero matches."""
     rendered = build_leaderboard_png(
         [
             make_leaderboard_entry(
@@ -359,6 +380,7 @@ def test_wide_leaderboard_fits_long_values_and_zero_matches() -> None:
 def test_extreme_stat_values_cannot_overflow_their_columns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Verify that extreme stat values cannot overflow their columns."""
     drawn_values: list[tuple[str, ImageFont.FreeTypeFont]] = []
     original_text = ImageDraw.ImageDraw.text
 
@@ -369,6 +391,7 @@ def test_extreme_stat_values_cannot_overflow_their_columns(
         *args: object,
         **kwargs: object,
     ) -> None:
+        """Capture text drawing calls for layout assertions."""
         if "," in text or text.endswith("%"):
             drawn_values.append((text, kwargs["font"]))  # type: ignore[arg-type]
         original_text(draw, position, text, *args, **kwargs)
@@ -393,6 +416,7 @@ def test_extreme_stat_values_cannot_overflow_their_columns(
 
 
 def test_wide_leaderboard_can_redraw_one_row_on_an_existing_complete_image() -> None:
+    """Verify that wide leaderboard can redraw one row on an existing complete image."""
     entries = [
         make_leaderboard_entry(place=1, username="Alpha", mmr=2500),
         make_leaderboard_entry(place=2, username="Beta", mmr=2400),
@@ -458,6 +482,7 @@ def test_wide_leaderboard_can_redraw_one_row_on_an_existing_complete_image() -> 
 
 
 def test_wide_leaderboard_rejects_a_base_image_with_the_wrong_height() -> None:
+    """Verify that wide leaderboard rejects a base image with the wrong height."""
     with pytest.raises(ValueError, match="expected"):
         build_leaderboard_png(
             [make_leaderboard_entry()],

@@ -9,6 +9,7 @@ RANKS = ((8000, "BATTLEVIVE"), (5500, "Diamond"), (3500, "Platinum"),
 
 
 def rank_render_model(player: dict[str, Any]) -> dict[str, object]:
+    """Build the renderer model for a player's rank card."""
     name, rank = player.get("name"), player.get("rank")
     mmr, wins, losses = player.get("mmr"), player.get("wins"), player.get("losses")
     if not isinstance(name, str) or not isinstance(rank, str):

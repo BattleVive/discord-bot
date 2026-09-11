@@ -10,6 +10,7 @@ formatter = logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s
 
 
 def _configure_stdout_logger(name: str, level_name: str) -> logging.Logger:
+    """Configure a process logger that writes structured records to stdout."""
     configured_logger = logging.getLogger(name)
     configured_logger.setLevel(
         getattr(logging, os.getenv(level_name, "INFO").upper(), logging.INFO)

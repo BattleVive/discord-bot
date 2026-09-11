@@ -12,7 +12,9 @@ from battlevive_gateway.integrations import UpstreamDataClient
 
 @pytest.mark.asyncio
 async def test_gateway_translates_internal_transport_failure_to_unavailable() -> None:
+    """Verify that gateway translates internal transport failure to unavailable."""
     async def request(_: str) -> object:
+        """Provide request behavior for the test scenario."""
         raise TimeoutError()
     client = UpstreamDataClient("http://upstream-data:8081", request=request)
     with pytest.raises(IntegrationUnavailable):
@@ -21,9 +23,11 @@ async def test_gateway_translates_internal_transport_failure_to_unavailable() ->
 
 @pytest.mark.asyncio
 async def test_gateway_client_preserves_freshness_and_requests_fresh_data_for_mutations() -> None:
+    """Verify that gateway client preserves freshness and requests fresh data for mutations."""
     paths: list[str] = []
 
     async def request(path: str) -> object:
+        """Provide request behavior for the test scenario."""
         paths.append(path)
         return {"data": {"count": 3}, "freshness": "fresh", "age_seconds": 0}
 
@@ -37,9 +41,11 @@ async def test_gateway_client_preserves_freshness_and_requests_fresh_data_for_mu
 
 @pytest.mark.asyncio
 async def test_renderer_client_returns_png_bytes_without_a_shared_volume() -> None:
+    """Verify that renderer client returns PNG bytes without a shared volume."""
     calls: list[tuple[str, dict[str, object]]] = []
 
     async def request(path: str, model: dict[str, object]) -> tuple[str, bytes]:
+        """Provide request behavior for the test scenario."""
         calls.append((path, model))
         return "image/png", b"\x89PNG\r\n\x1a\n"
 
@@ -50,8 +56,11 @@ async def test_renderer_client_returns_png_bytes_without_a_shared_volume() -> No
 
 @pytest.mark.asyncio
 async def test_upstream_diagnostics_redact_unexpected_sensitive_failures() -> None:
+    """Verify that upstream diagnostics redact unexpected sensitive failures."""
     class FailingUpstream:
+        """Provide a failing upstream test double."""
         async def get_result(self, _: str, *, require_fresh: bool) -> object:
+            """Provide get result behavior for the test scenario."""
             assert require_fresh is True
             raise IntegrationUnavailable("Authorization: Bearer secret-value")
 
@@ -64,17 +73,22 @@ async def test_upstream_diagnostics_redact_unexpected_sensitive_failures() -> No
 
 @pytest.mark.asyncio
 async def test_upstream_diagnostics_include_each_catalogued_guide() -> None:
+    """Verify that upstream diagnostics include each catalogued guide."""
     calls: list[str] = []
 
     class Result:
+        """Provide a result test double."""
         freshness = "fresh"
         age_seconds = 0
 
         def __init__(self, data: dict[str, object]) -> None:
+            """Initialize the result instance."""
             self.data = data
 
     class Upstream:
+        """Provide a upstream test double."""
         async def get_result(self, path: str, *, require_fresh: bool) -> Result:
+            """Provide get result behavior for the test scenario."""
             assert require_fresh is True
             calls.append(path)
             if path == "/guides":
@@ -98,6 +112,7 @@ async def test_upstream_diagnostics_include_each_catalogued_guide() -> None:
 async def test_upstream_diagnostics_caps_detail_expansion_and_reports_omitted_records(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Verify that upstream diagnostics caps detail expansion and reports omitted records."""
     import battlevive_gateway.diagnostics as diagnostics
 
     monkeypatch.setattr(diagnostics, "_MAX_GUIDE_EXPANSIONS", 1)
@@ -105,14 +120,18 @@ async def test_upstream_diagnostics_caps_detail_expansion_and_reports_omitted_re
     calls: list[str] = []
 
     class Result:
+        """Provide a result test double."""
         freshness = "fresh"
         age_seconds = 0
 
         def __init__(self, data: dict[str, object]) -> None:
+            """Initialize the result instance."""
             self.data = data
 
     class Upstream:
+        """Provide a upstream test double."""
         async def get_result(self, path: str, *, require_fresh: bool) -> Result:
+            """Provide get result behavior for the test scenario."""
             calls.append(path)
             if path == "/guides":
                 return Result({"guides": [{"number": 1}, {"number": 2}]})

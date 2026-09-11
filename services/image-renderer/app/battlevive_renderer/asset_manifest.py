@@ -21,16 +21,19 @@ MAP_MANIFEST_PATH = ASSETS_DIR / "maps" / "manifest.json"
 
 @dataclass(frozen=True)
 class MapAsset:
+    """Represent map asset data."""
     name: str
     variant: str
     path: Path
 
 
 def normalize_asset_name(value: str) -> str:
+    """Normalize a map name for asset lookup."""
     return re.sub(r"[^a-z0-9]+", "", value.casefold())
 
 
 def _load_manifest(path: Path) -> list[dict[str, Any]]:
+    """Load and validate the map asset manifest."""
     with path.open(encoding="utf-8") as manifest_file:
         data = json.load(manifest_file)
     maps = data.get("maps") if isinstance(data, dict) else None

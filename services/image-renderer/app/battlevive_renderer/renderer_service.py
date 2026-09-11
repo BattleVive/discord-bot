@@ -33,6 +33,7 @@ async def render_model(payload: object, renderer: Renderer) -> bytes:
     worker = asyncio.create_task(asyncio.to_thread(renderer, payload))
 
     def release_slot(completed: asyncio.Task[bytes]) -> None:
+        """Release the worker slot after rendering finishes."""
         try:
             completed.exception()
         except asyncio.CancelledError:
@@ -49,10 +50,16 @@ async def render_model(payload: object, renderer: Renderer) -> bytes:
 
 
 def create_app() -> web.Application:
+    """Create the renderer HTTP application and its fixed routes."""
     app = web.Application(client_max_size=64 * 1024)
-    async def health(_: web.Request) -> web.Response: return web.json_response({"status": "ok"})
-    async def ready(_: web.Request) -> web.Response: return web.json_response({"status": "ready"})
+    async def health(_: web.Request) -> web.Response:
+        """Report renderer process health."""
+        return web.json_response({"status": "ok"})
+    async def ready(_: web.Request) -> web.Response:
+        """Report whether the renderer can accept work."""
+        return web.json_response({"status": "ready"})
     async def render(request: web.Request, renderer: Renderer) -> web.Response:
+        """Validate a request and invoke its bounded renderer."""
         try:
             payload = await request.json()
             image = await render_model(payload, renderer)
@@ -63,8 +70,12 @@ def create_app() -> web.Application:
         except (ValueError, TypeError):
             return web.json_response({"error": "invalid render model"}, status=400)
         return web.Response(body=image, content_type="image/png")
-    async def rank(request: web.Request) -> web.Response: return await render(request, render_rank)
-    async def leaderboard(request: web.Request) -> web.Response: return await render(request, render_leaderboard)
+    async def rank(request: web.Request) -> web.Response:
+        """Render a rank-card request."""
+        return await render(request, render_rank)
+    async def leaderboard(request: web.Request) -> web.Response:
+        """Render a leaderboard request."""
+        return await render(request, render_leaderboard)
     app.router.add_get("/health", health)
     app.router.add_get("/ready", ready)
     app.router.add_post("/render/rank", rank)

@@ -12,11 +12,13 @@ Operation = Callable[[], Awaitable[None]]
 
 @dataclass(frozen=True, slots=True)
 class RefreshReport:
+    """Summarize completed, unavailable, and failed refresh operations."""
     completed: tuple[str, ...]
     unavailable: tuple[str, ...]
     failed: tuple[str, ...]
 
     def message(self) -> str:
+        """Format the refresh summary for a Discord response."""
         parts = []
         if self.completed: parts.append("Completed: " + ", ".join(self.completed))
         if self.unavailable: parts.append("Unavailable: " + ", ".join(self.unavailable))
@@ -25,10 +27,13 @@ class RefreshReport:
 
 
 class RefreshCoordinator:
+    """Coordinate refresh operations."""
     def __init__(self, operations: dict[str, Operation]) -> None:
+        """Initialize the refresh coordinator instance."""
         self._operations = operations
 
     async def run(self) -> RefreshReport:
+        """Run each refresh operation and classify its outcome."""
         completed: list[str] = []
         unavailable: list[str] = []
         failed: list[str] = []

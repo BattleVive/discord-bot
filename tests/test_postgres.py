@@ -21,6 +21,7 @@ SCHEMA = Path(__file__).resolve().parents[1] / "init-db" / "01_schema.sql"
 
 @pytest.fixture
 async def connection() -> asyncpg.Connection:
+    """Provide a PostgreSQL connection for integration tests."""
     url = os.environ.get("TEST_DATABASE_URL")
     if not url:
         pytest.skip("TEST_DATABASE_URL is required for PostgreSQL integration tests")
@@ -39,6 +40,7 @@ async def connection() -> asyncpg.Connection:
 async def test_repositories_persist_rules_roles_publications_and_identity_uniqueness(
     connection: asyncpg.Connection,
 ) -> None:
+    """Verify that repositories persist rules roles publications and identity uniqueness."""
     guild = GuildConfigRepository(connection)
     await guild.ensure(9_001, 101)
     assert await guild.update(9_001, 1, {"leaderboard_limit": 25}, updated_by=102) == 2
