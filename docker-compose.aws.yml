@@ -7,17 +7,10 @@ x-aws-logging: &aws-logging
     tag: "{{.Name}}"
 
 services:
-  postgres:
-    environment:
-      POSTGRES_PASSWORD: null
-      POSTGRES_PASSWORD_FILE: /run/battlevive/postgres-password
-    secrets: []
-    volumes:
-      - ${BATTLEVIVE_POSTGRES_DATA_PATH:-/var/lib/battlevive/postgresql}:/var/lib/postgresql:Z
-      - /run/battlevive:/run/battlevive:ro
-    logging: *aws-logging
-
   migration:
+    image: ${BATTLEVIVE_GATEWAY_IMAGE:?}
+    command: ["python3", "-m", "battlevive_gateway.migrations"]
+    depends_on: []
     environment:
       DATABASE_URL: null
       DATABASE_URL_FILE: /run/battlevive/database-url
@@ -26,17 +19,23 @@ services:
     logging: *aws-logging
 
   gateway:
+    image: ${BATTLEVIVE_GATEWAY_IMAGE:?}
+    depends_on: []
     environment:
       DATABASE_URL: null
       DATABASE_URL_FILE: /run/battlevive/database-url
       DISCORD_TOKEN: null
       DISCORD_TOKEN_FILE: /run/battlevive/discord-token
+      UPSTREAM_DATA_URL: http://upstream-data:8081
+      IMAGE_RENDERER_URL: http://image-renderer:8082
     volumes:
       - /run/battlevive:/run/battlevive:ro
     logging: *aws-logging
 
   upstream-data:
+    image: ${BATTLEVIVE_UPSTREAM_IMAGE:?}
     logging: *aws-logging
 
   image-renderer:
+    image: ${BATTLEVIVE_RENDERER_IMAGE:?}
     logging: *aws-logging

@@ -1,0 +1,4 @@
+# The slot creates and owns its own VPC and subnets.
+operations_bucket = "battlevive-operations-replace"
+
+# Supply a manually generated staging Discord token and database_url securely.

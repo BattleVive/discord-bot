@@ -1,0 +1,5 @@
+# The slot creates and owns its own VPC and subnets.
+operations_bucket = "battlevive-operations-replace"
+
+# Supply through a secure CI environment or an ignored local tfvars file.
+# discord_token and database_url are intentionally absent.

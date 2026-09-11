@@ -4,7 +4,9 @@ set -euo pipefail
 AWS_CLI=${AWS_CLI:-aws}
 AWS_REGION_NAME=${AWS_REGION_NAME:-eu-north-1}
 BATTLEVIVE_SECRET_DIR=${BATTLEVIVE_SECRET_DIR:-/run/battlevive}
-PARAMETER_PREFIX=${PARAMETER_PREFIX:-/battlevive/production/secrets}
+BATTLEVIVE_SLOT=${BATTLEVIVE_SLOT:?BATTLEVIVE_SLOT must be blue or green}
+[[ $BATTLEVIVE_SLOT == blue || $BATTLEVIVE_SLOT == green ]] || { echo "invalid BATTLEVIVE_SLOT" >&2; exit 2; }
+PARAMETER_PREFIX=${PARAMETER_PREFIX:-/battlevive/$BATTLEVIVE_SLOT/secrets}
 RUNTIME_UID=${RUNTIME_UID:-10001}
 RUNTIME_GID=${RUNTIME_GID:-10001}
 
@@ -14,12 +16,7 @@ if [[ $EUID -ne 0 && ${ALLOW_NON_ROOT_FOR_TESTS:-0} != 1 ]]; then
 fi
 
 secret_names=(
-  database-url
   discord-token
-  supabase-api-key
-  bootstrap-jwt
-  bootstrap-refresh-token
-  postgres-password
 )
 
 if [[ ${ALLOW_NON_ROOT_FOR_TESTS:-0} == 1 && -z ${RUNTIME_GID_TEST_OVERRIDE:-} ]]; then
@@ -33,6 +30,24 @@ cleanup() {
   rm -rf -- "$staging"
 }
 trap cleanup EXIT
+
+database_secret_arn=$("$AWS_CLI" ssm get-parameter \
+  --region "$AWS_REGION_NAME" \
+  --name "/battlevive/$BATTLEVIVE_SLOT/config/database-secret-arn" \
+  --query Parameter.Value --output text)
+database_secret=$("$AWS_CLI" secretsmanager get-secret-value \
+  --region "$AWS_REGION_NAME" --secret-id "$database_secret_arn" \
+  --query SecretString --output text)
+database_url=$(jq -er '
+  (.username | @uri) as $user |
+  (.password | @uri) as $password |
+  (.host | @uri) as $host |
+  (.port // 5432 | tostring) as $port |
+  "postgresql://\($user):\($password)@\($host):\($port)/battlevive"
+' <<<"$database_secret")
+printf '%s' "$database_url" >"$staging/database-url"
+chown "$EUID:$RUNTIME_GID" "$staging/database-url"
+chmod 0640 "$staging/database-url"
 
 for name in "${secret_names[@]}"; do
   "$AWS_CLI" ssm get-parameter \
@@ -58,7 +73,7 @@ done
 chown "$EUID:$RUNTIME_GID" "$BATTLEVIVE_SECRET_DIR"
 chmod 0750 "$BATTLEVIVE_SECRET_DIR"
 
-for name in "${secret_names[@]}"; do
+for name in database-url "${secret_names[@]}"; do
   mv -f -- "$staging/$name" "$BATTLEVIVE_SECRET_DIR/$name"
 done
 

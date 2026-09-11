@@ -3,6 +3,10 @@ output "state_bucket" {
   value       = aws_s3_bucket.state.id
 }
 
-output "backend_key" {
-  value = "battlevive-bot/production.tfstate"
+output "backend_keys" {
+  value = {
+    control = "battlevive-bot/control.tfstate"
+    blue    = "battlevive-bot/blue.tfstate"
+    green   = "battlevive-bot/green.tfstate"
+  }
 }

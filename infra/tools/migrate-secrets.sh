@@ -13,7 +13,6 @@ parameter_names=(
   /battlevive/production/secrets/supabase-api-key
   /battlevive/production/secrets/bootstrap-jwt
   /battlevive/production/secrets/bootstrap-refresh-token
-  /battlevive/production/secrets/postgres-password
 )
 token_parameter_name=/battlevive/production/tokens
 

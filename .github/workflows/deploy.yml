@@ -1,25 +1,27 @@
-name: Deploy by immutable digest
+name: Deploy an immutable slot manifest
 
 on:
-  workflow_call:
+  workflow_dispatch:
     inputs:
-      environment:
+      slot:
+        description: Slot to receive the release
         required: true
-        type: string
-      version:
-        required: true
-        type: string
-      image_digest:
-        required: true
-        type: string
+        type: choice
+        options: [blue, green]
       bundle_key:
+        description: S3 object key for the immutable bundle
         required: true
         type: string
       bundle_checksum:
+        description: SHA-256 of the bundle, without the sha256 prefix
         required: true
         type: string
-      target_selector:
-        description: JSON array of SSM tag targets
+      manifest_key:
+        description: S3 object key for the immutable release manifest
+        required: true
+        type: string
+      manifest_checksum:
+        description: SHA-256 of the manifest, without the sha256 prefix
         required: true
         type: string
 
@@ -28,117 +30,70 @@ permissions:
   id-token: write
 
 concurrency:
-  group: deploy-${{ inputs.environment }}
+  group: deploy-${{ inputs.slot }}
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Deploy ${{ inputs.version }} to ${{ inputs.environment }}
-    environment: ${{ inputs.environment }}
+    environment: deploy-${{ inputs.slot }}
     runs-on: ubuntu-latest
-    timeout-minutes: 7
+    timeout-minutes: 15
     steps:
-      - name: Validate deployment contract
+      - name: Validate immutable deployment inputs
         env:
-          VERSION: ${{ inputs.version }}
-          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          SLOT: ${{ inputs.slot }}
           BUNDLE_KEY: ${{ inputs.bundle_key }}
           BUNDLE_CHECKSUM: ${{ inputs.bundle_checksum }}
-          TARGET_SELECTOR: ${{ inputs.target_selector }}
-          OPERATIONS_BUCKET: ${{ vars.AWS_OPERATIONS_BUCKET }}
-          AWS_REGION: ${{ vars.AWS_REGION }}
+          MANIFEST_KEY: ${{ inputs.manifest_key }}
+          MANIFEST_CHECKSUM: ${{ inputs.manifest_checksum }}
         run: |
-          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$SLOT" == blue || "$SLOT" == green ]]
+          [[ "$BUNDLE_KEY" =~ ^releases/[A-Za-z0-9._/-]+$ && "$BUNDLE_KEY" != *..* ]]
+          [[ "$MANIFEST_KEY" =~ ^releases/[A-Za-z0-9._/-]+$ && "$MANIFEST_KEY" != *..* ]]
           [[ "$BUNDLE_CHECKSUM" =~ ^[0-9a-f]{64}$ ]]
-          [[ -n "$BUNDLE_KEY" && "$BUNDLE_KEY" != /* && "$BUNDLE_KEY" != *..* ]]
-          [[ "$OPERATIONS_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]]
-          [[ "$AWS_REGION" =~ ^[a-z]{2}-[a-z]+-[0-9]+$ ]]
-          jq -e 'type == "array" and length == 2 and all(
-            .[]; (.Key | startswith("tag:")) and
-            (.Values | type == "array" and length == 1 and all(.[]; type == "string" and length > 0))
-          )' <<<"$TARGET_SELECTOR" >/dev/null
-
-      - name: Configure AWS credentials through OIDC
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+          [[ "$MANIFEST_CHECKSUM" =~ ^[0-9a-f]{64}$ ]]
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-
-      - name: Send deployment through SSM
-        id: command
+      - id: command
         env:
-          VERSION: ${{ inputs.version }}
-          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          SLOT: ${{ inputs.slot }}
           BUNDLE_KEY: ${{ inputs.bundle_key }}
           BUNDLE_CHECKSUM: ${{ inputs.bundle_checksum }}
-          TARGET_SELECTOR: ${{ inputs.target_selector }}
-          OPERATIONS_BUCKET: ${{ vars.AWS_OPERATIONS_BUCKET }}
-          AWS_REGION: ${{ vars.AWS_REGION }}
+          MANIFEST_KEY: ${{ inputs.manifest_key }}
+          MANIFEST_CHECKSUM: ${{ inputs.manifest_checksum }}
         run: |
-          parameters="$(jq -cn \
-            --arg environment "${{ inputs.environment }}" \
-            --arg version "$VERSION" \
-            --arg digest "$IMAGE_DIGEST" \
-            --arg key "$BUNDLE_KEY" \
-            --arg checksum "$BUNDLE_CHECKSUM" \
-            --arg operations_bucket "$OPERATIONS_BUCKET" \
-            --arg aws_region "$AWS_REGION" \
-            '{environment: [$environment], version: [$version], imageDigest: [$digest],
-              bundleKey: [$key], bundleChecksum: [$checksum],
-              targetSelector: ["Project=battlevive-bot,Environment=production"],
-              operationsBucket: [$operations_bucket], awsRegion: [$aws_region]}')"
-          command_id="$(aws ssm send-command \
-            --document-name battlevive-production-deploy \
-            --targets "$TARGET_SELECTOR" \
+          parameters=$(jq -cn \
+            --arg bundle_key "$BUNDLE_KEY" \
+            --arg bundle_checksum "$BUNDLE_CHECKSUM" \
+            --arg manifest_key "$MANIFEST_KEY" \
+            --arg manifest_checksum "$MANIFEST_CHECKSUM" \
+            '{bundleKey: [$bundle_key], bundleChecksum: [$bundle_checksum],
+              manifestKey: [$manifest_key], manifestChecksum: [$manifest_checksum]}')
+          command_id=$(aws ssm send-command \
+            --document-name "battlevive-$SLOT-deploy" \
+            --targets "Key=tag:SSMTarget,Values=battlevive-$SLOT" \
             --parameters "$parameters" \
-            --timeout-seconds 300 \
-            --cloud-watch-output-config "CloudWatchOutputEnabled=true,CloudWatchLogGroupName=/battlevive/production/system" \
-            --query 'Command.CommandId' \
-            --output text)"
+            --timeout-seconds 600 \
+            --query 'Command.CommandId' --output text)
           [[ "$command_id" =~ ^[0-9a-f-]+$ ]]
-          echo "command_id=$command_id" >>"$GITHUB_OUTPUT"
-
-      - name: Require successful SSM completion
+          echo "command_id=$command_id" >> "$GITHUB_OUTPUT"
+      - name: Require one successful SSM invocation
         env:
           COMMAND_ID: ${{ steps.command.outputs.command_id }}
         run: |
-          deadline=$((SECONDS + 300))
+          deadline=$((SECONDS + 600))
           while ((SECONDS <= deadline)); do
-            invocations="$(aws ssm list-command-invocations \
-              --command-id "$COMMAND_ID" --details --output json)"
-            count="$(jq '.CommandInvocations | length' <<<"$invocations")"
-            if [[ "$count" -gt 1 ]]; then
-              echo "deployment selector matched more than one instance" >&2
-              exit 1
-            fi
-            status="$(jq -r '.CommandInvocations[0].Status // "Pending"' <<<"$invocations")"
+            invocations=$(aws ssm list-command-invocations --command-id "$COMMAND_ID" --details --output json)
+            count=$(jq '.CommandInvocations | length' <<<"$invocations")
+            [[ "$count" -le 1 ]] || { echo 'slot selector matched more than one instance' >&2; exit 1; }
+            status=$(jq -r '.CommandInvocations[0].Status // "Pending"' <<<"$invocations")
             case "$status" in
               Success) exit 0 ;;
               Pending|InProgress|Delayed) sleep 10 ;;
               *) echo "SSM deployment ended with status: $status" >&2; exit 1 ;;
             esac
           done
-          echo "SSM deployment exceeded the five-minute budget" >&2
+          echo 'SSM deployment exceeded the ten-minute budget' >&2
           exit 1
-
-      - name: Show secret-free SSM failure stage
-        if: ${{ failure() && steps.command.outputs.command_id != '' }}
-        env:
-          COMMAND_ID: ${{ steps.command.outputs.command_id }}
-        run: |
-          instance_id="$(aws ssm list-command-invocations \
-            --command-id "$COMMAND_ID" \
-            --query 'CommandInvocations[0].InstanceId' --output text)"
-          [[ "$instance_id" =~ ^i-[0-9a-f]+$ ]] || {
-            echo "Unable to resolve the instance for failed SSM command: $COMMAND_ID" >&2
-            exit 0
-          }
-          for query in StandardOutputContent StandardErrorContent; do
-            aws ssm get-command-invocation \
-              --command-id "$COMMAND_ID" \
-              --instance-id "$instance_id" \
-              --query "$query" --output text || true
-          done | grep '^BATTLEVIVE_DEPLOY_FAILURE_STAGE=' || true
-          echo "SSM command ID: $COMMAND_ID"
-          echo "Full command output is retained in CloudWatch Logs: /battlevive/production/system"

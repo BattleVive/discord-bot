@@ -14,8 +14,8 @@ REQUIRED = {
     "docker-compose.yml": "compose.yaml",
     "docker-compose.aws.yml": "compose.aws.yaml",
     "scripts/deploy/deploy.sh": "scripts/deploy.sh",
+    "scripts/release/release_manifest.py": "scripts/release/release_manifest.py",
     "infra/host/bin/compose": "bin/compose",
-    "infra/host/scripts/backup.sh": "scripts/backup.sh",
 }
 
 
