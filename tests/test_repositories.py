@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
-
-import asyncpg
 import pytest
 
 from battlevive_gateway.repositories import ConcurrentUpdateError
 from battlevive_gateway.repositories import GuildConfigRepository
-from battlevive_gateway.repositories import IdentityRepository
 from battlevive_gateway.repositories import RoleRepository
 from battlevive_gateway.repositories import RuleRepository
 from battlevive_gateway.repositories import PublicationRepository
@@ -68,28 +64,6 @@ async def test_configuration_update_reports_concurrent_write() -> None:
 
 
 @pytest.mark.asyncio
-async def test_identity_binding_uses_both_unique_columns() -> None:
-    """Verify that identity binding uses both unique columns."""
-    connection = FakeConnection()
-    repository = IdentityRepository(connection)
-    await repository.bind(100, 200, "manual")
-    query, args = connection.calls[-1]
-    assert "ON CONFLICT(member_number)" in query
-    assert args == (100, 200, "manual")
-    lock_calls = [call for call in connection.calls if "pg_advisory_xact_lock" in call[0]]
-    assert [call[1] for call in lock_calls] == [(100,), (200,)]
-
-
-@pytest.mark.asyncio
-async def test_identity_binding_returns_false_when_discord_id_unique_constraint_races() -> None:
-    """Verify that identity binding returns false when Discord ID unique constraint races."""
-    connection = FakeConnection()
-    connection.execute = AsyncMock(side_effect=["SELECT 1", "SELECT 1", asyncpg.UniqueViolationError()])
-
-    assert not await IdentityRepository(connection).bind(100, 200, "manual")
-
-
-@pytest.mark.asyncio
 async def test_command_rule_upsert_and_created_role_ownership_are_scoped_to_guild() -> None:
     """Verify that command rule upsert and created role ownership are scoped to guild."""
     connection = FakeConnection()
@@ -141,3 +115,16 @@ async def test_publication_reads_decode_json_metadata_for_guide_reconciliation()
     rows = await PublicationRepository(connection).list_for_feature(7, "guide")
 
     assert rows[0]["metadata"] == {"message_ids": [12, 13]}
+
+
+@pytest.mark.asyncio
+async def test_publication_feature_cleanup_is_scoped_to_one_guild_and_feature() -> None:
+    """Configuration resets must never clear another guild's managed posts."""
+    connection = FakeConnection()
+
+    await PublicationRepository(connection).delete_feature(7, "guide")
+
+    query, args = connection.calls[0]
+    assert "DELETE FROM discord_publications" in query
+    assert "guild_id=$1 AND feature=$2" in query
+    assert args == (7, "guide")

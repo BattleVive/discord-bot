@@ -10,7 +10,6 @@ from typing import Any
 import discord
 
 from .logs import logger
-from .identity import save_guild_identity_links
 
 
 def _win_rate(wins: int, losses: int) -> int:
@@ -20,7 +19,7 @@ def _win_rate(wins: int, losses: int) -> int:
 
 def _entry(record: dict[str, Any], place: int) -> dict[str, object] | None:
     """Convert an upstream leaderboard row to a render model."""
-    player, rank = record.get("player"), record.get("rank")
+    player, rank = record.get("display_name"), record.get("rank")
     mmr, wins, losses = record.get("mmr"), record.get("wins"), record.get("losses")
     if not isinstance(player, str) or not isinstance(rank, str):
         return None
@@ -33,13 +32,12 @@ def _entry(record: dict[str, Any], place: int) -> dict[str, object] | None:
 class GuildLeaderboardPublisher:
     """Use the renderer HTTP service and persistent publication state, never a shared volume."""
 
-    def __init__(self, bot: discord.Client, upstream: Any, renderer: Any, publications: Any, identities: Any | None = None) -> None:
+    def __init__(self, bot: discord.Client, upstream: Any, renderer: Any, publications: Any) -> None:
         """Initialize the guild leaderboard publisher instance."""
         self._bot = bot
         self._upstream = upstream
         self._renderer = renderer
         self._publications = publications
-        self._identities = identities
 
     async def reconcile_guild(self, config: dict[str, object]) -> bool:
         """Reconcile one guild's automatic leaderboard publication."""
@@ -58,13 +56,12 @@ class GuildLeaderboardPublisher:
         records = result.data.get("leaderboard")
         if not isinstance(records, list):
             raise RuntimeError("upstream leaderboard was invalid")
-        if self._identities is not None:
-            await save_guild_identity_links(guild, records, self._identities)
-            member_numbers = [record.get("member_number") for record in records if isinstance(record, dict)]
-            known = await self._identities.discord_ids([number for number in member_numbers if isinstance(number, int) and not isinstance(number, bool)])
-            guild_members = {int(member.id) for member in getattr(guild, "members", ())}
-            records = [record for record in records if isinstance(record, dict)
-                       and known.get(record.get("member_number")) in guild_members]
+        guild_members = {int(member.id) for member in getattr(guild, "members", ())
+                         if isinstance(getattr(member, "id", None), int)}
+        records = [record for record in records if isinstance(record, dict)
+                   and isinstance(record.get("discord_id"), int)
+                   and not isinstance(record.get("discord_id"), bool)
+                   and record["discord_id"] in guild_members]
         limit = config.get("leaderboard_limit", 10)
         if isinstance(limit, bool) or not isinstance(limit, int):
             limit = 10
@@ -86,7 +83,7 @@ class GuildLeaderboardPublisher:
             await message.edit(attachments=[file])
         await self._publications.upsert(guild_id, "leaderboard", "slot:0", channel_id,
                                         int(message.id), None, fingerprint,
-                                        {"season": model["season"], "entry_count": len(entries), "source": "api/bot/leaderboard",
+                                        {"season": model["season"], "entry_count": len(entries), "source": "api/v1/players",
                                          "source_may_be_capped": True})
         return True
 
@@ -129,12 +126,10 @@ class LeaderboardService:
 
     async def reconcile_all(self) -> None:
         """Reconcile leaderboards for every configured guild."""
-        from .repositories import GuildConfigRepository, IdentityRepository, PublicationRepository
+        from .repositories import GuildConfigRepository, PublicationRepository
         async with self._pool.acquire() as connection:
             configs = await GuildConfigRepository(connection).configured_leaderboards()
-            publisher = GuildLeaderboardPublisher(
-                self._bot, self._upstream, self._renderer, PublicationRepository(connection), IdentityRepository(connection)
-            )
+            publisher = GuildLeaderboardPublisher(self._bot, self._upstream, self._renderer, PublicationRepository(connection))
             for config in configs:
                 try:
                     await publisher.reconcile_guild(config)

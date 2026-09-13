@@ -92,10 +92,21 @@ def test_gateway_keeps_incomplete_commands_registered_as_unavailable() -> None:
     assert {"rank-cooldown", "show", "command-whitelist", "command-blacklist", "active-lobby-channel"} <= {
         command.name for command in config.commands
     }
+    assert {"leaderboard", "active-lobbies", "guides", "rank", "reset"} <= {
+        command.name for command in config.commands
+    }
     commands_group = next(command for command in config.commands if command.name == "commands")
     assert {"whitelist", "blacklist", "remove"} == {
         command.name for command in commands_group.commands
     }
+    leaderboard_group = next(command for command in config.commands if command.name == "leaderboard")
+    assert {"channel", "limit"} == {command.name for command in leaderboard_group.commands}
+    active_group = next(command for command in config.commands if command.name == "active-lobbies")
+    assert {"channel", "role", "moderator-role"} == {command.name for command in active_group.commands}
+    guides_group = next(command for command in config.commands if command.name == "guides")
+    assert {"channel", "role", "automatic-deletion"} == {command.name for command in guides_group.commands}
+    reset_group = next(command for command in config.commands if command.name == "reset")
+    assert {"leaderboard", "active-lobbies", "guides"} == {command.name for command in reset_group.commands}
 
 
 @pytest.mark.asyncio
@@ -238,8 +249,8 @@ async def test_refresh_enforces_a_ten_second_cooldown_per_guild(
 
 
 @pytest.mark.asyncio
-async def test_rank_uses_saved_member_number_and_renderer(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify that rank uses saved member number and renderer."""
+async def test_rank_looks_up_the_invoker_by_exact_discord_id_and_renders(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A name-derived or cached profile must not be rendered for the invoking member."""
     bot = create_bot()
     rank = next(command for command in bot.tree.get_commands() if command.name == "rank")
 
@@ -249,11 +260,6 @@ async def test_rank_uses_saved_member_number_and_renderer(monkeypatch: pytest.Mo
             """Provide fetchrow behavior for the test scenario."""
             assert "guild_config" in query and guild_id == 1
             return {"rank_cooldown_seconds": 0}
-
-        async def fetchval(self, query: str, discord_id: int) -> int:
-            """Provide fetchval behavior for the test scenario."""
-            assert "identity_links" in query and discord_id == 99
-            return 7
 
     class Acquire:
         """Provide a acquire test double."""
@@ -272,7 +278,7 @@ async def test_rank_uses_saved_member_number_and_renderer(monkeypatch: pytest.Mo
         async def get_result(self, path: str, *, require_fresh: bool) -> object:
             """Provide get result behavior for the test scenario."""
             calls.append(path)
-            return type("Result", (), {"data": {"player": {"name": "Alpha", "mmr": 2000, "rank": "Gold", "wins": 4, "losses": 1}}})()
+            return type("Result", (), {"data": {"player": {"display_name": "Alpha", "mmr": 2000, "rank": "Gold", "wins": 4, "losses": 1}}})()
 
     class Renderer:
         """Provide a renderer test double."""
@@ -291,7 +297,7 @@ async def test_rank_uses_saved_member_number_and_renderer(monkeypatch: pytest.Mo
 
     await rank.callback(interaction)
 
-    assert calls == ["/players/7"]
+    assert calls == ["/players/by-discord/99"]
     interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
     assert interaction.followup.send.await_args.kwargs["file"].filename == "profile.png"
 

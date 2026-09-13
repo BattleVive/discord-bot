@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -32,8 +33,8 @@ async def test_automatic_leaderboard_renders_and_publishes_a_configured_channel(
         async def get_result(self, path: str, *, require_fresh: bool) -> object:
             """Provide get result behavior for the test scenario."""
             assert (path, require_fresh) == ("/leaderboard", True)
-            return SimpleNamespace(data={"season": "Season 3", "leaderboard": [
-                {"position": 1, "player": "Alpha", "member_number": 7, "rank": "Gold", "mmr": 1200, "wins": 4, "losses": 1},
+            return SimpleNamespace(data={"season": "2026-3", "leaderboard": [
+                {"position": 1, "display_name": "Alpha", "discord_id": 7, "member_number": 7, "rank": "Gold", "mmr": 1200, "wins": 4, "losses": 1},
             ]})
 
     class Renderer:
@@ -62,14 +63,14 @@ async def test_automatic_leaderboard_renders_and_publishes_a_configured_channel(
         return message
 
     channel.send = send
-    guild = SimpleNamespace(id=10, get_channel=lambda channel_id: channel if channel_id == 20 else None)
+    guild = SimpleNamespace(id=10, members=[SimpleNamespace(id=7)], get_channel=lambda channel_id: channel if channel_id == 20 else None)
     bot = SimpleNamespace(get_guild=lambda guild_id: guild if guild_id == 10 else None)
     publisher = GuildLeaderboardPublisher(bot, Upstream(), Renderer(), Publications())
 
     changed = await publisher.reconcile_guild({"guild_id": 10, "leaderboard_channel_id": 20, "leaderboard_limit": 10})
 
     assert changed is True
-    assert rendered == [{"season": "Season 3", "entries": [{"place": 1, "username": "Alpha", "rank": "Gold", "mmr": 1200, "wins": 4, "losses": 1, "win_rate": 80}]}]
+    assert rendered == [{"season": "2026-3", "entries": [{"place": 1, "username": "Alpha", "rank": "Gold", "mmr": 1200, "wins": 4, "losses": 1, "win_rate": 80}]}]
     assert saved[0][2:6] == ("slot:0", 20, 55, None)
 
 
@@ -78,6 +79,7 @@ async def test_leaderboard_worker_recovers_after_a_failed_cycle() -> None:
     """Verify that leaderboard worker recovers after a failed cycle."""
     service = LeaderboardService(object(), object(), object(), object(), interval=0.001)
     calls = 0
+    retried = asyncio.Event()
 
     async def reconcile() -> None:
         """Provide reconcile behavior for the test scenario."""
@@ -85,10 +87,11 @@ async def test_leaderboard_worker_recovers_after_a_failed_cycle() -> None:
         calls += 1
         if calls == 1:
             raise ConnectionError("temporary database outage")
+        retried.set()
 
     service.reconcile_all = reconcile  # type: ignore[method-assign]
     service.start()
-    await __import__("asyncio").sleep(0.01)
+    await asyncio.wait_for(retried.wait(), timeout=1)
     await service.stop()
 
     assert calls >= 2

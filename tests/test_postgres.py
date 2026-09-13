@@ -10,7 +10,6 @@ import pytest
 
 from battlevive_gateway.repositories import ConcurrentUpdateError
 from battlevive_gateway.repositories import GuildConfigRepository
-from battlevive_gateway.repositories import IdentityRepository
 from battlevive_gateway.repositories import PublicationRepository
 from battlevive_gateway.repositories import RoleRepository
 from battlevive_gateway.repositories import RuleRepository
@@ -37,10 +36,10 @@ async def connection() -> asyncpg.Connection:
 
 
 @pytest.mark.asyncio
-async def test_repositories_persist_rules_roles_publications_and_identity_uniqueness(
+async def test_repositories_persist_rules_roles_and_publications(
     connection: asyncpg.Connection,
 ) -> None:
-    """Verify that repositories persist rules roles publications and identity uniqueness."""
+    """Verify that repositories persist rules, roles, and publication state."""
     guild = GuildConfigRepository(connection)
     await guild.ensure(9_001, 101)
     assert await guild.update(9_001, 1, {"leaderboard_limit": 25}, updated_by=102) == 2
@@ -64,7 +63,3 @@ async def test_repositories_persist_rules_roles_publications_and_identity_unique
     publication = (await publications.list_for_feature(9_001, "guide"))[0]
     assert publication["thread_id"] == 901
     assert publication["metadata"] == {"title": "Guide", "message_ids": [900]}
-
-    identities = IdentityRepository(connection)
-    await identities.bind(11, 12, "manual")
-    assert not await identities.bind(13, 12, "manual")

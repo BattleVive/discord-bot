@@ -78,40 +78,49 @@ def route_table() -> web.RouteTableDef:
     async def guides(request: web.Request) -> web.Response:
         """Return the current guide catalog."""
         return await result(request, "guides")
-    @routes.get("/guides/{number}")
+    @routes.get("/guides/{guide_id}")
     async def guide(request: web.Request) -> web.Response:
-        """Return one guide by number."""
-        number = _positive_number(request)
-        return web.json_response({"error": "guide number must be positive"}, status=400) if number is None else await result(request, "guide", number)
-    @routes.get("/guides/{number}/markdown")
+        """Return one guide by its stable v1 identifier."""
+        guide_id = _positive_number(request, "guide_id")
+        return web.json_response({"error": "guide ID must be positive"}, status=400) if guide_id is None else await result(request, "guide", guide_id)
+    @routes.get("/guides/{guide_id}/markdown")
     async def markdown(request: web.Request) -> web.Response:
-        """Return one guide's Markdown by number."""
-        number = _positive_number(request)
-        return web.json_response({"error": "guide number must be positive"}, status=400) if number is None else await result(request, "guide_markdown", number)
+        """Return one guide's Markdown by stable v1 identifier."""
+        guide_id = _positive_number(request, "guide_id")
+        return web.json_response({"error": "guide ID must be positive"}, status=400) if guide_id is None else await result(request, "guide_markdown", guide_id)
     @routes.get("/leaderboard")
     async def leaderboard(request: web.Request) -> web.Response:
         """Return the current leaderboard."""
         return await result(request, "leaderboard")
-    @routes.get("/players/{number}")
+    @routes.get("/players/{member_number}")
     async def player(request: web.Request) -> web.Response:
-        """Return one player by number."""
-        number = _positive_number(request)
-        return web.json_response({"error": "player number must be positive"}, status=400) if number is None else await result(request, "player", number)
+        """Return one player by BattleVive member number."""
+        member_number = _positive_number(request, "member_number")
+        return web.json_response({"error": "member number must be positive"}, status=400) if member_number is None else await result(request, "player", member_number)
+    @routes.get("/players/by-discord/{discord_id}")
+    async def player_by_discord(request: web.Request) -> web.Response:
+        """Return the player linked to one exact Discord snowflake, if any."""
+        discord_id = _positive_number(request, "discord_id")
+        return web.json_response({"error": "Discord ID must be positive"}, status=400) if discord_id is None else await result(request, "player_by_discord_id", discord_id)
     @routes.get("/active-matches")
     async def active(request: web.Request) -> web.Response:
         """Return current active matches."""
         return await result(request, "active_matches")
-    @routes.get("/recent-matches")
-    async def recent(request: web.Request) -> web.Response:
-        """Return recent matches."""
-        return await result(request, "recent_matches")
+    @routes.get("/disputed-matches")
+    async def disputed(request: web.Request) -> web.Response:
+        """Return unresolved disputed matches."""
+        return await result(request, "disputed_matches")
+    @routes.get("/seasons")
+    async def seasons(request: web.Request) -> web.Response:
+        """Return available season metadata."""
+        return await result(request, "seasons")
     return routes
 
 
-def _positive_number(request: web.Request) -> int | None:
+def _positive_number(request: web.Request, name: str) -> int | None:
     """Validate and return a positive numeric setting."""
     try:
-        number = int(request.match_info["number"])
+        number = int(request.match_info[name])
     except ValueError:
         return None
     return number if number > 0 else None

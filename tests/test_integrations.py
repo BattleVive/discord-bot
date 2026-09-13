@@ -104,7 +104,7 @@ async def test_upstream_diagnostics_include_each_catalogued_guide() -> None:
     assert snapshot["routes"]["/players/42"]["data"] == {"path": "/players/42"}  # type: ignore[index]
     assert calls == [
         "/queue", "/stats", "/guides", "/guides/4", "/guides/4/markdown",
-        "/leaderboard", "/players/42", "/active-matches", "/recent-matches",
+        "/leaderboard", "/players/42", "/active-matches", "/disputed-matches",
     ]
 
 

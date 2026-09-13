@@ -28,6 +28,7 @@ from .roles import create_required_roles
 from .roles import reconcile_member_rank
 from .repositories import ConcurrentUpdateError
 from .repositories import GuildConfigRepository
+from .repositories import PublicationRepository
 from .repositories import RoleRepository
 from .repositories import RuleRepository
 
@@ -166,6 +167,11 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
         description="Configure public-command channels",
         parent=config,
     )
+    config_leaderboard = app_commands.Group(name="leaderboard", description="Configure leaderboard publication", parent=config)
+    config_active_lobbies = app_commands.Group(name="active-lobbies", description="Configure active-lobby publication", parent=config)
+    config_guides = app_commands.Group(name="guides", description="Configure guide publication", parent=config)
+    config_rank = app_commands.Group(name="rank", description="Configure the public rank command", parent=config)
+    config_reset = app_commands.Group(name="reset", description="Reset BattleVive publication settings", parent=config)
 
     async def configuration(interaction: discord.Interaction) -> tuple[int, int] | None:
         """Validate the interaction and load its guild configuration version."""
@@ -256,6 +262,60 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
             bot.guide_service.request_reconciliation()
         await interaction.response.send_message("Guide forum updated.", ephemeral=True)
 
+    @config_active_lobbies.command(name="role", description="Set the active-lobby notification role")
+    async def active_lobby_role(interaction: discord.Interaction, role: discord.Role | None = None) -> None:
+        """Set or clear the role mentioned when a newly seen lobby is published."""
+        context = await configuration(interaction)
+        if context is None:
+            return
+        guild_id, version = context
+        async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
+            await GuildConfigRepository(connection).update(
+                guild_id, version, {"active_lobby_role_id": None if role is None else role.id}, updated_by=interaction.user.id
+            )
+        await interaction.response.send_message("Active-lobby notification role updated.", ephemeral=True)
+
+    @config_active_lobbies.command(name="moderator-role", description="Set the disputed-match moderator role")
+    async def active_lobby_moderator_role(interaction: discord.Interaction, role: discord.Role | None = None) -> None:
+        """Set or clear the role used for disputed-match notifications."""
+        context = await configuration(interaction)
+        if context is None:
+            return
+        guild_id, version = context
+        async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
+            await GuildConfigRepository(connection).update(
+                guild_id, version, {"website_moderator_role_id": None if role is None else role.id}, updated_by=interaction.user.id
+            )
+        await interaction.response.send_message("Disputed-match moderator role updated.", ephemeral=True)
+
+    @config_guides.command(name="role", description="Set the guide notification role")
+    async def guide_role(interaction: discord.Interaction, role: discord.Role | None = None) -> None:
+        """Set or clear the role mentioned on new guide publication."""
+        context = await configuration(interaction)
+        if context is None:
+            return
+        guild_id, version = context
+        async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
+            await GuildConfigRepository(connection).update(
+                guild_id, version, {"guide_notification_role_id": None if role is None else role.id}, updated_by=interaction.user.id
+            )
+        await interaction.response.send_message("Guide notification role updated.", ephemeral=True)
+
+    @config_guides.command(name="automatic-deletion", description="Set removal of unpublished guide threads")
+    async def guide_automatic_deletion(interaction: discord.Interaction, enabled: bool) -> None:
+        """Set whether managed threads are deleted when their guide disappears."""
+        context = await configuration(interaction)
+        if context is None:
+            return
+        guild_id, version = context
+        async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
+            await GuildConfigRepository(connection).update(
+                guild_id, version, {"guide_auto_delete_on_removal": enabled}, updated_by=interaction.user.id
+            )
+        await interaction.response.send_message(
+            f"Guide automatic deletion {'enabled' if enabled else 'disabled'}.", ephemeral=True
+        )
+
     @config.command(name="channel-rule", description="Allow or block a command in a channel")
     async def channel_rule(interaction: discord.Interaction, command_name: str, channel: discord.abc.GuildChannel, allowed: bool) -> None:
         """Set the guild's allow or deny rule for a command channel."""
@@ -340,6 +400,82 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
             "The /rank cooldown is disabled." if seconds == 0 else f"The /rank cooldown is now {seconds} seconds.",
             ephemeral=True,
         )
+
+    # Keep the original flat commands during the transition while restoring the
+    # grouped commands operators used in the 1.0 bot.
+    @config_leaderboard.command(name="channel", description="Set the automatic leaderboard channel")
+    async def grouped_leaderboard_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+        """Delegate the grouped command to the canonical channel update."""
+        await leaderboard_channel.callback(interaction, channel)
+
+    @config_leaderboard.command(name="limit", description="Set leaderboard entry limit")
+    async def grouped_leaderboard_limit(interaction: discord.Interaction, limit: app_commands.Range[int, 1, 100]) -> None:
+        """Delegate the grouped command to the canonical limit update."""
+        await leaderboard_limit.callback(interaction, limit)
+
+    @config_active_lobbies.command(name="channel", description="Set the automatic active-lobby channel")
+    async def grouped_active_lobby_channel(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+        """Delegate the grouped command to the canonical channel update."""
+        await active_lobby_channel.callback(interaction, channel)
+
+    @config_guides.command(name="channel", description="Set the forum used for guide publication")
+    async def grouped_guide_forum(interaction: discord.Interaction, channel: discord.ForumChannel) -> None:
+        """Delegate the grouped command to the canonical forum update."""
+        await guide_forum.callback(interaction, channel)
+
+    @config_rank.command(name="cooldown", description="Set the /rank cooldown in seconds")
+    async def grouped_rank_cooldown(interaction: discord.Interaction, seconds: app_commands.Range[int, 0, 3600]) -> None:
+        """Delegate the grouped command to the canonical cooldown update."""
+        await rank_cooldown.callback(interaction, seconds)
+
+    async def reset_configuration(interaction: discord.Interaction, changes: dict[str, object], message: str,
+                                  *, feature: str | None = None, archive_threads: bool = False) -> None:
+        """Clear configuration and remove only that feature's managed Discord posts."""
+        context = await configuration(interaction)
+        if context is None:
+            return
+        guild_id, version = context
+        if feature is not None:
+            async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
+                publications = await PublicationRepository(connection).list_for_feature(guild_id, feature)
+            for publication in publications:
+                try:
+                    if archive_threads and isinstance(publication.get("thread_id"), int):
+                        thread = await bot.fetch_channel(publication["thread_id"])
+                        if isinstance(thread, discord.Thread):
+                            await thread.edit(archived=True, locked=False, reason="BattleVive configuration reset")
+                    elif isinstance(publication.get("channel_id"), int) and isinstance(publication.get("message_id"), int):
+                        channel = interaction.guild.get_channel(publication["channel_id"]) if interaction.guild is not None else None
+                        if isinstance(channel, discord.TextChannel):
+                            await (await channel.fetch_message(publication["message_id"])).delete()
+                except discord.NotFound:
+                    pass
+        async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
+            await GuildConfigRepository(connection).update(guild_id, version, changes, updated_by=interaction.user.id)
+            if feature is not None:
+                await PublicationRepository(connection).delete_feature(guild_id, feature)
+        await interaction.response.send_message(message, ephemeral=True)
+
+    @config_reset.command(name="leaderboard", description="Clear automatic leaderboard configuration")
+    async def reset_leaderboard(interaction: discord.Interaction) -> None:
+        """Disable future leaderboard publication without deleting unrelated settings."""
+        await reset_configuration(interaction, {"leaderboard_channel_id": None}, "Leaderboard configuration reset.", feature="leaderboard")
+
+    @config_reset.command(name="active-lobbies", description="Clear active-lobby configuration")
+    async def reset_active_lobbies(interaction: discord.Interaction) -> None:
+        """Disable future lobby publication and notification roles."""
+        await reset_configuration(interaction, {
+            "active_lobby_channel_id": None, "active_lobby_role_id": None,
+            "website_moderator_role_id": None, "active_lobby_baseline_pending": True,
+        }, "Active-lobby configuration reset.", feature="active-lobbies")
+
+    @config_reset.command(name="guides", description="Clear guide-publication configuration")
+    async def reset_guides(interaction: discord.Interaction) -> None:
+        """Disable future guide publication and clear guide-specific preferences."""
+        await reset_configuration(interaction, {
+            "guide_forum_channel_id": None, "guide_notification_role_id": None,
+            "guide_auto_delete_on_removal": False,
+        }, "Guide configuration reset; managed guide posts were archived.", feature="guide", archive_threads=True)
 
     @config.command(name="show", description="Show this server's bot configuration")
     async def config_show(interaction: discord.Interaction) -> None:
@@ -557,20 +693,16 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
         if isinstance(cooldown, int) and cooldown > 0 and previous is not None and now - previous < cooldown:
             await interaction.response.send_message("Please wait before using /rank again.", ephemeral=True)
             return
-        # The work can exceed Discord's interaction deadline.  Deferring
-        # ephemerally keeps unavailable identity/upstream/render failures out
-        # of the invoking channel.
+        # The work can exceed Discord's interaction deadline. Deferring keeps
+        # unavailable upstream/render failures out of the invoking channel.
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            from .repositories import IdentityRepository
-            async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
-                member_number = await IdentityRepository(connection).member_number_for_discord_id(interaction.user.id)
-            if member_number is None:
-                await interaction.followup.send("Your BattleVive identity has not been linked yet.", ephemeral=True)
-                return
-            profile = (await bot.upstream.get_result(f"/players/{member_number}", require_fresh=True)).data.get("player")
+            profile = (await bot.upstream.get_result(
+                f"/players/by-discord/{interaction.user.id}", require_fresh=True
+            )).data.get("player")
             if not isinstance(profile, dict):
-                raise ValueError("upstream player profile was invalid")
+                await interaction.followup.send("No BattleVive profile is linked to your Discord account.", ephemeral=True)
+                return
             model = rank_render_model(profile)
             if isinstance(interaction.user, discord.Member):
                 await reconcile_member_rank(interaction.user, profile)
@@ -586,18 +718,15 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @bot.event
     async def on_member_join(member: discord.Member) -> None:
-        """Reconcile identity and rank roles for a joining member."""
+        """Reconcile rank roles for a joining member from the exact API profile."""
         if bot.leaderboard_service is not None:
             bot.leaderboard_service.request_reconciliation()
         if bot.pool is None or bot.upstream is None:
             return
         try:
-            from .repositories import IdentityRepository
-            async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
-                member_number = await IdentityRepository(connection).member_number_for_discord_id(member.id)
-            if member_number is None:
-                return
-            profile = (await bot.upstream.get_result(f"/players/{member_number}", require_fresh=True)).data.get("player")
+            profile = (await bot.upstream.get_result(
+                f"/players/by-discord/{member.id}", require_fresh=True
+            )).data.get("player")
             if isinstance(profile, dict):
                 await reconcile_member_rank(member, profile)
         except Exception:
@@ -605,7 +734,7 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
 
     @bot.event
     async def on_member_remove(_member: discord.Member) -> None:
-        """Remove saved identity data for a departing member."""
+        """Request leaderboard reconciliation after a member leaves."""
         if bot.leaderboard_service is not None:
             bot.leaderboard_service.request_reconciliation()
     return bot

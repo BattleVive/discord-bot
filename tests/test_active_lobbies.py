@@ -1,11 +1,14 @@
-"""Tests for active-lobby publication and reconciliation behavior."""
+"""Tests for v1 active-lobby publication and reconciliation."""
 
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import discord
 import pytest
 
 from battlevive_gateway.active_lobbies import ActiveLobbyPublisher
@@ -13,124 +16,148 @@ from battlevive_gateway.active_lobbies import ActiveLobbyService
 
 
 def match(**overrides: object) -> dict[str, object]:
-    """Build an active-match fixture."""
+    """Build a complete v1 match with every requested rich expansion."""
     record: dict[str, object] = {
-        "id": 197,
-        "title": "Seasonal 3v3",
-        "status": "open",
-        "type": "seasonal",
-        "size": 3,
-        "region": "EU",
-        "teamOne": "Team One",
-        "teamTwo": "Team Two",
-        "winner": None,
-        "durationSeconds": None,
-        "endedAt": None,
-        "createdAt": "2026-09-06T14:25:10.923668+00:00",
-        "url": "https://battlevive.com/matchmaking/2026/season-3/MATCH-24",
+        "match_id": 197, "title": "Seasonal 3v3", "season_id": "2026-3", "type": "seasonal",
+        "state": "drafting", "size": 3, "region": "EU", "url": "https://battlevive.com/matches/197",
+        "created_at": "2026-09-13T12:00:00+00:00", "updated_at": "2026-09-13T12:01:00+00:00",
+        "winner_team": None, "duration_seconds": None, "ended_at": None,
+        "selected_map": {"map_id": "blackstone", "map_name": "Blackstone Arena", "variant": "day"},
+        "team_one": {"name": "Blue", "players": [
+            {"member_number": 1, "discord_id": "11", "display_name": "Alpha", "profile_url": None, "is_bot": False, "champion_id": "ashka", "champion_name": "Ashka"},
+        ]},
+        "team_two": {"name": "Red", "players": [
+            {"member_number": 2, "discord_id": None, "display_name": "Bravo", "profile_url": None, "is_bot": False, "champion_id": "jade", "champion_name": "Jade"},
+        ]},
+        "draft": {"draft_phase": "in_progress", "draft_step": 3, "picks_hidden": False,
+                  "picks": [{"step": 1, "team": "team_one", "action": "pick", "player_index": 0, "champion_id": "ashka", "champion_name": "Ashka"}],
+                  "bans": [{"step": 2, "team": "team_two", "action": "ban", "player_index": None, "champion_id": "freya", "champion_name": "Freya"}]},
     }
     record.update(overrides)
     return record
 
 
 @pytest.mark.asyncio
-async def test_active_lobby_publisher_posts_live_match_details_and_disputed_recent_match() -> None:
-    """Verify that active lobby publisher posts live match details and disputed recent match."""
+async def test_publisher_uses_v1_active_and_disputed_routes_and_renders_rosters_draft_and_map() -> None:
+    """Dropping requested v1 expansions would erase roster, draft, or map details from Discord."""
     saved: list[tuple[object, ...]] = []
     active = match()
-    disputed = match(id=198, title="Unresolved final", status="disputed", winner=None,
-                     durationSeconds=90, endedAt="2026-09-06T15:00:10+00:00")
+    disputed = match(match_id=198, title="Unresolved final", state="disputed", duration_seconds=90,
+                     ended_at="2026-09-13T12:10:00+00:00", winner_team="team_two")
 
     class Upstream:
-        """Provide a upstream test double."""
         async def get_result(self, path: str, *, require_fresh: bool) -> object:
-            """Provide get result behavior for the test scenario."""
             assert require_fresh is True
             if path == "/active-matches":
                 return SimpleNamespace(data={"matches": [active]})
-            if path == "/recent-matches":
+            if path == "/disputed-matches":
                 return SimpleNamespace(data={"matches": [disputed]})
             raise AssertionError(path)
 
     class Publications:
-        """Provide a publications test double."""
         async def list_for_feature(self, *_: object) -> list[dict[str, object]]:
-            """Provide list for feature behavior for the test scenario."""
             return []
 
         async def upsert(self, *args: object) -> None:
-            """Provide upsert behavior for the test scenario."""
             saved.append(args)
 
     sent: list[object] = []
 
-    async def send(*, embed: object) -> object:
-        """Provide send behavior for the test scenario."""
-        sent.append(embed)
+    async def send(*, embed: object, content: str | None = None, **kwargs: object) -> object:
+        sent.append((embed, content, kwargs["allowed_mentions"]))
         return SimpleNamespace(id=55 + len(sent))
 
     channel = SimpleNamespace(send=send)
     guild = SimpleNamespace(id=10, get_channel=lambda channel_id: channel if channel_id == 20 else None)
     bot = SimpleNamespace(get_guild=lambda guild_id: guild if guild_id == 10 else None)
 
-    changed = await ActiveLobbyPublisher(bot, Upstream(), Publications()).reconcile_guild(
-        {"guild_id": 10, "active_lobby_channel_id": 20}
-    )
+    assert await ActiveLobbyPublisher(bot, Upstream(), Publications()).reconcile_guild({
+        "guild_id": 10, "active_lobby_channel_id": 20,
+        "active_lobby_role_id": 71, "website_moderator_role_id": 72,
+    })
 
-    assert changed is True
-    assert len(sent) == 2
-    live_embed, disputed_embed = (embed.to_dict() for embed in sent)
-    assert live_embed["title"] == "Seasonal 3v3"
-    assert live_embed["url"] == active["url"]
-    assert live_embed["description"] == "Open · Seasonal · 3v3 · EU"
-    assert {field["name"]: field["value"] for field in live_embed["fields"]} == {
-        "Team One": "Team One", "Team Two": "Team Two",
-    }
-    assert disputed_embed["description"] == "⚠️ Disputed · Seasonal · 3v3 · EU"
-    assert {field["name"]: field["value"] for field in disputed_embed["fields"]}["Duration"] == "1m 30s"
+    (live_embed, live_content, live_mentions), (dispute_embed, dispute_content, dispute_mentions) = sent
+    live, dispute = live_embed.to_dict(), dispute_embed.to_dict()
+    fields = {field["name"]: field["value"] for field in live["fields"]}
+    assert live["title"] == "Seasonal 3v3"
+    assert live["description"] == "Drafting · Seasonal · 3v3 · EU"
+    assert "<@11>" in fields["Blue"] and "Ashka" in fields["Blue"]
+    assert "Bravo" in fields["Red"] and "Jade" in fields["Red"]
+    assert fields["Picks"] == "Blue: Ashka"
+    assert fields["Bans"] == "Red: Freya"
+    assert fields["Map"] == "Blackstone Arena (day)"
+    assert dispute["description"].startswith("⚠️ Disputed")
+    assert {field["name"]: field["value"] for field in dispute["fields"]}["Duration"] == "1m 30s"
     assert [row[2] for row in saved] == ["match:197", "match:198"]
+    assert live_content == "<@&71>"
+    assert dispute_content == "<@&72>"
+    assert live_mentions.users is False and live_mentions.everyone is False
+    assert dispute_mentions.users is False and dispute_mentions.everyone is False
 
 
 @pytest.mark.asyncio
-async def test_active_lobby_publisher_edits_changed_posts_and_deletes_non_active_non_disputed_posts() -> None:
-    """Verify that active lobby publisher edits changed posts and deletes non active non disputed posts."""
-    current = match(status="drafting")
-    previous = {
-        "publication_key": "match:197", "channel_id": 20, "message_id": 55,
-        "fingerprint": "old", "metadata": {},
-    }
-    obsolete = {
-        "publication_key": "match:196", "channel_id": 20, "message_id": 54,
-        "fingerprint": "old", "metadata": {},
-    }
+async def test_publisher_restores_v1_map_thumbnail_and_champion_emoji(tmp_path: Path) -> None:
+    """A v1 lobby post includes its selected-map thumbnail and configured champion emoji."""
+    maps = tmp_path / "maps"
+    maps.mkdir()
+    (maps / "blackstone-day.png").write_bytes(b"map")
+    (maps / "manifest.json").write_text(json.dumps({"maps": [{
+        "name": "Blackstone Arena", "aliases": ["Blackstone"],
+        "day": "blackstone-day.png", "night": None,
+    }]}), encoding="utf-8")
+
+    class Upstream:
+        async def get_result(self, path: str, *, require_fresh: bool) -> object:
+            return SimpleNamespace(data={"matches": [match()] if path == "/active-matches" else []})
+
+    class Publications:
+        async def list_for_feature(self, *_: object) -> list[dict[str, object]]:
+            return []
+
+        async def upsert(self, *_: object) -> None:
+            return None
+
+    channel = SimpleNamespace(send=AsyncMock(return_value=SimpleNamespace(id=55)))
+    guild = SimpleNamespace(id=10, get_channel=lambda _: channel)
+    bot = SimpleNamespace(get_guild=lambda _: guild)
+
+    await ActiveLobbyPublisher(
+        bot, Upstream(), Publications(), assets_root=tmp_path,
+        emoji_lookup={"ashka": "<:Ashka:1>"},
+    ).reconcile_guild({"guild_id": 10, "active_lobby_channel_id": 20})
+
+    sent = channel.send.await_args.kwargs
+    fields = {field.name: field.value for field in sent["embed"].fields}
+    assert "<:Ashka:1> Ashka" in fields["Blue"]
+    assert sent["embed"].thumbnail.url == "attachment://map-blackstone-day.png"
+    assert sent["file"].filename == "map-blackstone-day.png"
+
+
+@pytest.mark.asyncio
+async def test_publisher_edits_changed_posts_and_removes_untracked_matches() -> None:
+    """A stale publication must be deleted when no v1 active or disputed match retains its key."""
+    previous = {"publication_key": "match:197", "channel_id": 20, "message_id": 55, "fingerprint": "old", "metadata": {}}
+    obsolete = {"publication_key": "match:196", "channel_id": 20, "message_id": 54, "fingerprint": "old", "metadata": {}}
     deleted: list[tuple[object, ...]] = []
     edits: list[object] = []
 
     class Upstream:
-        """Provide a upstream test double."""
         async def get_result(self, path: str, *, require_fresh: bool) -> object:
-            """Provide get result behavior for the test scenario."""
-            return SimpleNamespace(data={"matches": [current] if path == "/active-matches" else []})
+            return SimpleNamespace(data={"matches": [match()] if path == "/active-matches" else []})
 
     class Publications:
-        """Provide a publications test double."""
         async def list_for_feature(self, *_: object) -> list[dict[str, object]]:
-            """Provide list for feature behavior for the test scenario."""
             return [previous, obsolete]
 
         async def upsert(self, *_: object) -> None:
-            """Provide upsert behavior for the test scenario."""
             return None
 
         async def delete(self, *args: object) -> None:
-            """Provide delete behavior for the test scenario."""
             deleted.append(args)
 
     async def fetch_message(message_id: int) -> object:
-        """Provide fetch message behavior for the test scenario."""
         if message_id == 55:
-            async def edit(*, embed: object) -> None:
-                """Provide edit behavior for the test scenario."""
+            async def edit(*, embed: object, **_: object) -> None:
                 edits.append(embed)
             return SimpleNamespace(id=55, edit=edit)
         return SimpleNamespace(delete=AsyncMock())
@@ -139,77 +166,101 @@ async def test_active_lobby_publisher_edits_changed_posts_and_deletes_non_active
     guild = SimpleNamespace(id=10, get_channel=lambda _: channel)
     bot = SimpleNamespace(get_guild=lambda _: guild)
 
-    changed = await ActiveLobbyPublisher(bot, Upstream(), Publications()).reconcile_guild(
-        {"guild_id": 10, "active_lobby_channel_id": 20}
-    )
-
-    assert changed is True
+    assert await ActiveLobbyPublisher(bot, Upstream(), Publications()).reconcile_guild({"guild_id": 10, "active_lobby_channel_id": 20})
     assert len(edits) == 1
     assert deleted == [(10, "active-lobbies", "match:196")]
 
 
 @pytest.mark.asyncio
-async def test_active_lobby_publisher_moves_a_post_when_the_configured_channel_changes() -> None:
-    """Verify that active lobby publisher moves a post when the configured channel changes."""
-    previous = {
-        "publication_key": "match:197", "channel_id": 20, "message_id": 55,
-        "fingerprint": "old", "metadata": {},
-    }
-    old_message = SimpleNamespace(delete=AsyncMock())
-    new_messages: list[object] = []
+async def test_publisher_deletes_a_stale_match_from_its_stored_channel() -> None:
+    """A channel move must not orphan a stale post in the old configured channel."""
+    stale = {"publication_key": "match:196", "channel_id": 19, "message_id": 54,
+             "fingerprint": "old", "metadata": {}}
+    deleted: list[tuple[object, ...]] = []
 
     class Upstream:
-        """Provide a upstream test double."""
         async def get_result(self, path: str, *, require_fresh: bool) -> object:
-            """Provide get result behavior for the test scenario."""
             return SimpleNamespace(data={"matches": [match()] if path == "/active-matches" else []})
 
     class Publications:
-        """Provide a publications test double."""
         async def list_for_feature(self, *_: object) -> list[dict[str, object]]:
-            """Provide list for feature behavior for the test scenario."""
-            return [previous]
+            return [stale]
 
         async def upsert(self, *_: object) -> None:
-            """Provide upsert behavior for the test scenario."""
             return None
 
-    old_channel = SimpleNamespace(fetch_message=AsyncMock(return_value=old_message))
+        async def delete(self, *args: object) -> None:
+            deleted.append(args)
 
-    async def send(*, embed: object) -> object:
-        """Provide send behavior for the test scenario."""
-        new_messages.append(embed)
-        return SimpleNamespace(id=56)
+    old_message = SimpleNamespace(delete=AsyncMock())
 
-    new_channel = SimpleNamespace(send=send)
-    guild = SimpleNamespace(id=10, get_channel=lambda channel_id: {20: old_channel, 21: new_channel}.get(channel_id))
+    async def old_fetch(message_id: int) -> object:
+        assert message_id == 54
+        return old_message
+
+    async def new_fetch(_: int) -> object:
+        raise discord.NotFound(SimpleNamespace(status=404, reason="missing"), {})
+
+    old_channel = SimpleNamespace(fetch_message=old_fetch)
+    new_channel = SimpleNamespace(fetch_message=new_fetch, send=AsyncMock(return_value=SimpleNamespace(id=55)))
+    guild = SimpleNamespace(id=10, get_channel=lambda channel_id: {19: old_channel, 20: new_channel}.get(channel_id))
     bot = SimpleNamespace(get_guild=lambda _: guild)
 
-    await ActiveLobbyPublisher(bot, Upstream(), Publications()).reconcile_guild(
-        {"guild_id": 10, "active_lobby_channel_id": 21}
+    assert await ActiveLobbyPublisher(bot, Upstream(), Publications()).reconcile_guild(
+        {"guild_id": 10, "active_lobby_channel_id": 20}
     )
-
     old_message.delete.assert_awaited_once()
-    assert len(new_messages) == 1
+    assert deleted == [(10, "active-lobbies", "match:196")]
 
 
 @pytest.mark.asyncio
-async def test_active_lobby_publisher_deletes_a_new_message_when_publication_upsert_fails() -> None:
-    """Verify that active lobby publisher deletes a new message when publication upsert fails."""
+async def test_publisher_clears_an_obsolete_map_attachment_when_editing() -> None:
+    """A map removed upstream must remove its old Discord attachment too."""
+    previous = {"publication_key": "match:197", "channel_id": 20, "message_id": 55,
+                "fingerprint": "old", "metadata": {}}
+
     class Upstream:
-        """Provide a upstream test double."""
         async def get_result(self, path: str, *, require_fresh: bool) -> object:
-            """Provide get result behavior for the test scenario."""
+            return SimpleNamespace(data={"matches": [match(selected_map=None)] if path == "/active-matches" else []})
+
+    class Publications:
+        async def list_for_feature(self, *_: object) -> list[dict[str, object]]:
+            return [previous]
+
+        async def upsert(self, *_: object) -> None:
+            return None
+
+    edits: list[dict[str, object]] = []
+
+    async def edit(**kwargs: object) -> None:
+        edits.append(kwargs)
+
+    async def fetch_message(message_id: int) -> object:
+        assert message_id == 55
+        return SimpleNamespace(id=55, edit=edit)
+
+    channel = SimpleNamespace(fetch_message=fetch_message)
+    guild = SimpleNamespace(id=10, get_channel=lambda _: channel)
+    bot = SimpleNamespace(get_guild=lambda _: guild)
+
+    assert await ActiveLobbyPublisher(bot, Upstream(), Publications()).reconcile_guild(
+        {"guild_id": 10, "active_lobby_channel_id": 20}
+    )
+    assert edits[0]["attachments"] == []
+
+
+@pytest.mark.asyncio
+async def test_publisher_deletes_new_message_when_persistence_fails() -> None:
+    """A message without durable publication state must be compensated immediately."""
+    class Upstream:
+        async def get_result(self, path: str, *, require_fresh: bool) -> object:
             return SimpleNamespace(data={"matches": [match()] if path == "/active-matches" else []})
 
     class Publications:
-        """Provide a publications test double."""
         async def list_for_feature(self, *_: object) -> list[dict[str, object]]:
-            """Provide list for feature behavior for the test scenario."""
             return []
 
         async def upsert(self, *_: object) -> None:
-            """Provide upsert behavior for the test scenario."""
             raise RuntimeError("database unavailable")
 
     message = SimpleNamespace(id=55, delete=AsyncMock())
@@ -218,43 +269,103 @@ async def test_active_lobby_publisher_deletes_a_new_message_when_publication_ups
     bot = SimpleNamespace(get_guild=lambda _: guild)
 
     with pytest.raises(RuntimeError, match="database unavailable"):
-        await ActiveLobbyPublisher(bot, Upstream(), Publications()).reconcile_guild(
-            {"guild_id": 10, "active_lobby_channel_id": 20}
-        )
-
+        await ActiveLobbyPublisher(bot, Upstream(), Publications()).reconcile_guild({"guild_id": 10, "active_lobby_channel_id": 20})
     message.delete.assert_awaited_once()
 
 
 @pytest.mark.asyncio
+async def test_publisher_replaces_the_empty_state_when_a_match_appears() -> None:
+    """An empty channel gets one managed status post, removed before match posts."""
+    empty = {"publication_key": "empty", "channel_id": 20, "message_id": 54, "fingerprint": "empty", "metadata": {}}
+    deleted: list[tuple[object, ...]] = []
+    sent: list[object] = []
+
+    class Upstream:
+        async def get_result(self, path: str, *, require_fresh: bool) -> object:
+            return SimpleNamespace(data={"matches": [match()] if path == "/active-matches" else []})
+
+    class Publications:
+        async def list_for_feature(self, *_: object) -> list[dict[str, object]]:
+            return [empty]
+
+        async def upsert(self, *args: object) -> None:
+            sent.append(args)
+
+        async def delete(self, *args: object) -> None:
+            deleted.append(args)
+
+    old_message = SimpleNamespace(delete=AsyncMock())
+    new_message = SimpleNamespace(id=55)
+
+    async def fetch_message(message_id: int) -> object:
+        assert message_id == 54
+        return old_message
+
+    channel = SimpleNamespace(fetch_message=fetch_message, send=AsyncMock(return_value=new_message))
+    guild = SimpleNamespace(id=10, get_channel=lambda _: channel)
+    bot = SimpleNamespace(get_guild=lambda _: guild)
+
+    assert await ActiveLobbyPublisher(bot, Upstream(), Publications()).reconcile_guild({"guild_id": 10, "active_lobby_channel_id": 20})
+    old_message.delete.assert_awaited_once()
+    assert deleted == [(10, "active-lobbies", "empty")]
+    assert sent[0][2] == "match:197"
+
+
+@pytest.mark.asyncio
+async def test_publisher_creates_one_empty_state_when_no_matches_exist() -> None:
+    """The empty state retains v1's visible dark-grey Active Matches embed."""
+    saved: list[tuple[object, ...]] = []
+
+    class Upstream:
+        async def get_result(self, _path: str, *, require_fresh: bool) -> object:
+            assert require_fresh is True
+            return SimpleNamespace(data={"matches": []})
+
+    class Publications:
+        async def list_for_feature(self, *_: object) -> list[dict[str, object]]:
+            return []
+
+        async def upsert(self, *args: object) -> None:
+            saved.append(args)
+
+    channel = SimpleNamespace(send=AsyncMock(return_value=SimpleNamespace(id=55)))
+    guild = SimpleNamespace(id=10, get_channel=lambda _: channel)
+    bot = SimpleNamespace(get_guild=lambda _: guild)
+
+    assert await ActiveLobbyPublisher(bot, Upstream(), Publications()).reconcile_guild({"guild_id": 10, "active_lobby_channel_id": 20})
+    sent = channel.send.await_args.kwargs
+    assert sent["content"] is None
+    assert sent["embed"].title == "Active Matches"
+    assert sent["embed"].description == "There are no active matches right now."
+    assert int(sent["embed"].colour) == 0x607D8B
+    assert sent["allowed_mentions"].users is False
+    assert sent["allowed_mentions"].roles is False
+    assert saved[0][2:6] == ("empty", 20, 55, None)
+    assert isinstance(saved[0][6], str) and saved[0][6]
+
+
+@pytest.mark.asyncio
 async def test_active_lobby_service_serializes_concurrent_reconciliation(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify that active lobby service serializes concurrent reconciliation."""
+    """Concurrent wakeups must never publish two competing snapshots for a guild."""
     import battlevive_gateway.active_lobbies as active_lobbies
 
     class Connection:
-        """Provide a connection test double."""
         async def fetch(self, *_: object) -> list[dict[str, int]]:
-            """Provide fetch behavior for the test scenario."""
             return [{"guild_id": 10, "active_lobby_channel_id": 20}]
 
     class Acquire:
-        """Provide a acquire test double."""
         async def __aenter__(self) -> Connection:
-            """Enter the asynchronous context manager."""
             return Connection()
-
         async def __aexit__(self, *_: object) -> None:
-            """Exit the asynchronous context manager."""
             return None
 
-    active, max_active = 0, 0
-    entered = asyncio.Event()
-    release = asyncio.Event()
+    active, maximum = 0, 0
+    entered, release = asyncio.Event(), asyncio.Event()
 
     async def reconcile_guild(_: object, __: object) -> bool:
-        """Provide reconcile guild behavior for the test scenario."""
-        nonlocal active, max_active
+        nonlocal active, maximum
         active += 1
-        max_active = max(max_active, active)
+        maximum = max(maximum, active)
         entered.set()
         await release.wait()
         active -= 1
@@ -266,52 +377,6 @@ async def test_active_lobby_service_serializes_concurrent_reconciliation(monkeyp
     await entered.wait()
     second = asyncio.create_task(service.reconcile_all())
     await asyncio.sleep(0)
-    assert max_active == 1
+    assert maximum == 1
     release.set()
     await asyncio.gather(first, second)
-
-
-@pytest.mark.asyncio
-async def test_active_lobby_publisher_bounds_upstream_text_to_discord_embed_limits() -> None:
-    """Verify that active lobby publisher bounds upstream text to Discord embed limits."""
-    oversized = match(
-        title="T" * 300, status="S" * 300, type="Y" * 300, region="R" * 300,
-        teamOne="A" * 1_200, teamTwo="B" * 1_200, winner="W" * 1_200,
-        createdAt="C" * 1_200, endedAt="E" * 1_200,
-    )
-    sent: list[object] = []
-
-    class Upstream:
-        """Provide a upstream test double."""
-        async def get_result(self, path: str, *, require_fresh: bool) -> object:
-            """Provide get result behavior for the test scenario."""
-            return SimpleNamespace(data={"matches": [oversized] if path == "/active-matches" else []})
-
-    class Publications:
-        """Provide a publications test double."""
-        async def list_for_feature(self, *_: object) -> list[dict[str, object]]:
-            """Provide list for feature behavior for the test scenario."""
-            return []
-
-        async def upsert(self, *_: object) -> None:
-            """Provide upsert behavior for the test scenario."""
-            return None
-
-    async def send(*, embed: object) -> object:
-        """Provide send behavior for the test scenario."""
-        sent.append(embed)
-        return SimpleNamespace(id=55)
-
-    channel = SimpleNamespace(send=send)
-    guild = SimpleNamespace(id=10, get_channel=lambda _: channel)
-    bot = SimpleNamespace(get_guild=lambda _: guild)
-
-    await ActiveLobbyPublisher(bot, Upstream(), Publications()).reconcile_guild(
-        {"guild_id": 10, "active_lobby_channel_id": 20}
-    )
-
-    payload = sent[0].to_dict()
-    assert len(payload["title"]) <= 256
-    assert len(payload["description"]) <= 4_096
-    assert all(len(field["value"]) <= 1_024 for field in payload["fields"])
-    assert sum(len(str(value)) for field in payload["fields"] for value in field.values()) + len(payload["title"]) + len(payload["description"]) <= 6_000

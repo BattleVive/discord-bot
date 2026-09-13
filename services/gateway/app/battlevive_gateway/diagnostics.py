@@ -13,7 +13,7 @@ FEATURE_PATHS = (
     "/guides",
     "/leaderboard",
     "/active-matches",
-    "/recent-matches",
+    "/disputed-matches",
 )
 _MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 _MAX_GUIDE_EXPANSIONS = 20

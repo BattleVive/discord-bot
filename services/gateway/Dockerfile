@@ -5,5 +5,6 @@ COPY services/gateway/requirements.lock /tmp/requirements.lock
 RUN python -m pip install --require-hashes --no-cache-dir -r /tmp/requirements.lock
 COPY services/gateway/app /app
 COPY init-db /app/init-db
+COPY assets/maps /app/assets/maps
 USER 10001:10001
 CMD ["python3", "-m", "battlevive_gateway.gateway"]

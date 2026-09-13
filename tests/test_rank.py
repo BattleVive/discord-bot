@@ -7,7 +7,7 @@ from battlevive_gateway.rank import rank_render_model
 
 def test_rank_render_model_preserves_original_rank_thresholds() -> None:
     """Verify that rank render model preserves original rank thresholds."""
-    model = rank_render_model({"name": "Alpha", "mmr": 2000, "rank": "Gold", "wins": 4, "losses": 1})
+    model = rank_render_model({"display_name": "Alpha", "mmr": 2000, "rank": "Gold", "wins": 4, "losses": 1})
 
     assert model == {
         "username": "Alpha", "rank_current": "Gold", "rank_next": "Platinum",

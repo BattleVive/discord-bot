@@ -1,4 +1,4 @@
-"""Safe rank-role application for members with a verified identity link."""
+"""Safe rank-role application for members selected by exact Discord IDs."""
 from __future__ import annotations
 
 from typing import Any
@@ -35,7 +35,7 @@ def _safe_role(guild: Any, name: str) -> Any | None:
 
 
 async def reconcile_member_rank(member: Any, player: dict[str, Any]) -> bool:
-    """Apply one linked member's fresh profile tier without global stale-role removal."""
+    """Apply one API-selected member's fresh profile tier without global stale-role removal."""
     mmr = player.get("mmr")
     if isinstance(mmr, bool) or not isinstance(mmr, int) or mmr < 0:
         return False

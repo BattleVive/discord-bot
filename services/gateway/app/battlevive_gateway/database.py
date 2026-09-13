@@ -5,7 +5,7 @@ from typing import Any
 
 import asyncpg
 
-EXPECTED_TABLES = frozenset({"guild_config", "command_channel_rules", "created_roles", "identity_links", "discord_publications"})
+EXPECTED_TABLES = frozenset({"guild_config", "command_channel_rules", "created_roles", "discord_publications"})
 
 
 class SchemaError(RuntimeError):

@@ -23,8 +23,8 @@ class Connection:
 @pytest.mark.asyncio
 async def test_schema_verifier_rejects_missing_expected_table() -> None:
     """Verify that schema verifier rejects missing expected table."""
-    with pytest.raises(SchemaError, match="identity_links"):
-        await verify_schema(Connection(["guild_config", "command_channel_rules", "created_roles", "discord_publications"]))
+    with pytest.raises(SchemaError, match="discord_publications"):
+        await verify_schema(Connection(["guild_config", "command_channel_rules", "created_roles"]))
 
 
 @pytest.mark.asyncio
