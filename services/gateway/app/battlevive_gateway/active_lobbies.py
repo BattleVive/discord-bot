@@ -259,6 +259,7 @@ class ActiveLobbyPublisher:
             key = f"match:{match_id}"
             embed, fingerprint, map_path, attachment_name = _match_embed(record, self._emoji_lookup, self._map_resolver)
             previous = existing.pop(key, None)
+            previously_published = previous is not None
             if previous is not None and previous.get("fingerprint") == fingerprint and previous.get("channel_id") == channel_id:
                 continue
             if previous is not None and previous.get("channel_id") != channel_id:
@@ -269,7 +270,7 @@ class ActiveLobbyPublisher:
             message = await self._existing_message(channel, previous)
             created = message is None
             if message is None:
-                content = _notification_content(config, record)
+                content = None if previously_published else _notification_content(config, record)
                 send_kwargs: dict[str, object] = {"embed": embed, "allowed_mentions": discord.AllowedMentions.none()}
                 if content is not None:
                     # Explicit role-only mentions prevent roster display names

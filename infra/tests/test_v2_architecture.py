@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,8 +28,10 @@ def test_slot_module_uses_rds_and_unencrypted_gp3_storage() -> None:
     assert 'instance_class' in compute and '"db.t4g.micro"' in compute
     assert "allocated_storage" in compute and "= 20" in compute
     assert "storage_type" in compute and '"gp3"' in compute
-    assert "storage_encrypted" in compute and "= false" in compute
-    assert "encrypted" in compute and "= false" in compute
+    assert re.search(r"^\s*storage_encrypted\s+=\s+false\s*$", compute, re.MULTILINE)
+    assert re.search(r"^\s*encrypted\s+=\s+false\s*$", compute, re.MULTILINE)
+    assert re.search(r'^\s*db_name\s+=\s+var\.rds_snapshot_identifier == null \? "battlevive" : null\s*$', compute, re.MULTILINE)
+    assert 'http_tokens = "required"' in compute
 
 
 def test_no_customer_kms_or_host_database_backups_remain() -> None:
@@ -52,9 +55,9 @@ def test_slots_have_isolated_parameters_and_active_control_parameter() -> None:
 def test_release_uses_public_ghcr_service_images_and_manifest() -> None:
     """Verify that release uses public GHCR service images and manifest."""
     workflow = read(".github/workflows/release.yml")
-    assert "ghcr.io/BattleVive/gateway-service" in workflow
-    assert "ghcr.io/BattleVive/upstream-service" in workflow
-    assert "ghcr.io/BattleVive/image-renderer" in workflow
+    assert "ghcr.io/battlevive/gateway-service" in workflow
+    assert "ghcr.io/battlevive/upstream-service" in workflow
+    assert "ghcr.io/battlevive/image-renderer" in workflow
     assert "GITHUB_TOKEN" in workflow
     assert "scripts/release/release_manifest.py" in workflow
     assert "docker.io" not in workflow

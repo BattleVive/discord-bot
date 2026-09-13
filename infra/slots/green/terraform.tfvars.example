@@ -1,4 +1,5 @@
 # The slot creates and owns its own VPC and subnets.
 operations_bucket = "battlevive-operations-replace"
 
-# Supply a manually generated staging Discord token and database_url securely.
+# Supply a manually generated staging Discord token securely. Deployment reads
+# the database credentials from the slot's Terraform-managed RDS secret.

@@ -68,16 +68,20 @@ resource "aws_db_subnet_group" "postgres" {
   subnet_ids = aws_subnet.slot[*].id
 }
 resource "aws_db_instance" "postgres" {
-  identifier                  = "${local.name}-postgres"
-  engine                      = "postgres"
-  instance_class              = "db.t4g.micro"
-  allocated_storage           = 20
-  storage_type                = "gp3"
-  storage_encrypted           = false
-  db_subnet_group_name        = aws_db_subnet_group.postgres.name
-  vpc_security_group_ids      = [aws_security_group.postgres.id]
-  publicly_accessible         = false
-  multi_az                    = false
+  identifier             = "${local.name}-postgres"
+  engine                 = "postgres"
+  instance_class         = "db.t4g.micro"
+  db_name                = var.rds_snapshot_identifier == null ? "battlevive" : null
+  allocated_storage      = 20
+  storage_type           = "gp3"
+  storage_encrypted      = false
+  db_subnet_group_name   = aws_db_subnet_group.postgres.name
+  vpc_security_group_ids = [aws_security_group.postgres.id]
+  publicly_accessible    = false
+  multi_az               = false
+  # Promotion creates and verifies the final snapshot before the retired slot is
+  # destroyed.  Retired-slot teardown must remain automatic, so do not enable
+  # deletion protection or create an additional final snapshot here.
   skip_final_snapshot         = true
   snapshot_identifier         = var.rds_snapshot_identifier
   username                    = var.rds_snapshot_identifier == null ? "battlevive" : null
@@ -92,6 +96,9 @@ resource "aws_instance" "host" {
   vpc_security_group_ids      = [aws_security_group.host.id]
   user_data                   = file("${path.module}/bootstrap-runtime.sh")
   user_data_replace_on_change = true
+  metadata_options {
+    http_tokens = "required"
+  }
   root_block_device {
     encrypted   = false
     volume_type = "gp3"

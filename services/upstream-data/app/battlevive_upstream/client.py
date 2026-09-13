@@ -116,8 +116,8 @@ class BattleViveClient:
 
     async def guides(self, *, require_fresh: bool = False) -> ApiResult:
         """Fetch every guide catalog page using v1's opaque cursor."""
-        records, freshness, age = await self._paged_collection(
-            "/api/v1/guides", "guides", 100, require_fresh=require_fresh
+        records, _, freshness, age = await self._pages(
+            "/api/v1/guides", {}, None, page_size=100, require_fresh=require_fresh
         )
         return ApiResult({"guides": records}, freshness, age)
 
@@ -162,38 +162,33 @@ class BattleViveClient:
     async def _matches(self, state: str, *, require_fresh: bool) -> ApiResult:
         """Fetch all match pages for one documented state filter."""
         records, _, freshness, age = await self._pages(
-            "/api/v1/matches", {"state": state, "include": "teams,draft,map"}, 50,
+            "/api/v1/matches", {"state": state, "include": "teams,draft,map"}, None, page_size=50,
             require_fresh=require_fresh,
         )
         return ApiResult({"matches": records}, freshness, age)
 
     async def _paged_players(self, filters: dict[str, object], limit: int, *, require_fresh: bool) -> tuple[list[dict[str, Any]], str | None, Freshness, int]:
         """Collect player pages and retain the API's season metadata."""
-        records, meta, freshness, age = await self._pages("/api/v1/players", filters, limit, require_fresh=require_fresh)
+        records, meta, freshness, age = await self._pages(
+            "/api/v1/players", filters, limit, page_size=limit, require_fresh=require_fresh
+        )
         return records, meta.get("season_id") if isinstance(meta.get("season_id"), str) else None, freshness, age
 
-    async def _paged_collection(self, base_path: str, collection: str, page_limit: int, *, require_fresh: bool) -> tuple[list[dict[str, Any]], Freshness, int]:
-        """Collect a fixed-size paginated resource until its cursor is exhausted."""
-        records, _, freshness, age = await self._pages(base_path, {}, page_limit, require_fresh=require_fresh)
-        if collection == "players":
-            return records, freshness, age
-        return records, freshness, age
-
-    async def _pages(self, base_path: str, filters: dict[str, object], limit: int, *, require_fresh: bool) -> tuple[list[dict[str, Any]], dict[str, Any], Freshness, int]:
+    async def _pages(self, base_path: str, filters: dict[str, object], limit: int | None, *, page_size: int, require_fresh: bool) -> tuple[list[dict[str, Any]], dict[str, Any], Freshness, int]:
         """Follow opaque cursors without attempting to inspect or construct them."""
         records: list[dict[str, Any]] = []
         cursor: str | None = None
         final_meta: dict[str, Any] = {}
         freshness, age = Freshness.FRESH, 0
-        while len(records) < limit:
+        while limit is None or len(records) < limit:
             query = dict(filters)
-            query["limit"] = limit - len(records)
+            query["limit"] = page_size if limit is None else min(page_size, limit - len(records))
             if cursor is not None:
                 query["cursor"] = cursor
             result = await self._get(_query(base_path, query), require_fresh=require_fresh)
             key = _collection_key(base_path)
             page_records = result.data[key]
-            records.extend(page_records[:limit - len(records)])
+            records.extend(page_records if limit is None else page_records[:limit - len(records)])
             final_meta = result.data.get("meta", {})
             freshness = Freshness.STALE if result.freshness is Freshness.STALE else freshness
             age = max(age, result.age_seconds)

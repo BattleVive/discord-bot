@@ -20,6 +20,12 @@ resource "aws_ssm_parameter" "active_slot" {
   name  = "${local.parameter_root}/control/active-slot"
   type  = "String"
   value = var.active_slot
+  lifecycle {
+    precondition {
+      condition     = var.active_slot != var.release_candidate_slot
+      error_message = "active_slot and release_candidate_slot must differ."
+    }
+  }
 }
 resource "aws_ssm_parameter" "release_candidate_slot" {
   name  = "${local.parameter_root}/control/release-candidate-slot"

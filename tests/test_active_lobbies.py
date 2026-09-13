@@ -274,6 +274,36 @@ async def test_publisher_deletes_new_message_when_persistence_fails() -> None:
 
 
 @pytest.mark.asyncio
+async def test_publisher_does_not_re_notify_when_recreating_a_deleted_tracked_post() -> None:
+    """A deleted tracked post must be restored without another role notification."""
+    previous = {"publication_key": "match:197", "channel_id": 20, "message_id": 55,
+                "fingerprint": "old", "metadata": {}}
+
+    class Upstream:
+        async def get_result(self, path: str, *, require_fresh: bool) -> object:
+            return SimpleNamespace(data={"matches": [match()] if path == "/active-matches" else []})
+
+    class Publications:
+        async def list_for_feature(self, *_: object) -> list[dict[str, object]]:
+            return [previous]
+
+        async def upsert(self, *_: object) -> None:
+            return None
+
+    async def fetch_message(_: int) -> object:
+        raise discord.NotFound(SimpleNamespace(status=404, reason="missing"), {})
+
+    channel = SimpleNamespace(fetch_message=fetch_message, send=AsyncMock(return_value=SimpleNamespace(id=56)))
+    guild = SimpleNamespace(id=10, get_channel=lambda _: channel)
+    bot = SimpleNamespace(get_guild=lambda _: guild)
+
+    assert await ActiveLobbyPublisher(bot, Upstream(), Publications()).reconcile_guild({
+        "guild_id": 10, "active_lobby_channel_id": 20, "active_lobby_role_id": 71,
+    })
+    assert channel.send.await_args.kwargs.get("content") is None
+
+
+@pytest.mark.asyncio
 async def test_publisher_replaces_the_empty_state_when_a_match_appears() -> None:
     """An empty channel gets one managed status post, removed before match posts."""
     empty = {"publication_key": "empty", "channel_id": 20, "message_id": 54, "fingerprint": "empty", "metadata": {}}

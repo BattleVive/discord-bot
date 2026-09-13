@@ -7,7 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from release_manifest import SERVICES, validate
+from release_manifest import SERVICES, checksum, validate
 
 
 def service_argument(value: str) -> tuple[str, str, str]:
@@ -38,9 +38,8 @@ def main() -> None:
         "source_revision": args.revision,
         "services": services,
     }
+    item["manifest_checksum"] = checksum(item)
     validate(item)
-    encoded = json.dumps(item, sort_keys=True, separators=(",", ":")).encode()
-    item["manifest_checksum"] = hashlib.sha256(encoded).hexdigest()
     args.output.write_text(json.dumps(item, sort_keys=True) + "\n", encoding="utf-8")
 
 

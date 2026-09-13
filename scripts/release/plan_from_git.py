@@ -36,7 +36,7 @@ def main() -> None:
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", default="HEAD")
     args = parser.parse_args()
-    versions = {name: (ROOT / prefixes[0] / "VERSION").read_text().strip() for name, prefixes in SERVICES.items()}
+    versions = {name: version_at(args.head, name) for name in SERVICES}
     payload = {
         "changed_files": git("diff", "--name-only", args.base, args.head).splitlines(),
         "versions": versions,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,18 @@ def run(script: str, payload: dict, *args: str) -> subprocess.CompletedProcess[s
         [sys.executable, str(ROOT / script), *args], input=json.dumps(payload), text=True,
         capture_output=True, check=False,
     )
+
+
+def manifest_payload(*, digest: str = "sha256:" + "a" * 64) -> dict:
+    """Create a structurally valid, checksummed release manifest."""
+    item = {
+        "bot_version": "2.0.0", "bundle_checksum": digest, "source_revision": "b" * 40,
+        "services": {name: {"version": "1.0.0", "digest": digest}
+                     for name in ("gateway-service", "upstream-service", "image-renderer")},
+    }
+    encoded = json.dumps(item, sort_keys=True, separators=(",", ":")).encode()
+    item["manifest_checksum"] = hashlib.sha256(encoded).hexdigest()
+    return item
 
 
 def test_service_planner_reuses_unchanged_digest_without_push() -> None:
@@ -67,12 +80,17 @@ def test_service_planner_treats_declared_shared_inputs_as_image_content() -> Non
 
 def test_release_manifest_requires_all_digest_pinned_services() -> None:
     """Verify that release manifest requires all digest pinned services."""
-    digest = "sha256:" + "a" * 64
-    result = run("scripts/release/release_manifest.py", {
-        "bot_version": "2.0.0", "bundle_checksum": digest, "source_revision": "b" * 40,
-        "services": {name: {"version": "1.0.0", "digest": digest} for name in ("gateway-service", "upstream-service", "image-renderer")},
-    }, "--validate")
+    result = run("scripts/release/release_manifest.py", manifest_payload(), "--validate")
     assert result.returncode == 0, result.stderr
+
+
+def test_release_manifest_rejects_tampering_after_checksum() -> None:
+    """Verify that manifest validation rejects a stale checksum after any change."""
+    item = manifest_payload()
+    item["services"]["gateway-service"]["digest"] = "sha256:" + "c" * 64
+    result = run("scripts/release/release_manifest.py", item, "--validate")
+    assert result.returncode != 0
+    assert "manifest_checksum" in result.stderr
 
 
 def test_manifest_builder_writes_a_digest_pinned_manifest(tmp_path: Path) -> None:
@@ -94,3 +112,4 @@ def test_manifest_builder_writes_a_digest_pinned_manifest(tmp_path: Path) -> Non
     manifest = json.loads(output.read_text())
     assert manifest["services"]["gateway-service"]["digest"] == digest
     assert manifest["bundle_checksum"].startswith("sha256:")
+    assert len(manifest["manifest_checksum"]) == 64

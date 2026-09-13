@@ -435,7 +435,14 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
         if context is None:
             return
         guild_id, version = context
-        if feature is not None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
+            await GuildConfigRepository(connection).update(guild_id, version, changes, updated_by=interaction.user.id)
+
+        async def cleanup() -> None:
+            """Remove publications after their configuration is disabled."""
+            if feature is None:
+                return
             async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
                 publications = await PublicationRepository(connection).list_for_feature(guild_id, feature)
             for publication in publications:
@@ -450,11 +457,15 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
                             await (await channel.fetch_message(publication["message_id"])).delete()
                 except discord.NotFound:
                     pass
-        async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
-            await GuildConfigRepository(connection).update(guild_id, version, changes, updated_by=interaction.user.id)
-            if feature is not None:
+            async with bot.pool.acquire() as connection:  # type: ignore[union-attr]
                 await PublicationRepository(connection).delete_feature(guild_id, feature)
-        await interaction.response.send_message(message, ephemeral=True)
+
+        if feature == "active-lobbies" and bot.active_lobby_service is not None:
+            async with bot.active_lobby_service._reconcile_lock:
+                await cleanup()
+        else:
+            await cleanup()
+        await interaction.followup.send(message, ephemeral=True)
 
     @config_reset.command(name="leaderboard", description="Clear automatic leaderboard configuration")
     async def reset_leaderboard(interaction: discord.Interaction) -> None:

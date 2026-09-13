@@ -13,21 +13,26 @@ while (($#)); do
   esac
 done
 [[ $slot == blue || $slot == green ]] && [[ -f $manifest ]] && [[ -f $compose_file ]] || usage
+health_timeout=${HEALTH_TIMEOUT_SECONDS:-120}
+[[ $health_timeout =~ ^[1-9][0-9]*$ ]] || { echo "HEALTH_TIMEOUT_SECONDS must be a positive integer" >&2; exit 2; }
 validator=${BATTLEVIVE_MANIFEST_VALIDATOR:-}
 if [[ -z $validator ]]; then
   script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
   validator="$script_dir/../release/release_manifest.py"
 fi
 python "$validator" --validate <"$manifest"
+install -d -m 0755 /run/lock
+exec 9>"/run/lock/battlevive-${slot}-deploy.lock"
+flock -n 9 || { echo "another deployment is active for slot $slot" >&2; exit 1; }
 for service in gateway-service upstream-service image-renderer; do
   digest=$(jq -er --arg service "$service" '.services[$service].digest' "$manifest")
-  image="ghcr.io/BattleVive/${service}@${digest}"
+  image="ghcr.io/battlevive/${service}@${digest}"
   docker pull "$image"
 done
 export BATTLEVIVE_SLOT="$slot"
-export BATTLEVIVE_GATEWAY_IMAGE="ghcr.io/BattleVive/gateway-service@$(jq -er '.services["gateway-service"].digest' "$manifest")"
-export BATTLEVIVE_UPSTREAM_IMAGE="ghcr.io/BattleVive/upstream-service@$(jq -er '.services["upstream-service"].digest' "$manifest")"
-export BATTLEVIVE_RENDERER_IMAGE="ghcr.io/BattleVive/image-renderer@$(jq -er '.services["image-renderer"].digest' "$manifest")"
+export BATTLEVIVE_GATEWAY_IMAGE="ghcr.io/battlevive/gateway-service@$(jq -er '.services["gateway-service"].digest' "$manifest")"
+export BATTLEVIVE_UPSTREAM_IMAGE="ghcr.io/battlevive/upstream-service@$(jq -er '.services["upstream-service"].digest' "$manifest")"
+export BATTLEVIVE_RENDERER_IMAGE="ghcr.io/battlevive/image-renderer@$(jq -er '.services["image-renderer"].digest' "$manifest")"
 if [[ -x /usr/local/libexec/battlevive/compose ]]; then
   compose=(/usr/local/libexec/battlevive/compose)
 else
@@ -35,4 +40,14 @@ else
 fi
 "${compose[@]}" -f "$compose_file" run --rm migration
 "${compose[@]}" -f "$compose_file" up -d --remove-orphans upstream-data image-renderer gateway
-"${compose[@]}" -f "$compose_file" ps --status running gateway | grep -q gateway
+gateway_container="$("${compose[@]}" -f "$compose_file" ps -q gateway)"
+[[ -n $gateway_container ]] || { echo "gateway container was not created" >&2; exit 1; }
+deadline=$((SECONDS + health_timeout))
+while (( SECONDS <= deadline )); do
+  health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$gateway_container" 2>/dev/null || true)"
+  [[ $health == healthy ]] && exit 0
+  [[ $health == unhealthy ]] && { echo "gateway became unhealthy" >&2; exit 1; }
+  sleep 2
+done
+echo "gateway readiness timed out" >&2
+exit 1

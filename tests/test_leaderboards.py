@@ -91,7 +91,9 @@ async def test_leaderboard_worker_recovers_after_a_failed_cycle() -> None:
 
     service.reconcile_all = reconcile  # type: ignore[method-assign]
     service.start()
-    await asyncio.wait_for(retried.wait(), timeout=1)
-    await service.stop()
+    try:
+        await asyncio.wait_for(retried.wait(), timeout=1)
+    finally:
+        await service.stop()
 
     assert calls >= 2

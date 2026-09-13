@@ -165,6 +165,34 @@ async def test_guide_catalog_uses_guide_id_for_markdown_and_content_hash_for_cha
 
 
 @pytest.mark.asyncio
+async def test_guide_catalog_follows_cursor_past_the_first_hundred_records() -> None:
+    """Stopping after one page would archive still-present guide publications."""
+    guide = {
+        "guide_id": 1004, "guide_number": 4, "title": "Varesh",
+        "author": {"discord_id": "123", "display_name": "Author"}, "champion_id": "varesh",
+        "champion_name": "Varesh", "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-09-13T12:00:00+00:00", "url": "https://battlevive.com/battlerite-guides/4",
+        "markdown_url": "https://battlevive.com/api/v1/guides/1004/markdown", "content_hash": "sha256:abc",
+        "content_updated_at": "2026-09-13T12:00:00+00:00", "excerpt": "Guide excerpt",
+    }
+    calls: list[str] = []
+    first_page = [{**guide, "guide_id": 1004 + index, "guide_number": 4 + index} for index in range(100)]
+    pages = [
+        {"data": first_page, "meta": {"pagination": {"limit": 100, "has_more": True, "next_cursor": "next-page"}}},
+        {"data": [{**guide, "guide_id": 1005, "guide_number": 5}], "meta": {"pagination": {"limit": 100, "has_more": False, "next_cursor": None}}},
+    ]
+
+    async def send(path: str, _: dict[str, str]) -> UpstreamResponse:
+        calls.append(path)
+        return UpstreamResponse(200, pages.pop(0), {})
+
+    result = await BattleViveClient("https://example.test", "secret", send=send).guides()
+
+    assert [item["guide_id"] for item in result.data["guides"]] == [*range(1004, 1104), 1005]
+    assert calls == ["/api/v1/guides?limit=100", "/api/v1/guides?limit=100&cursor=next-page"]
+
+
+@pytest.mark.asyncio
 async def test_v1_error_envelope_is_safe_and_does_not_retry_a_not_found_response() -> None:
     """Treating v1 not-found as transient would amplify failed requests."""
     calls = 0
