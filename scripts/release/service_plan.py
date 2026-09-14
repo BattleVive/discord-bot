@@ -11,7 +11,9 @@ SERVICES = {
     "upstream-service": ("services/upstream-data/",),
     "image-renderer": ("services/image-renderer/",),
 }
-SHARED_INPUTS = ("docker-compose.yml", ".dockerignore")
+# Service image builds use their Dockerfile-declared inputs only. Deployment
+# configuration must not force unrelated service image releases.
+SHARED_INPUTS = (".dockerignore",)
 SERVICE_SHARED_INPUTS = {
     "gateway-service": ("init-db/",),
     "upstream-service": (),
@@ -25,6 +27,7 @@ def plan(payload: dict) -> dict:
     versions = payload["versions"]
     previous = payload.get("previous_versions", {})
     existing = payload.get("existing_digests", {})
+    missing = set(payload.get("missing_services", ()))
     result = {"services": {}}
     for name, prefixes in SERVICES.items():
         version_paths = {f"{prefix}VERSION" for prefix in prefixes}
@@ -39,7 +42,7 @@ def plan(payload: dict) -> dict:
             raise SystemExit(f"changed image inputs without a service-version bump: {name}")
         if version_changed and not content_changed:
             raise SystemExit(f"service-version bump without changed image content: {name}")
-        result["services"][name] = {"version": versions[name], "push": content_changed, "digest": existing.get(name)}
+        result["services"][name] = {"version": versions[name], "push": content_changed or name in missing, "digest": existing.get(name)}
     return result
 
 

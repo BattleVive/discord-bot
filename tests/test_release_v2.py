@@ -78,6 +78,44 @@ def test_service_planner_treats_declared_shared_inputs_as_image_content() -> Non
     assert services["upstream-service"]["push"] is False
 
 
+def test_service_planner_does_not_treat_compose_as_an_image_input() -> None:
+    """Verify compose changes do not force unrelated service image releases."""
+    result = run("scripts/release/service_plan.py", {
+        "changed_files": ["docker-compose.yml"],
+        "versions": {"gateway-service": "1.0.0", "upstream-service": "1.0.0", "image-renderer": "1.0.0"},
+        "previous_versions": {"gateway-service": "1.0.0", "upstream-service": "1.0.0", "image-renderer": "1.0.0"},
+    })
+    assert result.returncode == 0, result.stderr
+    assert all(not service["push"] for service in json.loads(result.stdout)["services"].values())
+
+
+def test_service_planner_bootstraps_a_missing_registry_image() -> None:
+    """Verify an unseeded GHCR service image is built without a version bump."""
+    result = run("scripts/release/service_plan.py", {
+        "changed_files": [],
+        "versions": {"gateway-service": "1.0.0", "upstream-service": "1.0.0", "image-renderer": "1.0.0"},
+        "previous_versions": {"gateway-service": "1.0.0", "upstream-service": "1.0.0", "image-renderer": "1.0.0"},
+        "missing_services": ["gateway-service"],
+    })
+    assert result.returncode == 0, result.stderr
+    services = json.loads(result.stdout)["services"]
+    assert services["gateway-service"]["push"] is True
+    assert services["upstream-service"]["push"] is False
+
+
+def test_image_tags_include_the_service_version_and_compatible_aliases() -> None:
+    """Verify a service version publishes its exact, minor, major, and latest tags."""
+    result = run("scripts/release/image_tags.py", {}, "--version", "1.1.2")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["1.1.2", "1.1", "1", "latest"]
+
+
+def test_image_tags_reject_noncanonical_service_versions() -> None:
+    """Verify image tag aliases require a canonical semantic service version."""
+    result = run("scripts/release/image_tags.py", {}, "--version", "1.1")
+    assert result.returncode != 0
+
+
 def test_release_manifest_requires_all_digest_pinned_services() -> None:
     """Verify that release manifest requires all digest pinned services."""
     result = run("scripts/release/release_manifest.py", manifest_payload(), "--validate")

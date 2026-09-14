@@ -4,6 +4,13 @@ locals {
   bucket         = "battlevive-bot-operations-${data.aws_caller_identity.current.account_id}-${var.operations_bucket_suffix}"
 }
 resource "aws_s3_bucket" "operations" { bucket = local.bucket }
+resource "aws_s3_bucket_public_access_block" "operations" {
+  bucket                  = aws_s3_bucket.operations.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
 resource "aws_s3_bucket_versioning" "operations" {
   bucket = aws_s3_bucket.operations.id
   versioning_configuration { status = "Enabled" }

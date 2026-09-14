@@ -35,12 +35,14 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", default="HEAD")
+    parser.add_argument("--missing-service", action="append", default=[])
     args = parser.parse_args()
     versions = {name: version_at(args.head, name) for name in SERVICES}
     payload = {
         "changed_files": git("diff", "--name-only", args.base, args.head).splitlines(),
         "versions": versions,
         "previous_versions": {name: version_at(args.base, name) for name in SERVICES},
+        "missing_services": args.missing_service,
     }
     json.dump(plan(payload), sys.stdout, sort_keys=True)
 

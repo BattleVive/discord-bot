@@ -10,6 +10,9 @@ permissions:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     outputs:
       services: ${{ steps.plan.outputs.services }}
     steps:
@@ -17,6 +20,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - id: plan
         run: |
           base=$(git describe --tags --abbrev=0 "${GITHUB_SHA}^" 2>/dev/null || true)
@@ -24,7 +32,18 @@ jobs:
             echo "A prior release tag is required for image change detection." >&2
             exit 1
           fi
-          python scripts/release/plan_from_git.py --base "$base" > release-plan.json
+          missing=()
+          for entry in \
+            'gateway-service services/gateway ghcr.io/battlevive/gateway-service' \
+            'upstream-service services/upstream-data ghcr.io/battlevive/upstream-service' \
+            'image-renderer services/image-renderer ghcr.io/battlevive/image-renderer'; do
+            read -r name context image <<<"$entry"
+            version=$(tr -d '\n' < "$context/VERSION")
+            if ! docker manifest inspect "$image:$version" >/dev/null 2>&1; then
+              missing+=(--missing-service "$name")
+            fi
+          done
+          python scripts/release/plan_from_git.py --base "$base" "${missing[@]}" > release-plan.json
           echo "services=$(tr -d '\n' < release-plan.json)" >> "$GITHUB_OUTPUT"
 
   publish:
@@ -65,14 +84,23 @@ jobs:
       - id: version
         if: ${{ fromJSON(needs.plan.outputs.services).services[matrix.name].push }}
         run: echo "value=$(tr -d '\n' < '${{ matrix.version_file }}')" >> "$GITHUB_OUTPUT"
+      - id: tags
+        if: ${{ fromJSON(needs.plan.outputs.services).services[matrix.name].push }}
+        run: |
+          {
+            echo 'value<<EOF'
+            python scripts/release/image_tags.py --version '${{ steps.version.outputs.value }}' |
+              while IFS= read -r tag; do echo '${{ matrix.image }}:'"$tag"; done
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         if: ${{ fromJSON(needs.plan.outputs.services).services[matrix.name].push }}
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          platforms: linux/arm64
+          platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ matrix.image }}:${{ steps.version.outputs.value }}
+          tags: ${{ steps.tags.outputs.value }}
           labels: org.opencontainers.image.revision=${{ github.sha }}
       - name: Make package public
         if: ${{ fromJSON(needs.plan.outputs.services).services[matrix.name].push }}

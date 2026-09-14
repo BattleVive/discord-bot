@@ -30,7 +30,7 @@ resource "aws_subnet" "slot" {
   vpc_id                  = aws_vpc.slot.id
   cidr_block              = cidrsubnet(var.network_cidr, 8, count.index)
   availability_zone       = data.aws_availability_zones.available.names[count.index]
-  map_public_ip_on_launch = true
+  map_public_ip_on_launch = false
   tags                    = merge(local.tags, { Name = "${local.name}-${count.index}" })
 }
 
@@ -93,6 +93,7 @@ resource "aws_instance" "host" {
   instance_type               = "t4g.micro"
   iam_instance_profile        = aws_iam_instance_profile.host.name
   subnet_id                   = aws_subnet.slot[0].id
+  associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.host.id]
   user_data                   = file("${path.module}/bootstrap-runtime.sh")
   user_data_replace_on_change = true

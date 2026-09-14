@@ -40,7 +40,7 @@ services:
     logging: *local-logging
 
   upstream-data:
-    image: ${UPSTREAM_DATA_IMAGE:-voxix/battlevive-upstream-data:latest}
+    image: ${UPSTREAM_DATA_IMAGE:-ghcr.io/battlevive/upstream-service:latest}
     <<: *runtime-security
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
@@ -54,7 +54,7 @@ services:
     restart: unless-stopped
 
   migration:
-    image: ${GATEWAY_IMAGE:-voxix/battlevive-gateway:latest}
+    image: ${GATEWAY_IMAGE:-ghcr.io/battlevive/gateway-service:latest}
     command: ["python3", "-m", "battlevive_gateway.migrations"]
     <<: *runtime-security
     tmpfs:
@@ -69,7 +69,7 @@ services:
     restart: "no"
 
   gateway:
-    image: ${GATEWAY_IMAGE:-voxix/battlevive-gateway:latest}
+    image: ${GATEWAY_IMAGE:-ghcr.io/battlevive/gateway-service:latest}
     restart: unless-stopped
     <<: *runtime-security
     tmpfs:
@@ -92,7 +92,7 @@ services:
       DISCORD_COMMAND_GUILD_ID: ${DISCORD_COMMAND_GUILD_ID:-}
 
   image-renderer:
-    image: ${IMAGE_RENDERER_IMAGE:-voxix/battlevive-image-renderer:latest}
+    image: ${IMAGE_RENDERER_IMAGE:-ghcr.io/battlevive/image-renderer:latest}
     <<: *runtime-security
     networks: [renderer]
     restart: unless-stopped
