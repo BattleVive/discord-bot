@@ -10,7 +10,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: slot-retirement
+  group: slot-transition
   cancel-in-progress: false
 
 jobs:

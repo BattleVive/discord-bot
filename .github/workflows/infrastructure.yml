@@ -27,7 +27,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: infrastructure-${{ github.event.inputs.root || github.ref }}
+  group: ${{ github.event.inputs.action == 'destroy' && 'slot-transition' || format('infrastructure-{0}', github.event.inputs.root || github.ref) }}
   cancel-in-progress: false
 
 env:
@@ -118,6 +118,15 @@ jobs:
           esac
           test -n "$bucket"
           terraform -chdir="$root" init -backend-config="bucket=$bucket"
+      - name: Verify the selected slot is retired and inactive
+        if: ${{ github.event.inputs.action == 'destroy' }}
+        run: |
+          set -euo pipefail
+          retired_slot=$(aws ssm get-parameter --name /battlevive/production/control/retired-slot --query 'Parameter.Value' --output text)
+          active_slot=$(aws ssm get-parameter --name /battlevive/production/control/active-slot --query 'Parameter.Value' --output text)
+          selected_slot='${{ github.event.inputs.root }}'
+          [[ "$selected_slot" == "$retired_slot" ]]
+          [[ "$selected_slot" != "$active_slot" ]]
       - name: Create reviewed plan
         run: terraform -chdir="$TF_ROOT" plan -no-color -out=reviewed.tfplan
       - name: Apply approved plan

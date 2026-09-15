@@ -30,7 +30,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: production-promotion
+  group: slot-transition
   cancel-in-progress: false
 
 jobs:

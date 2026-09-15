@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: slot-transition
+  cancel-in-progress: false
+
 jobs:
   plan:
     runs-on: ubuntu-latest

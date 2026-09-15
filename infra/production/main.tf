@@ -46,6 +46,12 @@ resource "aws_ssm_parameter" "retired_slot" {
   name  = "${local.parameter_root}/control/retired-slot"
   type  = "String"
   value = var.retired_slot
+  lifecycle {
+    precondition {
+      condition     = var.retired_slot != var.active_slot
+      error_message = "retired_slot and active_slot must differ."
+    }
+  }
 }
 
 resource "aws_ssm_parameter" "retire_after" {

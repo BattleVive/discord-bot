@@ -708,9 +708,9 @@ def create_bot(*, database_url: str | None = None, command_guild_id: int | None 
         if isinstance(cooldown, int) and cooldown > 0 and previous is not None and now - previous < cooldown:
             await interaction.response.send_message("Please wait before using /rank again.", ephemeral=True)
             return
-        # The work can exceed Discord's interaction deadline. Deferring keeps
-        # unavailable upstream/render failures out of the invoking channel.
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        # The work can exceed Discord's interaction deadline. Keep the rank
+        # card visible in the channel once rendering completes.
+        await interaction.response.defer(ephemeral=False, thinking=True)
         try:
             profile = (await bot.upstream.get_result(
                 f"/players/by-discord/{interaction.user.id}", require_fresh=True

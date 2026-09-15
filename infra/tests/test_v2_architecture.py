@@ -62,6 +62,29 @@ def test_promotion_health_gates_the_active_slot_switch_and_delays_cleanup() -> N
     assert "terraform -chdir=\"infra/slots/$retired_slot\" destroy" in cleanup
 
 
+def test_every_slot_transition_uses_one_shared_lock() -> None:
+    """Verify staging, promotion, and retirement cannot overlap."""
+    for workflow in (".github/workflows/release.yml", ".github/workflows/promote.yml", ".github/workflows/retire-slot.yml"):
+        assert re.search(r"^concurrency:\n  group: slot-transition$", read(workflow), re.MULTILINE)
+
+
+def test_manual_slot_destruction_rechecks_live_retirement_control() -> None:
+    """Verify an operator cannot destroy a live or unretired slot."""
+    workflow = read(".github/workflows/infrastructure.yml")
+    assert "/battlevive/production/control/retired-slot" in workflow
+    assert "/battlevive/production/control/active-slot" in workflow
+    assert '[[ "$selected_slot" == "$retired_slot" ]]' in workflow
+    assert '[[ "$selected_slot" != "$active_slot" ]]' in workflow
+    assert "github.event.inputs.action == 'destroy' && 'slot-transition'" in workflow
+
+
+def test_retired_slot_cannot_equal_the_active_slot() -> None:
+    """Verify production control rejects a request to retire the live slot."""
+    production = read("infra/production/main.tf")
+    retired_parameter = production.split('resource "aws_ssm_parameter" "retired_slot"', maxsplit=1)[1]
+    assert "var.retired_slot != var.active_slot" in retired_parameter
+
+
 def test_slot_module_uses_rds_and_unencrypted_gp3_storage() -> None:
     """Verify that slot module uses RDS and unencrypted gp3 storage."""
     compute = read("infra/modules/slot/compute.tf")

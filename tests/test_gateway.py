@@ -310,7 +310,7 @@ async def test_rank_looks_up_the_invoker_by_exact_discord_id_and_renders(monkeyp
     await rank.callback(interaction)
 
     assert calls == ["/players/by-discord/99"]
-    interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+    interaction.response.defer.assert_awaited_once_with(ephemeral=False, thinking=True)
     assert interaction.followup.send.await_args.kwargs["file"].filename == "profile.png"
 
 
