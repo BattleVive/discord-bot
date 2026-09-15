@@ -7,16 +7,10 @@ x-aws-logging: &aws-logging
     tag: "{{.Name}}"
 
 services:
-  db:
-    environment:
-      POSTGRES_PASSWORD: null
-      POSTGRES_PASSWORD_FILE: /run/battlevive/postgres-password
-    volumes:
-      - ${BATTLEVIVE_POSTGRES_DATA_PATH:-/var/lib/battlevive/postgresql}:/var/lib/postgresql:Z
-      - /run/battlevive:/run/battlevive:ro
-    logging: *aws-logging
-
   migration:
+    image: ${BATTLEVIVE_GATEWAY_IMAGE:?}
+    command: ["python3", "-m", "battlevive_gateway.migrations"]
+    depends_on: []
     environment:
       DATABASE_URL: null
       DATABASE_URL_FILE: /run/battlevive/database-url
@@ -24,24 +18,42 @@ services:
       - /run/battlevive:/run/battlevive:ro
     logging: *aws-logging
 
-  bot:
+  gateway:
+    image: ${BATTLEVIVE_GATEWAY_IMAGE:?}
+    depends_on: []
     environment:
       DATABASE_URL: null
       DATABASE_URL_FILE: /run/battlevive/database-url
       DISCORD_TOKEN: null
       DISCORD_TOKEN_FILE: /run/battlevive/discord-token
-      SUPABASE_API_KEY: null
-      SUPABASE_API_KEY_FILE: /run/battlevive/supabase-api-key
-      SUPABASE_URL: ${SUPABASE_URL:?}
-      BOOTSTRAP_JWT: null
-      BOOTSTRAP_JWT_FILE: /run/battlevive/bootstrap-jwt
-      BOOTSTRAP_REFRESH_TOKEN: null
-      BOOTSTRAP_REFRESH_TOKEN_FILE: /run/battlevive/bootstrap-refresh-token
-      BATTLEVIVE_TOKEN_STORE: ssm
-      BATTLEVIVE_TOKEN_SSM_PARAMETER: ${BATTLEVIVE_TOKEN_SSM_PARAMETER:-/battlevive/production/tokens}
-      AWS_REGION: ${AWS_REGION:-eu-north-1}
-      BATTLEVIVE_URL: "https://battlevive.com"
+      UPSTREAM_DATA_URL: http://upstream-data:8081
+      IMAGE_RENDERER_URL: http://image-renderer:8082
     volumes:
-      - ${BATTLEVIVE_BOT_DATA_PATH:-/var/lib/battlevive/bot}:/app/data:Z
       - /run/battlevive:/run/battlevive:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8080/ready', timeout=2).close()"]
+      interval: 5s
+      timeout: 5s
+      start_period: 30s
+      retries: 12
+    logging: *aws-logging
+
+  upstream-data:
+    image: ${BATTLEVIVE_UPSTREAM_IMAGE:?}
+    environment:
+      BATTLEVIVE_API_BASE_URL: ${BATTLEVIVE_API_BASE_URL:-https://battlevive.com}
+      BATTLEVIVE_API_KEY: null
+      BATTLEVIVE_API_KEY_FILE: /run/battlevive/battlevive-api-key
+    volumes:
+      - /run/battlevive:/run/battlevive:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8081/ready', timeout=2).close()"]
+      interval: 5s
+      timeout: 5s
+      start_period: 10s
+      retries: 12
+    logging: *aws-logging
+
+  image-renderer:
+    image: ${BATTLEVIVE_RENDERER_IMAGE:?}
     logging: *aws-logging

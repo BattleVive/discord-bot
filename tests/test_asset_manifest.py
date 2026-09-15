@@ -1,3 +1,5 @@
+"""Tests for renderer asset-manifest resolution and bundled artwork."""
+
 from __future__ import annotations
 
 import json
@@ -7,12 +9,13 @@ import re
 from PIL import Image
 import pytest
 
-from battlevive_bot.asset_manifest import MAP_MANIFEST_PATH
-from battlevive_bot.asset_manifest import resolve_map_asset
+from battlevive_renderer.asset_manifest import MAP_MANIFEST_PATH
+from battlevive_renderer.asset_manifest import resolve_map_asset
 
 
 @pytest.fixture(scope="module")
 def map_entries() -> list[dict[str, object]]:
+    """Load the map manifest entries for asset tests."""
     data = json.loads(MAP_MANIFEST_PATH.read_text(encoding="utf-8"))
     return data["maps"]
 
@@ -20,6 +23,7 @@ def map_entries() -> list[dict[str, object]]:
 def test_every_map_alias_resolves_to_existing_day_asset(
     map_entries: list[dict[str, object]],
 ) -> None:
+    """Verify that every map alias resolves to existing day asset."""
     for entry in map_entries:
         for alias in [entry["name"], *entry["aliases"]]:
             resolved = resolve_map_asset(alias)
@@ -30,6 +34,7 @@ def test_every_map_alias_resolves_to_existing_day_asset(
 
 
 def test_map_resolver_handles_punctuation_variants_and_unknown_maps() -> None:
+    """Verify that map resolver handles punctuation variants and unknown maps."""
     blackstone = resolve_map_asset("  BLACKSTONE-ARENA  ")
     assert blackstone is not None
     assert blackstone.name == "Blackstone Arena"
@@ -44,6 +49,7 @@ def test_map_resolver_handles_punctuation_variants_and_unknown_maps() -> None:
 def test_map_resolver_returns_text_only_fallback_for_missing_asset(
     tmp_path: Path,
 ) -> None:
+    """Verify that map resolver returns text only fallback for missing asset."""
     manifest = tmp_path / "manifest.json"
     manifest.write_text(
         json.dumps(
@@ -67,6 +73,7 @@ def test_map_resolver_returns_text_only_fallback_for_missing_asset(
 def test_committed_map_and_emoji_images_have_expected_dimensions(
     map_entries: list[dict[str, object]],
 ) -> None:
+    """Verify that committed map and emoji images have expected dimensions."""
     map_paths = [
         MAP_MANIFEST_PATH.parent / entry[variant]
         for entry in map_entries

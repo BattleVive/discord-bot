@@ -1,1 +1,0 @@
-"""Battlevive Discord bot package."""

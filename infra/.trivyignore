@@ -5,6 +5,10 @@ AVD-AWS-0136
 # The adopted root volume retains its live encryption state; an unencrypted
 # volume follows the separately approved snapshot/copy replacement runbook.
 AVD-AWS-0131
+# The RDS instance deliberately follows the same cost constraint. It contains
+# no customer-managed encryption key and replacement uses snapshots only.
+# RDS storage encryption is deliberately disabled as a cost constraint.
+AVD-AWS-0080
 # Discord, Supabase, Docker Hub and AWS public APIs require internet egress;
 # the instance deliberately has zero ingress and no NAT/private-endpoint scope.
 AVD-AWS-0104

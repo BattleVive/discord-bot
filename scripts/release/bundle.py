@@ -14,12 +14,13 @@ REQUIRED = {
     "docker-compose.yml": "compose.yaml",
     "docker-compose.aws.yml": "compose.aws.yaml",
     "scripts/deploy/deploy.sh": "scripts/deploy.sh",
+    "scripts/release/release_manifest.py": "scripts/release/release_manifest.py",
     "infra/host/bin/compose": "bin/compose",
-    "infra/host/scripts/backup.sh": "scripts/backup.sh",
 }
 
 
 def add_bytes(archive: tarfile.TarFile, name: str, content: bytes, mode: int) -> None:
+    """Add an in-memory file to the release archive."""
     info = tarfile.TarInfo(name)
     info.size = len(content)
     info.mode = mode
@@ -30,6 +31,7 @@ def add_bytes(archive: tarfile.TarFile, name: str, content: bytes, mode: int) ->
 
 
 def collect(root: Path):
+    """Collect a file or directory into the release archive."""
     files = {}
     for source_name, archive_name in REQUIRED.items():
         source = root / source_name
@@ -48,6 +50,7 @@ def collect(root: Path):
 
 
 def main() -> None:
+    """Run the bundle command-line entry point."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--output", type=Path, required=True)

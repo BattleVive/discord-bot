@@ -10,38 +10,21 @@ source_dir=${BATTLEVIVE_BUNDLE_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 install_root=${INSTALL_ROOT:-}
 AWS_CLI=${AWS_CLI:-aws}
 AWS_REGION=${AWS_REGION:-eu-north-1}
+BATTLEVIVE_SLOT=${BATTLEVIVE_SLOT:?BATTLEVIVE_SLOT must be blue or green}
+[[ $BATTLEVIVE_SLOT == blue || $BATTLEVIVE_SLOT == green ]] || { echo "invalid BATTLEVIVE_SLOT" >&2; exit 2; }
 RUNTIME_UID=${RUNTIME_UID:-10001}
 RUNTIME_GID=${RUNTIME_GID:-10001}
-POSTGRES_UID=${POSTGRES_UID:-999}
-POSTGRES_GID=${POSTGRES_GID:-999}
-if [[ -z ${OPERATIONS_BUCKET:-} ]]; then
-  OPERATIONS_BUCKET=$("$AWS_CLI" ssm get-parameter --region "$AWS_REGION" \
-    --name /battlevive/production/config/operations-bucket \
-    --query Parameter.Value --output text)
-fi
-if [[ -z ${SUPABASE_URL:-} ]]; then
-  SUPABASE_URL=$("$AWS_CLI" ssm get-parameter --region "$AWS_REGION" \
-    --name /battlevive/production/config/supabase-url \
-    --query Parameter.Value --output text)
-fi
-if [[ $SUPABASE_URL == https://configuration-required.invalid ||
-  ! $SUPABASE_URL =~ ^https://[^[:space:]@/]+(/[^[:space:]@]*)?$ ]]; then
-  echo "The /battlevive/production/config/supabase-url parameter must be a safe HTTPS URL." >&2
-  exit 1
-fi
+OPERATIONS_BUCKET=${OPERATIONS_BUCKET:?OPERATIONS_BUCKET must be supplied by the slot deployment document}
 
 prefix() { printf '%s%s' "$install_root" "$1"; }
 install -d -m 0755 "$(prefix /usr/local/libexec/battlevive)" "$(prefix /run/lock)" "$(prefix /etc/systemd/system)" "$(prefix /etc/rsyslog.d)"
 install -d -m 0750 -o "$EUID" -g "$RUNTIME_GID" "$(prefix /run/battlevive)"
-install -d -m 0700 "$(prefix /var/lib/battlevive/backups)" "$(prefix /var/lib/battlevive/restore-verification)"
 install -d -m 0750 -o "$RUNTIME_UID" -g "$RUNTIME_GID" "$(prefix /var/lib/battlevive/bot)"
-install -d -m 0700 -o "$POSTGRES_UID" -g "$POSTGRES_GID" "$(prefix /var/lib/battlevive/postgresql)"
 install -d -m 0755 "$(prefix /opt/battlevive/releases)"
 install -m 0755 "$source_dir/bin/render-secrets.sh" "$(prefix /usr/local/libexec/battlevive/render-secrets)"
 install -m 0755 "$source_dir/bin/compose" "$(prefix /usr/local/libexec/battlevive/compose)"
 install -m 0755 "$source_dir/scripts/deploy.sh" "$(prefix /usr/local/libexec/battlevive/deploy)"
-install -m 0755 "$source_dir/scripts/backup.sh" "$(prefix /usr/local/libexec/battlevive/backup)"
-install -m 0755 "$source_dir/scripts/restore-verify.sh" "$(prefix /usr/local/libexec/battlevive/restore-verify)"
+install -m 0755 "$source_dir/scripts/release/release_manifest.py" "$(prefix /usr/local/libexec/battlevive/release_manifest.py)"
 install -m 0755 "$source_dir/scripts/publish-health.sh" "$(prefix /usr/local/libexec/battlevive/publish-health)"
 install -m 0755 "$source_dir/scripts/publish-operations-freshness.sh" "$(prefix /usr/local/libexec/battlevive/publish-operations-freshness)"
 install -m 0644 "$source_dir/systemd/"*.service "$source_dir/systemd/"*.timer "$(prefix /etc/systemd/system/)"
@@ -53,14 +36,12 @@ host_env=$(prefix /run/battlevive/host.env)
 install -m 0600 -o "$EUID" -g "$EUID" /dev/null "$host_env"
 cat >"$host_env" <<EOF
 AWS_REGION=$AWS_REGION
+BATTLEVIVE_SLOT=$BATTLEVIVE_SLOT
 OPERATIONS_BUCKET=$OPERATIONS_BUCKET
 BATTLEVIVE_DEPLOY_ROOT=/opt/battlevive
 BATTLEVIVE_BOT_DATA_PATH=/var/lib/battlevive/bot
-BATTLEVIVE_POSTGRES_DATA_PATH=/var/lib/battlevive/postgresql
 BATTLEVIVE_LOG_GROUP=/battlevive/production/application
-POSTGRES_USER=battlevive
-POSTGRES_DB=battlevive
-SUPABASE_URL=$SUPABASE_URL
+BATTLEVIVE_MANIFEST_VALIDATOR=/usr/local/libexec/battlevive/release_manifest.py
 EOF
 chmod 0600 "$host_env"
 
@@ -68,6 +49,6 @@ if [[ -z $install_root ]]; then
   dnf install -y rsyslog
   systemctl enable --now rsyslog
   systemctl daemon-reload
-  systemctl enable --now battlevive-health.timer battlevive-operations-freshness.timer battlevive-backup.timer battlevive-restore-verify.timer
+  systemctl enable --now battlevive-health.timer
   systemctl enable --now battlevive-secrets.service
 fi

@@ -26,6 +26,3 @@ freshness_metric() {
     --namespace Battlevive/Production --metric-name "$metric_name" \
     --value "$fresh" --unit Count
 }
-
-freshness_metric backups/weekly/ $((8 * 86400)) BackupFresh .dump
-freshness_metric backups/restore-drills/ $((35 * 86400)) RestoreDrillFresh .json
