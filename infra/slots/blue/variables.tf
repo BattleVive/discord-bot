@@ -6,6 +6,10 @@ variable "discord_token" {
   type      = string
   sensitive = true
 }
+variable "battlevive_api_key" {
+  type      = string
+  sensitive = true
+}
 variable "operations_bucket" { type = string }
 variable "rds_snapshot_identifier" {
   type    = string

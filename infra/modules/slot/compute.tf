@@ -5,7 +5,7 @@ data "aws_ssm_parameter" "al2023_arm64" {
 data "aws_caller_identity" "current" {}
 
 resource "aws_vpc" "slot" {
-  cidr_block           = var.network_cidr
+  cidr_block           = local.network_cidr
   enable_dns_hostnames = true
   enable_dns_support   = true
   tags                 = merge(local.tags, { Name = "${local.name}-vpc" })
@@ -28,7 +28,7 @@ resource "aws_route_table" "host" {
 resource "aws_subnet" "slot" {
   count                   = 2
   vpc_id                  = aws_vpc.slot.id
-  cidr_block              = cidrsubnet(var.network_cidr, 8, count.index)
+  cidr_block              = cidrsubnet(local.network_cidr, 8, count.index)
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = false
   tags                    = merge(local.tags, { Name = "${local.name}-${count.index}" })

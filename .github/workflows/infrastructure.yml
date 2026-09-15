@@ -15,7 +15,13 @@ on:
         description: Managed state root
         required: true
         type: choice
-        options: [production, blue, green, e2e]
+        options: [production, blue, green]
+      token_role:
+        description: Discord token to install when applying a slot
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
 
 permissions:
   contents: read
@@ -44,14 +50,14 @@ jobs:
       - name: Terraform format and validate every root
         run: |
           terraform fmt -check -recursive infra
-          for root in infra/bootstrap infra/production infra/slots/blue infra/slots/green infra/e2e; do
+          for root in infra/bootstrap infra/production infra/slots/blue infra/slots/green; do
             terraform -chdir="$root" init -backend=false
             terraform -chdir="$root" validate
           done
       - name: TFLint
         run: |
           tflint --init
-          for root in infra/bootstrap infra/production infra/slots/blue infra/slots/green infra/e2e; do
+          for root in infra/bootstrap infra/production infra/slots/blue infra/slots/green; do
             tflint --chdir="$root"
           done
       - name: Scan Terraform configuration
@@ -75,9 +81,10 @@ jobs:
       id-token: write
     env:
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
-      TF_VAR_operations_bucket: ${{ github.event.inputs.root == 'e2e' && vars.TF_E2E_OPERATIONS_BUCKET || vars.TF_OPERATIONS_BUCKET }}
+      TF_VAR_operations_bucket: ${{ vars.TF_OPERATIONS_BUCKET }}
       TF_VAR_operations_bucket_suffix: ${{ vars.TF_OPERATIONS_BUCKET_SUFFIX }}
-      TF_VAR_discord_token: ${{ secrets.TF_SLOT_DISCORD_TOKEN }}
+      TF_VAR_discord_token: ${{ github.event.inputs.token_role == 'production' && secrets.BOT_TOKEN || secrets.BOT_TOKEN_STAGING }}
+      TF_VAR_battlevive_api_key: ${{ secrets.BATTLEVIVE_API_KEY }}
       TF_VAR_active_slot: ${{ vars.TF_ACTIVE_SLOT }}
       TF_VAR_release_candidate_slot: ${{ vars.TF_RELEASE_CANDIDATE_SLOT }}
     steps:
@@ -91,10 +98,10 @@ jobs:
         with:
           role-to-assume: ${{ github.event.inputs.action == 'plan' && vars.AWS_TERRAFORM_PLAN_ROLE_ARN || vars.AWS_TERRAFORM_APPLY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-      - name: Restrict destroy to disposable e2e infrastructure
-        if: ${{ github.event.inputs.action == 'destroy' && github.event.inputs.root != 'e2e' }}
+      - name: Restrict destroy to a retired slot
+        if: ${{ github.event.inputs.action == 'destroy' && github.event.inputs.root != 'blue' && github.event.inputs.root != 'green' }}
         run: |
-          echo 'Only the disposable e2e root may be destroyed from this workflow.' >&2
+          echo 'Only a blue or green slot may be destroyed from this workflow.' >&2
           exit 1
       - name: Initialize selected isolated state root
         run: |
@@ -102,15 +109,20 @@ jobs:
             production) root=infra/production ;;
             blue) root=infra/slots/blue ;;
             green) root=infra/slots/green ;;
-            e2e) root=infra/e2e ;;
           esac
           echo "TF_ROOT=$root" >> "$GITHUB_ENV"
-          terraform -chdir="$root" init -backend-config="bucket=${{ github.event.inputs.root == 'e2e' && vars.TF_E2E_STATE_BUCKET || vars.TF_STATE_BUCKET }}"
+          case '${{ github.event.inputs.root }}' in
+            production) bucket='${{ vars.TF_CONTROL_STATE_BUCKET }}' ;;
+            blue) bucket='${{ vars.TF_BLUE_STATE_BUCKET }}' ;;
+            green) bucket='${{ vars.TF_GREEN_STATE_BUCKET }}' ;;
+          esac
+          test -n "$bucket"
+          terraform -chdir="$root" init -backend-config="bucket=$bucket"
       - name: Create reviewed plan
         run: terraform -chdir="$TF_ROOT" plan -no-color -out=reviewed.tfplan
       - name: Apply approved plan
         if: ${{ github.event.inputs.action == 'apply' }}
         run: terraform -chdir="$TF_ROOT" apply -auto-approve reviewed.tfplan
-      - name: Destroy a disposable e2e root
-        if: ${{ github.event.inputs.action == 'destroy' && github.event.inputs.root == 'e2e' }}
+      - name: Destroy a retired slot while retaining its state bucket
+        if: ${{ github.event.inputs.action == 'destroy' && (github.event.inputs.root == 'blue' || github.event.inputs.root == 'green') }}
         run: terraform -chdir="$TF_ROOT" destroy -auto-approve -lock-timeout=5m

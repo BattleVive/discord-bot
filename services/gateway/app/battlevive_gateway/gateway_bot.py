@@ -135,14 +135,18 @@ class GatewayBot(commands.Bot):
             """Report gateway process health."""
             return web.json_response({"status": "ok"})
         async def ready(_: web.Request) -> web.Response:
-            """Report whether the gateway database is ready."""
-            is_ready = self.pool is not None
+            """Report whether database and Discord gateway are ready."""
+            is_ready = self.deployment_ready()
             return web.json_response({"status": "ready" if is_ready else "not_ready"}, status=200 if is_ready else 503)
         app.router.add_get("/health", health)
         app.router.add_get("/ready", ready)
         self._health_runner = web.AppRunner(app)
         await self._health_runner.setup()
         await web.TCPSite(self._health_runner, "0.0.0.0", 8080).start()
+
+    def deployment_ready(self) -> bool:
+        """Return whether this slot can safely receive production traffic."""
+        return self.pool is not None and self.is_ready()
 
     async def command_allowed(self, guild_id: int, command_name: str, channel_id: int | None) -> bool:
         """Return whether a command is allowed in the selected channel."""

@@ -109,6 +109,18 @@ def test_gateway_keeps_incomplete_commands_registered_as_unavailable() -> None:
     assert {"leaderboard", "active-lobbies", "guides"} == {command.name for command in reset_group.commands}
 
 
+def test_gateway_deployment_readiness_requires_database_and_discord_gateway() -> None:
+    """Verify an invalid Discord token cannot pass a slot deployment gate."""
+    bot = create_bot()
+    bot.pool = object()
+    bot.is_ready = Mock(return_value=False)  # type: ignore[method-assign]
+    assert bot.deployment_ready() is False
+    bot.is_ready.return_value = True
+    assert bot.deployment_ready() is True
+    bot.pool = None
+    assert bot.deployment_ready() is False
+
+
 @pytest.mark.asyncio
 async def test_create_roles_uses_the_latest_config_and_handles_a_concurrent_link_update(
     monkeypatch: pytest.MonkeyPatch,

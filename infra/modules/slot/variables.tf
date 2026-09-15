@@ -3,15 +3,11 @@ variable "discord_token" {
   type      = string
   sensitive = true
 }
-variable "operations_bucket" { type = string }
-variable "network_cidr" {
-  type        = string
-  description = "Non-overlapping /16 CIDR owned exclusively by this slot."
-  validation {
-    condition     = can(cidrhost(var.network_cidr, 0)) && split("/", var.network_cidr)[1] == "16"
-    error_message = "network_cidr must be a valid /16 CIDR."
-  }
+variable "battlevive_api_key" {
+  type      = string
+  sensitive = true
 }
+variable "operations_bucket" { type = string }
 variable "name_prefix" {
   type        = string
   default     = "battlevive"
@@ -34,4 +30,11 @@ variable "rds_snapshot_identifier" {
   type    = string
   default = null
 }
-variable "slot" { type = string }
+variable "slot" {
+  type = string
+
+  validation {
+    condition     = contains(["blue", "green"], var.slot)
+    error_message = "slot must be blue or green."
+  }
+}

@@ -1,6 +1,23 @@
 name: Deploy an immutable slot manifest
 
 on:
+  workflow_call:
+    inputs:
+      slot:
+        required: true
+        type: string
+      bundle_key:
+        required: true
+        type: string
+      bundle_checksum:
+        required: true
+        type: string
+      manifest_key:
+        required: true
+        type: string
+      manifest_checksum:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       slot:

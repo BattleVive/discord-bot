@@ -10,7 +10,20 @@ from battlevive_upstream.client import ApiError
 from battlevive_upstream.client import BattleViveClient
 from battlevive_upstream.client import Freshness
 from battlevive_upstream.client import UpstreamResponse
+from battlevive_upstream.service import create_app
 from battlevive_upstream.service import route_table
+
+
+def test_create_app_reads_api_key_from_file(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Verify production can provide the upstream credential without an env value."""
+    key_file = tmp_path / "api-key"
+    key_file.write_text("file-secret\n")
+    monkeypatch.delenv("BATTLEVIVE_API_KEY", raising=False)
+    monkeypatch.setenv("BATTLEVIVE_API_KEY_FILE", str(key_file))
+
+    app = create_app()
+
+    assert app["ready"] is True
 
 
 def queue_payload() -> dict[str, object]:

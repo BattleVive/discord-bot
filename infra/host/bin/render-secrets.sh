@@ -17,6 +17,7 @@ fi
 
 secret_names=(
   discord-token
+  battlevive-api-key
 )
 
 if [[ ${ALLOW_NON_ROOT_FOR_TESTS:-0} == 1 && -z ${RUNTIME_GID_TEST_OVERRIDE:-} ]]; then
@@ -35,13 +36,17 @@ database_secret_arn=$("$AWS_CLI" ssm get-parameter \
   --region "$AWS_REGION_NAME" \
   --name "/battlevive/$BATTLEVIVE_SLOT/config/database-secret-arn" \
   --query Parameter.Value --output text)
+database_host=$("$AWS_CLI" ssm get-parameter \
+  --region "$AWS_REGION_NAME" \
+  --name "/battlevive/$BATTLEVIVE_SLOT/config/database-host" \
+  --query Parameter.Value --output text)
 database_secret=$("$AWS_CLI" secretsmanager get-secret-value \
   --region "$AWS_REGION_NAME" --secret-id "$database_secret_arn" \
   --query SecretString --output text)
-database_url=$(jq -er '
+database_url=$(jq -er --arg host "$database_host" '
   (.username | @uri) as $user |
   (.password | @uri) as $password |
-  (.host | @uri) as $host |
+  ($host | @uri) as $host |
   (.port // 5432 | tostring) as $port |
   "postgresql://\($user):\($password)@\($host):\($port)/battlevive"
 ' <<<"$database_secret")

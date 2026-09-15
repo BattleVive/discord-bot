@@ -50,7 +50,7 @@ resource "aws_ssm_document" "deploy" {
           "tar -xzf \"$bundle\" --no-same-owner -C \"$release_dir\"",
           "BATTLEVIVE_BUNDLE_ROOT=\"$release_dir\" BATTLEVIVE_SLOT=\"${var.slot}\" OPERATIONS_BUCKET=\"${var.operations_bucket}\" AWS_REGION=\"${var.aws_region}\" \"$release_dir/install.sh\"",
           "systemctl restart battlevive-secrets.service",
-          "BATTLEVIVE_SLOT=\"${var.slot}\" BATTLEVIVE_MANIFEST_VALIDATOR=/usr/local/libexec/battlevive/release_manifest.py /usr/local/libexec/battlevive/deploy --manifest \"$manifest\" --compose-file \"$release_dir/compose.aws.yaml\"",
+          "BATTLEVIVE_SLOT=\"${var.slot}\" BATTLEVIVE_MANIFEST_VALIDATOR=/usr/local/libexec/battlevive/release_manifest.py /usr/local/libexec/battlevive/deploy --slot \"${var.slot}\" --manifest \"$manifest\" --compose-file \"$release_dir/compose.aws.yaml\"",
         ]
       }
     }]

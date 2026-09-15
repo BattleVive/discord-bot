@@ -19,3 +19,6 @@ def test_slot_resources_are_scoped_and_have_no_customer_kms() -> None:
     assert 'default     = "/battlevive"' in source
     assert 'parameter${local.parameter_root}/*' in source
     assert "aws_kms_key" not in source
+    assert "logs:CreateLogStream" in source
+    assert "logs:PutLogEvents" in source
+    assert "cloudwatch:PutMetricData" in source

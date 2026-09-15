@@ -177,6 +177,8 @@ jobs:
     outputs:
       bundle_key: ${{ steps.keys.outputs.bundle_key }}
       manifest_key: ${{ steps.keys.outputs.manifest_key }}
+      bundle_checksum: ${{ steps.keys.outputs.bundle_checksum }}
+      manifest_checksum: ${{ steps.keys.outputs.manifest_checksum }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -200,5 +202,75 @@ jobs:
           manifest_key="releases/$tag/$revision.manifest.json"
           aws s3 cp release-bundle.tar.gz "s3://$OPERATIONS_BUCKET/$bundle_key" --only-show-errors
           aws s3 cp release-manifest.json "s3://$OPERATIONS_BUCKET/$manifest_key" --only-show-errors
-          echo "bundle_key=$bundle_key" >> "$GITHUB_OUTPUT"
-          echo "manifest_key=$manifest_key" >> "$GITHUB_OUTPUT"
+          {
+            echo "bundle_key=$bundle_key"
+            echo "manifest_key=$manifest_key"
+            echo "bundle_checksum=$(sha256sum release-bundle.tar.gz | cut -d' ' -f1)"
+            echo "manifest_checksum=$(sha256sum release-manifest.json | cut -d' ' -f1)"
+          } >> "$GITHUB_OUTPUT"
+
+  stage-inactive-slot:
+    needs: archive
+    environment: staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      slot: ${{ steps.slot.outputs.slot }}
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      TF_VAR_operations_bucket: ${{ vars.AWS_OPERATIONS_BUCKET }}
+      TF_VAR_discord_token: ${{ secrets.BOT_TOKEN_STAGING }}
+      TF_VAR_battlevive_api_key: ${{ secrets.BATTLEVIVE_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - id: slot
+        name: Select the inactive slot
+        run: |
+          active=$(aws ssm get-parameter \
+            --name /battlevive/production/control/active-slot \
+            --query 'Parameter.Value' --output text)
+          case "$active" in
+            blue) candidate=green ;;
+            green) candidate=blue ;;
+            *) echo "invalid active slot: $active" >&2; exit 1 ;;
+          esac
+          echo "slot=$candidate" >> "$GITHUB_OUTPUT"
+      - name: Apply the inactive slot with the staging token
+        env:
+          SLOT: ${{ steps.slot.outputs.slot }}
+          TF_BLUE_STATE_BUCKET: ${{ vars.TF_BLUE_STATE_BUCKET }}
+          TF_GREEN_STATE_BUCKET: ${{ vars.TF_GREEN_STATE_BUCKET }}
+        run: |
+          case "$SLOT" in
+            blue) bucket=$TF_BLUE_STATE_BUCKET ;;
+            green) bucket=$TF_GREEN_STATE_BUCKET ;;
+            *) exit 1 ;;
+          esac
+          test -n "$bucket"
+          terraform -chdir="infra/slots/$SLOT" init -backend-config="bucket=$bucket"
+          terraform -chdir="infra/slots/$SLOT" apply -auto-approve
+
+  deploy-staged-slot:
+    needs: [archive, stage-inactive-slot]
+    uses: ./.github/workflows/deploy.yml
+    with:
+      slot: ${{ needs.stage-inactive-slot.outputs.slot }}
+      bundle_key: ${{ needs.archive.outputs.bundle_key }}
+      bundle_checksum: ${{ needs.archive.outputs.bundle_checksum }}
+      manifest_key: ${{ needs.archive.outputs.manifest_key }}
+      manifest_checksum: ${{ needs.archive.outputs.manifest_checksum }}
+    secrets: inherit

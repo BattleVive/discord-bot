@@ -39,3 +39,19 @@ resource "aws_ssm_parameter" "release_candidate_slot" {
   type  = "String"
   value = var.release_candidate_slot
 }
+
+resource "aws_ssm_parameter" "retired_slot" {
+  count = var.retired_slot == null ? 0 : 1
+
+  name  = "${local.parameter_root}/control/retired-slot"
+  type  = "String"
+  value = var.retired_slot
+}
+
+resource "aws_ssm_parameter" "retire_after" {
+  count = var.retire_after == null ? 0 : 1
+
+  name  = "${local.parameter_root}/control/retire-after"
+  type  = "String"
+  value = var.retire_after
+}

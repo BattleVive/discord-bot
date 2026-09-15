@@ -20,14 +20,14 @@ if [[ -z $validator ]]; then
   script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
   validator="$script_dir/../release/release_manifest.py"
 fi
-python "$validator" --validate <"$manifest"
+python3 "$validator" --validate <"$manifest"
 install -d -m 0755 /run/lock
 exec 9>"/run/lock/battlevive-${slot}-deploy.lock"
 flock -n 9 || { echo "another deployment is active for slot $slot" >&2; exit 1; }
 for service in gateway-service upstream-service image-renderer; do
   digest=$(jq -er --arg service "$service" '.services[$service].digest' "$manifest")
   image="ghcr.io/battlevive/${service}@${digest}"
-  docker pull "$image"
+  docker image inspect "$image" >/dev/null 2>&1 || docker pull "$image"
 done
 export BATTLEVIVE_SLOT="$slot"
 export BATTLEVIVE_GATEWAY_IMAGE="ghcr.io/battlevive/gateway-service@$(jq -er '.services["gateway-service"].digest' "$manifest")"
@@ -40,14 +40,19 @@ else
 fi
 "${compose[@]}" -f "$compose_file" run --rm migration
 "${compose[@]}" -f "$compose_file" up -d --remove-orphans upstream-data image-renderer gateway
-gateway_container="$("${compose[@]}" -f "$compose_file" ps -q gateway)"
-[[ -n $gateway_container ]] || { echo "gateway container was not created" >&2; exit 1; }
-deadline=$((SECONDS + health_timeout))
-while (( SECONDS <= deadline )); do
-  health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$gateway_container" 2>/dev/null || true)"
-  [[ $health == healthy ]] && exit 0
-  [[ $health == unhealthy ]] && { echo "gateway became unhealthy" >&2; exit 1; }
-  sleep 2
-done
-echo "gateway readiness timed out" >&2
-exit 1
+wait_for_healthy() {
+  local service=$1 container health deadline
+  container="$("${compose[@]}" -f "$compose_file" ps -q "$service")"
+  [[ -n $container ]] || { echo "$service container was not created" >&2; exit 1; }
+  deadline=$((SECONDS + health_timeout))
+  while (( SECONDS <= deadline )); do
+    health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container" 2>/dev/null || true)"
+    [[ $health == healthy ]] && return 0
+    [[ $health == unhealthy ]] && { echo "$service became unhealthy" >&2; exit 1; }
+    sleep 2
+  done
+  echo "$service readiness timed out" >&2
+  exit 1
+}
+wait_for_healthy upstream-data
+wait_for_healthy gateway

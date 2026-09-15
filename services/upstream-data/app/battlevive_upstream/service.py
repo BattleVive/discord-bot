@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import logging
+from pathlib import Path
 from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlparse
@@ -129,6 +130,9 @@ def _positive_number(request: web.Request, name: str) -> int | None:
 def create_app(client: BattleViveClient | None = None) -> web.Application:
     """Create the allowlisted upstream-data HTTP application."""
     key = os.environ.get("BATTLEVIVE_API_KEY", "")
+    key_file = os.environ.get("BATTLEVIVE_API_KEY_FILE")
+    if not key and key_file:
+        key = Path(key_file).read_text(encoding="utf-8").strip()
     base_url = os.environ.get("BATTLEVIVE_API_BASE_URL", "https://battlevive.com")
     parsed = urlparse(base_url)
     if parsed.scheme != "https" or not parsed.netloc:

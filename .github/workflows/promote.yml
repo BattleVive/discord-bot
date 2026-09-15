@@ -1,0 +1,151 @@
+name: Promote a healthy staged slot
+
+on:
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: Healthy staged slot to promote
+        required: true
+        type: choice
+        options: [blue, green]
+      bundle_key:
+        description: Immutable release bundle key
+        required: true
+        type: string
+      bundle_checksum:
+        description: SHA-256 of the immutable release bundle
+        required: true
+        type: string
+      manifest_key:
+        description: Immutable release manifest key
+        required: true
+        type: string
+      manifest_checksum:
+        description: SHA-256 of the immutable release manifest
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-promotion
+  cancel-in-progress: false
+
+jobs:
+  prepare-candidate:
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      old_slot: ${{ steps.slots.outputs.old_slot }}
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      TF_VAR_operations_bucket: ${{ vars.AWS_OPERATIONS_BUCKET }}
+      TF_VAR_discord_token: ${{ secrets.BOT_TOKEN }}
+      TF_VAR_battlevive_api_key: ${{ secrets.BATTLEVIVE_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - id: slots
+        name: Verify that the requested slot is inactive
+        env:
+          CANDIDATE: ${{ inputs.slot }}
+        run: |
+          old_slot=$(aws ssm get-parameter --name /battlevive/production/control/active-slot --query 'Parameter.Value' --output text)
+          [[ "$old_slot" == blue || "$old_slot" == green ]]
+          [[ "$CANDIDATE" != "$old_slot" ]] || { echo 'the active slot cannot promote itself' >&2; exit 1; }
+          echo "old_slot=$old_slot" >> "$GITHUB_OUTPUT"
+      - name: Install the production token in the candidate slot
+        env:
+          SLOT: ${{ inputs.slot }}
+          TF_BLUE_STATE_BUCKET: ${{ vars.TF_BLUE_STATE_BUCKET }}
+          TF_GREEN_STATE_BUCKET: ${{ vars.TF_GREEN_STATE_BUCKET }}
+        run: |
+          case "$SLOT" in
+            blue) bucket=$TF_BLUE_STATE_BUCKET ;;
+            green) bucket=$TF_GREEN_STATE_BUCKET ;;
+            *) exit 1 ;;
+          esac
+          test -n "$bucket"
+          terraform -chdir="infra/slots/$SLOT" init -backend-config="bucket=$bucket"
+          terraform -chdir="infra/slots/$SLOT" apply -auto-approve
+
+  deploy-production-candidate:
+    needs: prepare-candidate
+    uses: ./.github/workflows/deploy.yml
+    with:
+      slot: ${{ inputs.slot }}
+      bundle_key: ${{ inputs.bundle_key }}
+      bundle_checksum: ${{ inputs.bundle_checksum }}
+      manifest_key: ${{ inputs.manifest_key }}
+      manifest_checksum: ${{ inputs.manifest_checksum }}
+    secrets: inherit
+
+  activate-and-retire-old-slot:
+    needs: [prepare-candidate, deploy-production-candidate]
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      TF_VAR_operations_bucket: ${{ vars.AWS_OPERATIONS_BUCKET }}
+      TF_VAR_operations_bucket_suffix: ${{ vars.TF_OPERATIONS_BUCKET_SUFFIX }}
+      TF_VAR_discord_token: ${{ secrets.BOT_TOKEN_STAGING }}
+      TF_VAR_battlevive_api_key: ${{ secrets.BATTLEVIVE_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Replace the old production token with the staging token
+        env:
+          SLOT: ${{ needs.prepare-candidate.outputs.old_slot }}
+          TF_BLUE_STATE_BUCKET: ${{ vars.TF_BLUE_STATE_BUCKET }}
+          TF_GREEN_STATE_BUCKET: ${{ vars.TF_GREEN_STATE_BUCKET }}
+        run: |
+          case "$SLOT" in
+            blue) bucket=$TF_BLUE_STATE_BUCKET ;;
+            green) bucket=$TF_GREEN_STATE_BUCKET ;;
+            *) exit 1 ;;
+          esac
+          test -n "$bucket"
+          terraform -chdir="infra/slots/$SLOT" init -backend-config="bucket=$bucket"
+          terraform -chdir="infra/slots/$SLOT" apply -auto-approve
+          aws ssm send-command --document-name AWS-RunShellScript \
+            --targets "Key=tag:SSMTarget,Values=battlevive-$SLOT" \
+            --parameters 'commands=["systemctl restart battlevive-secrets.service"]' \
+            --timeout-seconds 120 >/dev/null
+      - name: Switch active control and schedule the old slot for retirement
+        env:
+          ACTIVE_SLOT: ${{ inputs.slot }}
+          OLD_SLOT: ${{ needs.prepare-candidate.outputs.old_slot }}
+          TF_CONTROL_STATE_BUCKET: ${{ vars.TF_CONTROL_STATE_BUCKET }}
+        run: |
+          retire_after=$(date -u --date='+6 hours' +%Y-%m-%dT%H:%M:%SZ)
+          test -n "$TF_CONTROL_STATE_BUCKET"
+          terraform -chdir=infra/production init -backend-config="bucket=$TF_CONTROL_STATE_BUCKET"
+          terraform -chdir=infra/production apply -auto-approve \
+            -var="active_slot=$ACTIVE_SLOT" \
+            -var="release_candidate_slot=$OLD_SLOT" \
+            -var="retired_slot=$OLD_SLOT" \
+            -var="retire_after=$retire_after"

@@ -40,6 +40,18 @@ services:
 
   upstream-data:
     image: ${BATTLEVIVE_UPSTREAM_IMAGE:?}
+    environment:
+      BATTLEVIVE_API_BASE_URL: ${BATTLEVIVE_API_BASE_URL:-https://battlevive.com}
+      BATTLEVIVE_API_KEY: null
+      BATTLEVIVE_API_KEY_FILE: /run/battlevive/battlevive-api-key
+    volumes:
+      - /run/battlevive:/run/battlevive:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8081/ready', timeout=2).close()"]
+      interval: 5s
+      timeout: 5s
+      start_period: 10s
+      retries: 12
     logging: *aws-logging
 
   image-renderer:

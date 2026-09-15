@@ -35,6 +35,16 @@ data "aws_iam_policy_document" "host" {
     actions   = ["s3:GetObject"]
     resources = ["arn:${data.aws_partition.current.partition}:s3:::${var.operations_bucket}/releases/*"]
   }
+  statement {
+    actions = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/battlevive/production/application:*"
+    ]
+  }
+  statement {
+    actions   = ["cloudwatch:PutMetricData"]
+    resources = ["*"]
+  }
 }
 
 resource "aws_iam_role_policy" "host" {

@@ -21,6 +21,47 @@ def test_named_slot_roots_instantiate_the_reusable_module_with_isolated_state() 
         assert f'"battlevive-bot/{slot}.tfstate"' in read(f"infra/slots/{slot}/backend.tf")
 
 
+def test_bootstrap_provisions_a_persistent_state_bucket_for_each_slot() -> None:
+    """Verify blue and green retain independent Terraform state buckets."""
+    bootstrap = read("infra/bootstrap/main.tf")
+    outputs = read("infra/bootstrap/outputs.tf")
+    assert 'toset(["blue", "green"])' in bootstrap
+    assert 'resource "aws_s3_bucket" "slot_state"' in bootstrap
+    assert 'prevent_destroy = true' in bootstrap
+    assert 'output "slot_state_buckets"' in outputs
+
+
+def test_no_separate_e2e_topology_remains() -> None:
+    """Verify release slots are the only deployable bot topology."""
+    workflow = read(".github/workflows/infrastructure.yml")
+    assert not (ROOT / "infra/e2e").exists()
+    assert "e2e" not in workflow
+    assert "TF_BLUE_STATE_BUCKET" in workflow
+    assert "TF_GREEN_STATE_BUCKET" in workflow
+
+
+def test_release_creates_only_the_inactive_slot_with_the_staging_token() -> None:
+    """Verify a release stages its candidate without replacing the active bot."""
+    workflow = read(".github/workflows/release.yml")
+    assert "stage-inactive-slot" in workflow
+    assert "BOT_TOKEN_STAGING" in workflow
+    assert "/battlevive/production/control/active-slot" in workflow
+    assert "TF_BLUE_STATE_BUCKET" in workflow
+    assert "TF_GREEN_STATE_BUCKET" in workflow
+
+
+def test_promotion_health_gates_the_active_slot_switch_and_delays_cleanup() -> None:
+    """Verify promotion deploys successfully before switching production control."""
+    workflow = read(".github/workflows/promote.yml")
+    cleanup = read(".github/workflows/retire-slot.yml")
+    assert "deploy-production-candidate" in workflow
+    assert "needs: [prepare-candidate, deploy-production-candidate]" in workflow
+    assert "BOT_TOKEN" in workflow and "BOT_TOKEN_STAGING" in workflow
+    assert "+6 hours" in workflow
+    assert "schedule:" in cleanup
+    assert "terraform -chdir=\"infra/slots/$retired_slot\" destroy" in cleanup
+
+
 def test_slot_module_uses_rds_and_unencrypted_gp3_storage() -> None:
     """Verify that slot module uses RDS and unencrypted gp3 storage."""
     compute = read("infra/modules/slot/compute.tf")
@@ -52,6 +93,12 @@ def test_slots_have_isolated_parameters_and_active_control_parameter() -> None:
     assert 'parameter_root = "${var.parameter_root}/${var.slot}"' in locals_tf
     assert 'resource "aws_ssm_parameter" "active_slot"' in production
     assert 'resource "aws_ssm_parameter" "release_candidate_slot"' in production
+
+
+def test_slot_deploy_document_passes_its_slot_to_the_deploy_script() -> None:
+    """Verify the SSM document satisfies deploy.sh's required slot argument."""
+    deploy = read("infra/modules/slot/deploy.tf")
+    assert 'deploy --slot \\"${var.slot}\\" --manifest \\"$manifest\\"' in deploy
 def test_release_uses_public_ghcr_service_images_and_manifest() -> None:
     """Verify that release uses public GHCR service images and manifest."""
     workflow = read(".github/workflows/release.yml")
