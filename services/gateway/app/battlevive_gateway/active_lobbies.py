@@ -101,6 +101,7 @@ class MapResolver:
     """Resolve selected v1 maps to their packaged day/night thumbnail files."""
 
     def __init__(self, assets_root: Path | None) -> None:
+        """Configure lazy map lookup, with ``None`` disabling thumbnails."""
         self._assets_root = assets_root
         self._maps: dict[str, tuple[str, Path | None, Path | None]] = {}
         self._loaded = False
@@ -118,6 +119,7 @@ class MapResolver:
         return resolved_name, night if variant == "night" else day
 
     def _load(self) -> None:
+        """Populate the map alias cache once from a valid asset manifest."""
         if self._loaded:
             return
         self._loaded = True
@@ -143,6 +145,7 @@ class MapResolver:
                     self._maps[key] = (name, day, night)
 
     def _map_path(self, value: object) -> Path | None:
+        """Return the existing map image named by a manifest value."""
         if not isinstance(value, str) or not value:
             return None
         path = self._assets_root / "maps" / value
@@ -225,11 +228,17 @@ class ActiveLobbyPublisher:
 
     def __init__(self, bot: discord.Client, upstream: Any, publications: Any, *,
                  assets_root: Path | None = None, emoji_lookup: Mapping[str, str] | None = None) -> None:
+        """Configure publication reconciliation and optional display assets."""
         self._bot, self._upstream, self._publications = bot, upstream, publications
         self._map_resolver = MapResolver(assets_root)
         self._emoji_lookup = emoji_lookup or {}
 
     async def reconcile_guild(self, config: dict[str, object]) -> bool:
+        """Synchronize match publications and return whether any state changed.
+
+        Configurations missing integer IDs and guilds absent from the cache are
+        skipped. A configured channel that is unavailable raises ``RuntimeError``.
+        """
         guild_id, channel_id = config.get("guild_id"), config.get("active_lobby_channel_id")
         if not isinstance(guild_id, int) or not isinstance(channel_id, int):
             return False
@@ -357,6 +366,7 @@ class ActiveLobbyPublisher:
 
     @staticmethod
     async def _existing_message(channel: Any, publication: dict[str, object] | None) -> Any | None:
+        """Fetch a tracked Discord message when it still exists."""
         if publication is None or not isinstance(publication.get("message_id"), int):
             return None
         try:
@@ -366,6 +376,7 @@ class ActiveLobbyPublisher:
 
     @staticmethod
     async def _delete_message(channel: Any, publication: dict[str, object]) -> None:
+        """Delete a tracked Discord message when it still exists."""
         message = await ActiveLobbyPublisher._existing_message(channel, publication)
         if message is not None:
             try:
@@ -379,6 +390,7 @@ class ActiveLobbyService:
 
     def __init__(self, bot: discord.Client, pool: Any, upstream: Any, *, interval: float = 15.0,
                  assets_root: Path | None = _RUNTIME_ASSETS) -> None:
+        """Configure periodic reconciliation without starting its worker."""
         self._bot, self._pool, self._upstream, self._interval = bot, pool, upstream, interval
         self._assets_root = assets_root
         self._requested = asyncio.Event()
@@ -386,20 +398,24 @@ class ActiveLobbyService:
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
+        """Start the periodic active-lobby reconciliation worker."""
         if self._task is None:
             self._task = asyncio.create_task(self._run(), name="active-lobby-publisher")
             self.request_reconciliation()
 
     async def stop(self) -> None:
+        """Stop the active-lobby reconciliation worker."""
         if self._task is not None:
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
             self._task = None
 
     def request_reconciliation(self) -> None:
+        """Wake the worker for an immediate reconciliation pass."""
         self._requested.set()
 
     async def reconcile_all(self) -> None:
+        """Reconcile active-lobby publications for every configured guild."""
         from .repositories import GuildConfigRepository, PublicationRepository
         from .guides import application_emoji_lookup
         async with self._reconcile_lock:
@@ -415,6 +431,7 @@ class ActiveLobbyService:
                         logger.exception("Active-lobby reconciliation failed for guild %s", config.get("guild_id"))
 
     async def _run(self) -> None:
+        """Run reconciliation until the service is stopped."""
         while True:
             try:
                 await asyncio.wait_for(self._requested.wait(), timeout=self._interval)

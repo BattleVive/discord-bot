@@ -22,10 +22,15 @@ class GuildConfigRepository:
     """Provide persistence operations for guild configuration data."""
 
     def __init__(self, connection: Any) -> None:
+        """Bind guild configuration operations to a database connection."""
         self._connection = connection
 
     async def update(self, guild_id: int, version: int, changes: Mapping[str, object], *, updated_by: int) -> int:
-        """Apply a version-checked configuration update."""
+        """Apply an allowed, version-checked update and return the new version.
+
+        Raises ``ValueError`` for empty or unsupported changes and
+        ``ConcurrentUpdateError`` when the supplied version is no longer current.
+        """
         if not changes or not set(changes) <= _CONFIG_COLUMNS:
             raise ValueError("changes must contain supported configuration fields")
         assignments = ", ".join(f"{name} = ${index}" for index, name in enumerate(changes, start=3))
@@ -51,14 +56,17 @@ class GuildConfigRepository:
         return None if row is None else dict(row)
 
     async def configured_guides(self) -> list[dict[str, object]]:
+        """Return guild configurations that enable guide publication."""
         rows = await self._connection.fetch("SELECT * FROM guild_config WHERE guide_forum_channel_id IS NOT NULL")
         return [dict(row) for row in rows]
 
     async def configured_leaderboards(self) -> list[dict[str, object]]:
+        """Return guild configurations that enable leaderboard publication."""
         rows = await self._connection.fetch("SELECT * FROM guild_config WHERE leaderboard_channel_id IS NOT NULL")
         return [dict(row) for row in rows]
 
     async def configured_active_lobbies(self) -> list[dict[str, object]]:
+        """Return guild configurations that enable active-lobby publication."""
         rows = await self._connection.fetch("SELECT * FROM guild_config WHERE active_lobby_channel_id IS NOT NULL")
         return [dict(row) for row in rows]
 
@@ -67,6 +75,7 @@ class PublicationRepository:
     """Provide persistence operations for Discord publication state."""
 
     def __init__(self, connection: Any) -> None:
+        """Bind publication-state operations to a database connection."""
         self._connection = connection
 
     async def upsert(self, guild_id: int, feature: str, publication_key: str, channel_id: int,
@@ -119,9 +128,11 @@ class RuleRepository:
     """Provide persistence operations for command-channel rules."""
 
     def __init__(self, connection: Any) -> None:
+        """Bind command-rule operations to a database connection."""
         self._connection = connection
 
     async def set(self, guild_id: int, command_name: str, channel_id: int, allowed: bool) -> None:
+        """Set a guild's allow or deny decision for a command and channel."""
         await self._connection.execute(
             """INSERT INTO command_channel_rules(guild_id,command_name,channel_id,allowed) VALUES($1,$2,$3,$4)
             ON CONFLICT(guild_id,command_name,channel_id) DO UPDATE SET allowed=EXCLUDED.allowed""",
@@ -129,12 +140,14 @@ class RuleRepository:
         )
 
     async def remove(self, guild_id: int, command_name: str, channel_id: int) -> None:
+        """Remove a guild's decision for a command and channel."""
         await self._connection.execute(
             "DELETE FROM command_channel_rules WHERE guild_id=$1 AND command_name=$2 AND channel_id=$3",
             guild_id, command_name, channel_id,
         )
 
     async def list(self, guild_id: int) -> list[dict[str, object]]:
+        """List a guild's command-channel rules in deterministic order."""
         rows = await self._connection.fetch(
             "SELECT command_name, channel_id, allowed FROM command_channel_rules WHERE guild_id=$1 ORDER BY command_name, channel_id",
             guild_id,
@@ -142,6 +155,12 @@ class RuleRepository:
         return [dict(row) for row in rows]
 
     async def allows(self, guild_id: int, command_name: str, channel_id: int) -> bool:
+        """Resolve an exact or wildcard channel rule for a command.
+
+        If the guild has rules for the command or wildcard scope but none for
+        this channel, access is denied. With neither rule scope, access remains
+        allowed by default.
+        """
         value = await self._connection.fetchval(
             "SELECT allowed FROM command_channel_rules WHERE guild_id=$1 AND command_name=$2 AND channel_id=$3",
             guild_id, command_name, channel_id,
@@ -165,9 +184,11 @@ class RoleRepository:
     """Provide persistence operations for bot-owned Discord roles."""
 
     def __init__(self, connection: Any) -> None:
+        """Bind role-ownership operations to a database connection."""
         self._connection = connection
 
     async def claim(self, guild_id: int, purpose: str, logical_name: str, role_id: int) -> None:
+        """Record a role as bot-owned for a guild purpose and logical name."""
         await self._connection.execute(
             """INSERT INTO created_roles(guild_id,purpose,logical_name,role_id) VALUES($1,$2,$3,$4)
             ON CONFLICT(guild_id,purpose,logical_name) DO UPDATE SET role_id=EXCLUDED.role_id,updated_at=NOW()""",
@@ -175,6 +196,7 @@ class RoleRepository:
         )
 
     async def is_owned(self, guild_id: int, role_id: int) -> bool:
+        """Return whether a role is recorded as bot-owned in the guild."""
         return bool(await self._connection.fetchval(
             "SELECT 1 FROM created_roles WHERE guild_id=$1 AND role_id=$2", guild_id, role_id
         ))
